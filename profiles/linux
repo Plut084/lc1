@@ -1,0 +1,59 @@
+# Project host profile for Linux.
+#
+#   conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug
+#
+# include(default) pulls in this machine's compiler/arch settings, then the
+# [options] below add the exceptions the project needs on top.
+#
+# WHY THIS FILE EXISTS
+# A profile-level option outranks anything a recipe -- or a consumer conanfile's
+# configure() -- sets for its own dependencies. That makes this the only layer
+# where these can be set. (Putting them in the conanfile silently does nothing,
+# which is a genuinely confusing failure mode.)
+
+include(default)
+
+[options]
+# Restated rather than inherited, so this profile is self-describing.
+*:shared=False
+
+# Two packages cannot be static: glfw always dlopens wayland and xkbcommon, and
+# cannot link them statically. Left static, graph resolution fails outright with
+#   glfw/3.4: Invalid: glfw/3.4 always loads xkbcommon dependencies dynamically
+#                     and does not support static linkage
+wayland/*:shared=True
+xkbcommon/*:shared=True
+
+# NATIVE WAYLAND ONLY -- no X11 and no XWayland anywhere in the graph.
+#
+# This is not just a preference, it is what makes the build fully
+# conan-managed with no system packages. Four things pull in xorg/system, whose
+# system_requirements() demands ~15 X11 -devel RPMs installed system-wide:
+#
+#   glfw, xkbcommon          -- via their with_x11 defaults
+#   vulkan-validationlayers  -- via with_wsi_xcb / with_wsi_xlib defaults
+#
+# conan cannot vendor those headers (X11 *is* the system integration layer), so
+# its recipes delegate to the system package manager. Turning X11 off is the only
+# way to keep "all dependencies from conan" literally true on Linux.
+#
+# COST: the resulting binary will not run on an X11 session.
+# TO RE-ENABLE X11: delete the four with_x11/with_wsi_* lines below and install
+# the X11 dev RPMs -- either manually, or by letting conan do it with
+#   -c tools.system.package_manager:mode=install
+glfw/*:with_wayland=True
+glfw/*:with_x11=False
+xkbcommon/*:with_x11=False
+vulkan-validationlayers/*:with_wsi_xcb=False
+vulkan-validationlayers/*:with_wsi_xlib=False
+
+[runenv]
+# The conan-built libxkbcommon has no compiled-in XLOCALEDIR default, and the
+# compose data it wants lives in the system (xkeyboard-config / the X11 locale
+# dir), not in the package. Without this, every run prints:
+#   xkbcommon: ERROR: couldn't find a Compose file for locale "en_US.UTF-8"
+#   [glfw] error 65544: Wayland: Failed to create XKB compose table
+# Both are non-fatal -- the window renders fine -- but they are noise on every
+# launch, and compose/dead-key text entry silently does not work.
+# This lands in the generated conanrun.sh, which Debug runs already source.
+XLOCALEDIR=/usr/share/X11/locale

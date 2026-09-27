@@ -1,0 +1,10 @@
+# conan
+build/
+CMakeUserPresets.json
+
+# editor / tooling
+.cache/
+compile_commands.json
+.vscode/
+.idea/
+*.user

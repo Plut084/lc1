@@ -35,7 +35,9 @@ struct Frame {
     vk::raii::Fence in_flight;
 };
 
-// The swapchain/WSI state machine: wait, acquire, submit, present.
+// The swapchain/WSI state machine: wait, acquire, submit, present. Owns the
+// command buffer's recording boundaries and the swapchain image's layout
+// transitions around Renderer::record.
 //
 // Owns only per-FRAME resources (fences, image-available semaphores, command
 // buffers). Per-IMAGE resources live in SwapchainImage, so swapchain recreation
@@ -54,8 +56,8 @@ class FrameLoop {
     // `ubo` is this frame's uniform data and `draws` its list of what to draw;
     // see DrawItem. Both are handed to the renderer together with this slot's
     // index, once the slot's fence says the GPU is done with it.
-    FrameResult draw_frame(Swapchain &swapchain, Renderer const &renderer,
-                           UniformBufferObject const &ubo, std::span<DrawItem const> draws);
+    FrameResult draw_frame(Swapchain &swapchain, Renderer &renderer, UniformBufferObject const &ubo,
+                           std::span<DrawItem const> draws);
 
   private:
     Device const &device_;

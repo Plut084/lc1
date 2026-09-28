@@ -1,6 +1,9 @@
 #include "lc1/vk/common.hpp"
+
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 namespace lc1 {
 
@@ -91,15 +94,73 @@ char const *device_type_string(vk::PhysicalDeviceType type)
     }
 }
 
+bool compute_extent(vk::Extent2D framebuffer, vk::SurfaceCapabilitiesKHR const &caps,
+                    vk::Extent2D *out)
+{
+    if (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max()) {
+        // The compositor is telling us the size. Use it verbatim: substituting
+        // the framebuffer size here is what makes Wayland report
+        // VK_SUBOPTIMAL_KHR on every frame, forever.
+        *out = caps.currentExtent;
+        return out->width != 0 && out->height != 0;
+    }
+
+    if (framebuffer.width == 0 || framebuffer.height == 0)
+        return false;
+
+    out->width =
+        std::clamp(framebuffer.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+    out->height =
+        std::clamp(framebuffer.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+    return out->width != 0 && out->height != 0;
+}
+
 std::string read_file(std::filesystem::path const &path)
 {
     std::ifstream file(path, std::ios::binary);
+    // The absolute path, because a relative one is resolved against the working
+    // directory -- which is the usual reason the open failed.
     if (!file)
-        throw std::runtime_error("Failed to open file: " + path.string());
+        fail("failed to open {}", std::filesystem::absolute(path).string());
 
     std::stringstream ss;
     ss << file.rdbuf();
     return ss.str();
+}
+
+void transition_image_layout(vk::raii::CommandBuffer const &command_buffer, vk::Image image,
+                             vk::ImageLayout old_layout, vk::ImageLayout new_layout,
+                             vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                             vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,
+                             vk::ImageAspectFlags aspect)
+{
+    // subresourceRange has to be spelled out: unlike most hpp structs, whose
+    // defaults are the Vulkan defaults, ImageSubresourceRange defaults to all
+    // zeros -- and levelCount = 0 is invalid.
+    vk::ImageMemoryBarrier2 barrier{
+        .srcStageMask = src_stage,
+        .srcAccessMask = src_access,
+        .dstStageMask = dst_stage,
+        .dstAccessMask = dst_access,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = image,
+        .subresourceRange =
+            vk::ImageSubresourceRange{
+                .aspectMask = aspect,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
+
+    vk::DependencyInfo dependency;
+    dependency.setImageMemoryBarriers(barrier);
+
+    command_buffer.pipelineBarrier2(dependency);
 }
 
 } // namespace lc1

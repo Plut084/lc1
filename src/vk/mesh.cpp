@@ -13,7 +13,7 @@ vk::IndexType index_type_for_size(std::size_t size)
     case sizeof(std::uint32_t):
         return vk::IndexType::eUint32;
     default:
-        fail("index_type_for_size: unsupported index size " + std::to_string(size));
+        fail("index_type_for_size: unsupported index size {}", size);
     };
 }
 

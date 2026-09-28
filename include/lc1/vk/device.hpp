@@ -32,7 +32,7 @@ class Device {
     // Non-owning; valid only while this Device is.
     vk::raii::PhysicalDevice const &raii_physical() const { return physical_; }
     vk::raii::SurfaceKHR const &raii_surface() const { return surface_; }
-    vk::raii::Device const &raii() const { return handle_; }
+    vk::raii::Device const &raii() const { return device_; }
     MemoryAllocator const &allocator() const { return alloc_; }
     vk::raii::Queue const &raii_queue() const { return queue_; }
 
@@ -40,7 +40,7 @@ class Device {
     vk::raii::PhysicalDevice physical_{nullptr};
     // Declared before handle_ so the device is destroyed first.
     vk::raii::SurfaceKHR surface_{nullptr};
-    vk::raii::Device handle_{nullptr};
+    vk::raii::Device device_{nullptr};
     MemoryAllocator alloc_{nullptr};
     vk::raii::Queue queue_{nullptr};
     std::uint32_t queue_family_ = 0;

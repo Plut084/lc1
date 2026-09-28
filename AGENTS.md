@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-A **Vulkan 1.4 first-light skeleton** exists (`include/`, `src/`, `app/`) and is verified working: window, swapchain,
-clear, resize handling, clean shutdown, with validation + synchronization validation on and **zero
-output**. The game itself — 养成 / 战斗 / 地图 — is not started.
+A **Vulkan 1.4 renderer skeleton** exists (`include/`, `src/`, `app/`): window, swapchain, resize
+handling, clean shutdown, an indexed mesh drawn through a graphics pipeline with a per-frame uniform
+buffer (model/view/proj) bound through descriptor sets, and textures loaded from files — all with
+validation + synchronization validation on and **zero output**. It is being built chapter by chapter
+along the official tutorial (https://docs.vulkan.org/tutorial/latest/). The game itself — 养成 / 战斗 /
+地图 — is not started.
 
 `docs/` holds the design draft and stays in Chinese; keep new design docs in Chinese too.
 
@@ -66,7 +69,7 @@ use Vulkan) without revisiting this.
 conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug
 cmake --preset conan-debug
 cmake --build --preset conan-debug
-./run.sh
+make run-debug    # or all of the above in one step
 ```
 
 Three parts of that are easy to get wrong:
@@ -75,11 +78,14 @@ Three parts of that are easy to get wrong:
   omitting it fails with a confusing `xorg/system` error about missing X11 `-devel` packages.
 - **`-s build_type=Debug` is required on every install.** The profile defaults to `Release`, and Conan
   only writes presets for build types it actually generated.
-- **Run `./run.sh`, not `./build/Debug/lc1`.** Debug builds take the validation layers from conan, and
-  the loader finds them only via `VK_LAYER_PATH`, which the conan-generated env script exports.
-  `run.sh` sources that env and execs the binary; running the binary directly fails with a
-  "layer not found" error that looks like the layer is missing when it is not. Release builds have no
-  layer to find, so there the binary is runnable directly.
+- **Run `make run-debug`, not `./build/Debug/lc1`.** It does two things the bare binary lacks:
+  - It sources the conan run env. Debug builds take the validation layers from conan, and the loader
+    finds them only via `VK_LAYER_PATH`, which that env exports. Without it, startup fails with a
+    "layer not found" error that looks like the layer is missing when it is not.
+  - It runs from `build/Debug/`. Assets such as `shaders/shader.spv` are opened by paths relative
+    to the working directory, and the build puts them next to the binary.
+
+  Release builds have no layer to find, but still need the working directory.
 
 ## Dependency rules — all from conan
 
@@ -194,9 +200,16 @@ change to argue for rather than slip in:
 - **No C-style casts** (ES.49). `static_cast` for value conversions; `reinterpret_cast` only where
   the C API forces it, with a comment saying which call forces it.
 - **Pass views, not pointer+length** (I.13, R.14, F.24). `std::string_view` for read-only string
-  parameters, as `fail()` does; no array-and-count pairs in new interfaces.
-- **One exception type at the boundary** — `lc1::Error`, per the section above. Nothing new derives
-  from it, and no `std::error_code`-and-out-param pairs get introduced alongside it.
+  parameters, like `Window`'s `title`; no array-and-count pairs in new interfaces.
+- **No exception escapes `main`** — see "Exceptions" below. Nothing new derives from `lc1::Error`,
+  and no `std::error_code`-and-out-param pairs get introduced alongside it.
+- **World space is right-handed with Y up** (`FpsCamera::world_up`), the OpenGL convention and
+  glm's default. glTF is Y-up too, so glTF assets need no conversion. The tutorial's chapters up to
+  glTF use Z-up (`lookAt` with up = (0,0,1)); translate them rather than copying the up vector. Its
+  `viking_room.obj` is Z-up and needs −90° about X.
+  - Vulkan's clip-space Y points down, where glm's points up. `Renderer::record` flips it with a
+    negative viewport height (and `y` = height, or the viewport lands off-screen). A flip reverses
+    every triangle's winding, which is why `Pipeline` uses `eCounterClockwise` as the front face.
 
 ## Architecture
 
@@ -275,31 +288,26 @@ volk: `window.hpp` and `window.cpp` include neither `common.hpp` nor any Vulkan 
 point of them. Note also that `vulkan.hpp` does not pull in the `vk::raii` namespace — that is a
 separate header.
 
-### One exception type leaves the Vulkan layer
+### Exceptions
 
-`vk::raii` reports failure by throwing `vk::SystemError`, which is **not** an `lc1::Error` — it derives
-from `std::system_error`. `main()` catches `lc1::Error const&`, so an untranslated `vk::SystemError`
-would escape and run `std::terminate` instead of printing `[lc1] fatal:`. Every raii entry point
-converts: the constructors of `Instance`, `Device`, `Swapchain`, and `FrameLoop`, plus
-`Device::wait_idle`, `Swapchain::recreate`, and `FrameLoop::draw_frame` each catch it and call `fail()`.
-The hpp message already carries the call name and the `VkResult`, so the diagnosis is as specific as
-`VK_CHECK`'s stringified expression was. `fail()` throws `lc1::Error`, which those catches deliberately
-do not match — so the hand-written diagnostics, such as the missing-layer one, pass through unchanged.
+Two kinds of exception reach `main()`, and it catches both, so none escapes into `std::terminate`
+(which prints "terminate called…", may skip every destructor, and dumps core):
 
-**`Window`'s constructor throws `lc1::Error` too, and it is the one module that needs no catch to do
-it.** It makes no Vulkan call, so there is no `vk::SystemError` to translate — it calls `fail()`
-directly, which is why `Window` is also the only module that gets at `fail()` through `error.hpp` rather
-than `vk/common.hpp`. It belongs on this list anyway because the *contract* is the same one: a GLFW
-startup failure has to arrive at `main()`'s `catch (lc1::Error const&)` like every other startup
-failure. It used to be a print-and-`return 1` in `main()`; now it is an exception, and the message
-gains the `[lc1] fatal: ` prefix that `fail()` call sites get.
+- **`lc1::Error`**, thrown by `fail()`: our own diagnostics, such as the missing-layer message or
+  `read_file`'s "failed to open <absolute path>".
+- **`std::exception`**, the last-resort catch. It covers `vk::SystemError`, which `vk::raii` throws
+  on any failed call. Its `what()` already names the call and the `VkResult`, so modules do **not**
+  need to wrap Vulkan calls to translate it. Some older constructors (`Instance`, `Device`,
+  `Swapchain`, `FrameLoop`, `Renderer`) still catch and re-`fail()` with a prefix. That is optional
+  context, not a rule to copy into new code.
 
-**`draw_frame` needs two catches, and their order matters.** `FrameResult::SurfaceLost` is real control
-flow for the WSI state machine, but SURFACE_LOST is not in hpp's success-code list for acquire or
-present, so it arrives as a thrown `vk::SurfaceLostKHRError` rather than a returned result. That one is
-caught by its own type *before* the `vk::SystemError` catch, which would otherwise swallow it —
-`SurfaceLostKHRError` derives from `SystemError`, so the reverse order silently converts "the surface is
-gone, report it" into "the frame failed".
+**`draw_frame`'s `vk::SurfaceLostKHRError` catch is control flow, not error handling — keep it,
+and keep it first.** `FrameResult::SurfaceLost` is real control flow for the WSI state machine,
+but SURFACE_LOST is not in hpp's success-code list for acquire or present, so it arrives as a
+thrown exception rather than a returned result. It is caught by its own type *before* the
+`vk::SystemError` catch, which would otherwise swallow it: `SurfaceLostKHRError` derives from
+`SystemError`, so the reverse order silently turns "the surface is gone, report it" into "the frame
+failed".
 
 ### Construction and teardown both belong to the type
 
@@ -374,10 +382,21 @@ the app cannot reach private headers.
 | `window.*` | GLFW init/terminate, the `GLFWwindow`, required surface extensions, the resize flag |
 | `vk/loader.*` | the one `dlopen` of the Vulkan loader (`vk::raii::Context`), and GLFW's copy of its `vkGetInstanceProcAddr` |
 | `vk/instance.*` | `vk::raii::Instance`, validation + sync validation, debug messenger |
-| `vk/device.*` | surface, physical-device pick, logical device, the single graphics+present queue |
+| `vk/device.*` | surface, physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
 | `vk/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
 | `vk/frame_loop.*` | per-FRAME sync (fences, `image_available`, command buffers), WSI state machine |
-| `vk/renderer.*` | recording only — where scene traversal will live |
+| `vk/renderer.*` | the pipeline, its uniform buffers, descriptor pool/sets and sampler; records each frame |
+| `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
+| `vk/shader.*`, `vk/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
+| `vk/buffer.*` | a `VkBuffer` + its VMA allocation; vertex/index/uniform/staging differ only in flags |
+| `vk/image.*` | a `VkImage` + its VMA allocation + a whole-image view; does not fill itself |
+| `vk/texture.*` | an `Image` loaded from a file (stb) through a staging buffer, left `SHADER_READ_ONLY` |
+| `vk/sampler.*` | a `vk::raii::Sampler`; one serves many textures |
+| `vk/mesh.*`, `vk/vertex.*` | vertex + index buffers uploaded through staging; the vertex layout; `DrawItem` |
+| `vk/one-time-submit.hpp` | record, submit and wait for one-off setup work (uploads) |
+| `vk/common.*` | hpp configuration macros, `VK_CHECK`, `transition_image_layout`, `read_file`, string helpers |
+| `camera.hpp` | `FpsCamera`: yaw/pitch camera producing view and projection matrices |
+| `game-clock.*` | `Stopwatch`: frame delta, total time, fps |
 
 **`window.*` is the only non-Vulkan module**, and it lives outside `vk/` for that
 reason. It includes no Vulkan header — not even `common.hpp` — and `Device`/`Swapchain` take a
@@ -401,9 +420,13 @@ exist because a `vk::raii::SwapchainKHR` is created *through* the raii device an
 through the raii physical device, which is also why `Swapchain` and `FrameLoop` take the whole `Device`
 rather than a handful of handles.
 
-Two `*` remain, and they are not optional style: `frame_loop.cpp` and `renderer.cpp` each dereference a
-`vk::raii::Semaphore` / `vk::raii::ImageView` to reach the C handle, because raii handle to `VkSemaphore`
-is two user-defined conversions and those do not chain.
+`*` on a raii handle yields the plain `vk::` handle inside it, and it is not optional style in two
+places:
+- where a raw handle is needed from a raii one, because raii handle → C handle would be two
+  user-defined conversions, and those do not chain (`*target.view`, `*frame.image_available`);
+- where hpp takes an array of handles (`ArrayProxy`, e.g. `setSetLayouts(*descriptor_set_layout_)`).
+  Passing the raii object itself compiles the conversion check but then fails inside hpp: the proxy
+  needs the *address* of a `vk::DescriptorSetLayout`, and a raii object's address is not one.
 
 **`SwapchainImage` owns the present semaphore**, not the frame loop. `vkGetSwapchainImagesKHR` may
 return more images than requested, and the count changes across recreation; a separate semaphore array

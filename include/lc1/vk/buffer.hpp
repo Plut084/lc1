@@ -22,7 +22,7 @@ class Buffer {
 
     // Requires a buffer created with allocation flag
     // vma::AllocationCreateFlagBits::eHostAccessSequentialWrite.
-    void upload(std::span<std::byte const> data) const;
+    void upload(std::span<std::byte const> data);
 
     vk::raii::Buffer const &raii() const { return buffer_; }
     vk::DeviceSize size() const { return size_; }
@@ -30,7 +30,7 @@ class Buffer {
   private:
     // Owns both the VkBuffer and the VmaAllocation, and frees them together.
     vma::raii::Buffer buffer_{nullptr};
-    vk::DeviceSize size_ = 0;
+    vk::DeviceSize size_;
 };
 
 } // namespace lc1

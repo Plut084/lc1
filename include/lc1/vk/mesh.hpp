@@ -13,6 +13,7 @@
 namespace lc1 {
 
 class Device;
+class Material;
 
 vk::IndexType index_type_for_size(std::size_t size);
 
@@ -36,14 +37,13 @@ class Mesh {
     {
         // Only needed until the copy has finished; one_time_submit waits for that,
         // so it can die at the end of this constructor.
-        Buffer const staging_vertices{device, vertices.size_bytes(),
-                                      vk::BufferUsageFlagBits::eTransferSrc,
-                                      vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+        Buffer staging_vertices{device, vertices.size_bytes(),
+                                vk::BufferUsageFlagBits::eTransferSrc,
+                                vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
         staging_vertices.upload(std::as_bytes(vertices));
 
-        Buffer const staging_indices{device, indices.size_bytes(),
-                                     vk::BufferUsageFlagBits::eTransferSrc,
-                                     vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+        Buffer staging_indices{device, indices.size_bytes(), vk::BufferUsageFlagBits::eTransferSrc,
+                               vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
         staging_indices.upload(std::as_bytes(indices));
 
         one_time_submit(device, [this, &staging_vertices, &vertices, &staging_indices,
@@ -105,9 +105,10 @@ class Mesh {
 };
 
 // One entry of "what to draw this frame", rebuilt every frame. Non-owning: the
-// Mesh must outlive the frame that draws it.
+// Mesh and the Material must outlive the frame that draws them.
 struct DrawItem {
     Mesh const *mesh = nullptr;
+    Material const *material = nullptr;
 };
 
 } // namespace lc1

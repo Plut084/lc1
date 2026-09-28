@@ -8,7 +8,16 @@
 namespace lc1 {
 
 class Device;
-class Window;
+
+// Choices supplied by the caller, not selected by Swapchain. Capabilities
+// must be queried again before recreation; the requested minimum can differ
+// from the actual image count returned by Vulkan.
+struct SwapchainConfig {
+    vk::SurfaceFormatKHR surface_format;
+    vk::PresentModeKHR present_mode;
+    std::uint32_t min_image_count;
+    vk::CompositeAlphaFlagBitsKHR composite_alpha;
+};
 
 // One swapchain image plus everything whose lifetime must match it.
 //
@@ -29,31 +38,31 @@ struct SwapchainImage {
 
 // Must not outlive the Device it was constructed from: its raii handles are
 // destroyed through that device.
+//
+// Construction creates the swapchain: format, extent and images are valid
+// immediately. The caller resolves a nonzero extent from the surface first.
 class Swapchain {
   public:
-    Swapchain(Device const &device, Window const &window);
+    Swapchain(Device const &device, SwapchainConfig const &config, vk::Extent2D extent);
 
     // Rebuilds the swapchain after a resize, VK_ERROR_OUT_OF_DATE_KHR, or
-    // VK_SUBOPTIMAL_KHR. Returns false if the window is minimized (zero
-    // extent), in which case nothing was destroyed and the caller should block
-    // on events rather than spin.
-    bool recreate();
+    // VK_SUBOPTIMAL_KHR.
+    // Validates the supplied choices before releasing existing resources.
+    void recreate(SwapchainConfig const &config, vk::Extent2D extent);
 
     vk::Format format() const { return format_; }
     vk::Extent2D extent() const { return extent_; }
     std::vector<SwapchainImage> const &images() const { return images_; }
 
     // For FrameLoop: acquireNextImage is a SwapchainKHR method.
-    vk::raii::SwapchainKHR const &raii() const { return handle_; }
+    vk::raii::SwapchainKHR const &raii() const { return swapchain_; }
 
   private:
     Device const &device_;
-    // Read only by recreate(), so the Window must outlive every call to it.
-    Window const &window_;
 
-    vk::raii::SwapchainKHR handle_{nullptr};
-    vk::Format format_ = vk::Format::eUndefined;
-    vk::Extent2D extent_{};
+    vk::raii::SwapchainKHR swapchain_;
+    vk::Format format_;
+    vk::Extent2D extent_;
     // Declared last so it is destroyed first: the image views and semaphores in
     // here reference the swapchain's images and must not outlive it on the way
     // out of scope. recreate() has to repeat that ordering by hand.

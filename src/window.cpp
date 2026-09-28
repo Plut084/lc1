@@ -87,9 +87,9 @@ void Window::poll_events()
     glfwPollEvents();
 }
 
-void Window::wait_events()
+void Window::wait_events(double timeout_seconds)
 {
-    glfwWaitEvents();
+    glfwWaitEventsTimeout(timeout_seconds);
 }
 
 FrameExtent Window::framebuffer_extent() const

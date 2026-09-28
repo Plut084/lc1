@@ -11,12 +11,17 @@ class ShaderStages;
 
 class Pipeline {
   public:
-    Pipeline(Device const &device, Swapchain const &swapchain, ShaderStages const &shader_stages);
+    Pipeline(Device const &device, ShaderStages const &shader_stages,
+             std::vector<vk::Format> const &color_attachment_formats,
+             vk::Format depth_attachment_format);
 
-    // Descriptor sets for this pipeline are allocated with this layout.
-    vk::raii::DescriptorSetLayout const &descriptor_set_layout() const
+    // Set 0: what changes every frame (the uniform buffer). One set per frame
+    // in flight.
+    vk::raii::DescriptorSetLayout const &frame_set_layout() const { return frame_set_layout_; }
+    // Set 1: what changes per draw (the texture). One set per Material.
+    vk::raii::DescriptorSetLayout const &material_set_layout() const
     {
-        return descriptor_set_layout_;
+        return material_set_layout_;
     }
     // bindDescriptorSets needs it.
     vk::raii::PipelineLayout const &layout() const { return layout_; }
@@ -24,7 +29,8 @@ class Pipeline {
 
   private:
     // In creation order, so each is destroyed before what it was built from.
-    vk::raii::DescriptorSetLayout descriptor_set_layout_{nullptr};
+    vk::raii::DescriptorSetLayout frame_set_layout_{nullptr};
+    vk::raii::DescriptorSetLayout material_set_layout_{nullptr};
     vk::raii::PipelineLayout layout_{nullptr};
     vk::raii::Pipeline graphics_pipeline_{nullptr};
 };

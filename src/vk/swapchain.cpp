@@ -1,32 +1,14 @@
 #include "lc1/vk/swapchain.hpp"
 
 #include "lc1/vk/device.hpp"
-#include "lc1/window.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <print>
 #include <vector>
 
 namespace lc1 {
 namespace {
-
-// Prefers eB8G8R8A8Srgb and eSrgbNonlinear.
-vk::SurfaceFormatKHR pick_surface_format(std::vector<vk::SurfaceFormatKHR> const &formats)
-{
-    // Some drivers report exactly one VK_FORMAT_UNDEFINED entry meaning "no
-    // preference". Never pass UNDEFINED onward to vkCreateSwapchainKHR.
-    if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
-        return vk::SurfaceFormatKHR{.format = vk::Format::eB8G8R8A8Srgb,
-                                    .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear};
-    }
-    for (vk::SurfaceFormatKHR const &format : formats) {
-        if (format.format == vk::Format::eB8G8R8A8Srgb &&
-            format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
-            return format;
-        }
-    }
-    return formats[0];
-}
 
 char const *present_mode_name(vk::PresentModeKHR mode)
 {
@@ -44,93 +26,59 @@ char const *present_mode_name(vk::PresentModeKHR mode)
     }
 }
 
-vk::PresentModeKHR pick_present_mode(std::vector<vk::PresentModeKHR> const &modes)
-{
-    for (vk::PresentModeKHR mode : modes) {
-        if (mode == vk::PresentModeKHR::eMailbox)
-            return mode;
-    }
-    // The only mode the spec guarantees to exist.
-    return vk::PresentModeKHR::eFifo;
-}
-
-vk::CompositeAlphaFlagBitsKHR pick_composite_alpha(vk::CompositeAlphaFlagsKHR supported)
-{
-    constexpr std::array<vk::CompositeAlphaFlagBitsKHR, 4> composite_alpha_candidates{
-        vk::CompositeAlphaFlagBitsKHR::eOpaque,
-        vk::CompositeAlphaFlagBitsKHR::ePreMultiplied,
-        vk::CompositeAlphaFlagBitsKHR::ePostMultiplied,
-        vk::CompositeAlphaFlagBitsKHR::eInherit,
-    };
-    for (vk::CompositeAlphaFlagBitsKHR candidate : composite_alpha_candidates) {
-        if (supported & candidate)
-            return candidate;
-    }
-    fail("surface reports no supported composite alpha mode");
-}
-
-std::uint32_t pick_image_count(vk::SurfaceCapabilitiesKHR const &caps)
-{
-    // One more than the minimum (MAILBOX needs the extra buffer to actually
-    // queue a frame) but never above maxImageCount when that is nonzero.
-    auto image_count = caps.minImageCount + 1;
-    // Note that when caps.maxImageCount is 0, it means there is no maximum.
-    if (caps.maxImageCount != 0 && image_count > caps.maxImageCount) {
-        image_count = caps.maxImageCount;
-    }
-    return image_count;
-}
-
-// Returns false when the window is minimized or the surface has no usable
-// extent. Zero extent is not merely useless -- VkRenderingInfo::renderArea
-// requires a nonzero extent, so we must not record a frame at all in that case.
-bool compute_extent(Window const &window, vk::SurfaceCapabilitiesKHR const &caps, vk::Extent2D *out)
-{
-    if (caps.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
-        // The compositor is telling us the size. Use it verbatim: substituting
-        // the framebuffer size here is what makes Wayland report
-        // VK_SUBOPTIMAL_KHR on every frame, forever.
-        *out = caps.currentExtent;
-        return out->width != 0 && out->height != 0;
-    }
-
-    FrameExtent const framebuffer = window.framebuffer_extent();
-    if (framebuffer.width == 0 || framebuffer.height == 0)
-        return false;
-
-    out->width =
-        std::clamp(framebuffer.width, caps.minImageExtent.width, caps.maxImageExtent.width);
-    out->height =
-        std::clamp(framebuffer.height, caps.minImageExtent.height, caps.maxImageExtent.height);
-    return out->width != 0 && out->height != 0;
-}
-
 } // namespace
 
-Swapchain::Swapchain(Device const &device, Window const &window) : device_{device}, window_{window}
+Swapchain::Swapchain(Device const &device, SwapchainConfig const &config, vk::Extent2D extent)
+    : device_{device}, swapchain_(nullptr), format_{vk::Format::eUndefined}, extent_{extent}
 {
-    if (!recreate()) {
-        fail("could not create the initial swapchain: the window has zero "
-             "extent");
-    }
+    recreate(config, extent);
 }
 
-bool Swapchain::recreate()
+void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
 {
+    // Reject an unusable extent before destroying any existing resources.
+    // A minimized window is handled by the caller, which waits for events.
+    if (extent.width == 0 || extent.height == 0) {
+        fail("cannot create a swapchain with a zero extent");
+    }
+
     try {
         vk::SurfaceKHR const surface = *device_.raii_surface();
 
         auto const caps = device_.raii_physical().getSurfaceCapabilitiesKHR(surface);
 
-        // Check the extent BEFORE touching anything. If the window is minimized
-        // there is nothing to render and nothing worth rebuilding, so leave the
-        // existing swapchain intact and let the caller block on events.
-        vk::Extent2D extent;
-        if (!compute_extent(window_, caps, &extent))
-            return false;
-
         if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment)) {
             fail("surface does not support VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT");
+        }
+
+        if (extent.width < caps.minImageExtent.width || extent.width > caps.maxImageExtent.width ||
+            extent.height < caps.minImageExtent.height ||
+            extent.height > caps.maxImageExtent.height ||
+            (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max() &&
+             extent != caps.currentExtent)) {
+            fail("swapchain extent {}x{} is not supported by the surface", extent.width,
+                 extent.height);
+        }
+        if (config.min_image_count < caps.minImageCount ||
+            (caps.maxImageCount != 0 && config.min_image_count > caps.maxImageCount)) {
+            fail("requested swapchain image count {} is outside the surface limits",
+                 config.min_image_count);
+        }
+        if (!(caps.supportedCompositeAlpha & config.composite_alpha)) {
+            fail("requested composite alpha mode is not supported by the surface");
+        }
+
+        auto const formats = device_.raii_physical().getSurfaceFormatsKHR(surface);
+        bool const any_format = formats.size() == 1 &&
+                                formats.front().format == vk::Format::eUndefined &&
+                                formats.front().colorSpace == config.surface_format.colorSpace;
+        if (config.surface_format.format == vk::Format::eUndefined ||
+            (!any_format && std::ranges::find(formats, config.surface_format) == formats.end())) {
+            fail("requested surface format/color space is not supported");
+        }
+        auto const modes = device_.raii_physical().getSurfacePresentModesKHR(surface);
+        if (std::ranges::find(modes, config.present_mode) == modes.end()) {
+            fail("requested present mode is not supported by the surface");
         }
 
         // Present is a queue operation and it consumes the swapchain, so
@@ -141,19 +89,7 @@ bool Swapchain::recreate()
         // this is a rebuild, not a destruction. The image views and semaphores
         // reference the swapchain's images, so they go first.
         images_.clear();
-        handle_.clear();
-
-        auto const image_count = pick_image_count(caps);
-
-        auto const availableformats = device_.raii_physical().getSurfaceFormatsKHR(surface);
-        if (availableformats.empty())
-            fail("surface reports no supported formats");
-        auto const surface_format = pick_surface_format(availableformats);
-
-        auto const composite_alpha = pick_composite_alpha(caps.supportedCompositeAlpha);
-
-        auto const available_modes = device_.raii_physical().getSurfacePresentModesKHR(surface);
-        auto const present_mode = pick_present_mode(available_modes);
+        swapchain_.clear();
 
         // Two fields are deliberately left at their defaults.
         // pQueueFamilyIndices: EXCLUSIVE sharing means one queue family, so
@@ -162,25 +98,25 @@ bool Swapchain::recreate()
         // must outlive the new one), and this rebuilds from scratch anyway.
         vk::SwapchainCreateInfoKHR info;
         info.setSurface(surface)
-            .setMinImageCount(image_count)
-            .setImageFormat(surface_format.format)
-            .setImageColorSpace(surface_format.colorSpace)
+            .setMinImageCount(config.min_image_count)
+            .setImageFormat(config.surface_format.format)
+            .setImageColorSpace(config.surface_format.colorSpace)
             .setImageExtent(extent)
             .setImageArrayLayers(1)
             .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
             .setImageSharingMode(vk::SharingMode::eExclusive)
             .setPreTransform(caps.currentTransform)
-            .setCompositeAlpha(composite_alpha)
-            .setPresentMode(present_mode)
+            .setCompositeAlpha(config.composite_alpha)
+            .setPresentMode(config.present_mode)
             // Clipped: Happens when windows are in front of others.
             .setClipped(vk::True);
 
-        handle_ = device_.raii().createSwapchainKHR(info);
-        format_ = surface_format.format;
+        swapchain_ = device_.raii().createSwapchainKHR(info);
+        format_ = config.surface_format.format;
         extent_ = extent;
 
         // Query the ACTUAL image count -- it may exceed what we asked for.
-        std::vector<vk::Image> const raw_images = handle_.getImages();
+        std::vector<vk::Image> const raw_images = swapchain_.getImages();
 
         images_.resize(raw_images.size());
         for (size_t i = 0; i < raw_images.size(); ++i) {
@@ -207,11 +143,10 @@ bool Swapchain::recreate()
         }
 
         std::println("[lc1] swapchain: {}x{}, {} images, {}", extent_.width, extent_.height,
-                     raw_images.size(), present_mode_name(present_mode));
-        return true;
+                     raw_images.size(), present_mode_name(config.present_mode));
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("swapchain recreation failed: ") + error.what());
+        fail("swapchain recreation failed: {}", error.what());
     }
 }
 

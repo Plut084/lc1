@@ -52,7 +52,9 @@ class Window {
     // Not const: dispatching events runs the resize callback, which writes
     // framebuffer_resized_.
     void poll_events();
-    void wait_events();
+    // Bounded so the application can also check signal-based shutdown.
+    // timeout_seconds must be positive and finite.
+    void wait_events(double timeout_seconds);
 
     // {0, 0} when the window is minimized or the framebuffer is unusable.
     FrameExtent framebuffer_extent() const;

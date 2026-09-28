@@ -22,7 +22,7 @@ Buffer::Buffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags u
 {
 }
 
-void Buffer::upload(std::span<std::byte const> data) const
+void Buffer::upload(std::span<std::byte const> data)
 {
     if (data.size() > size_)
         fail("Buffer::upload: data is larger than the buffer");

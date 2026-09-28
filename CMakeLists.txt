@@ -24,20 +24,24 @@ add_subdirectory(shaders)
 # (e.g. vk/checks.hpp) that the app cannot see.
 add_library(lc1_engine STATIC
     src/window.cpp
-    src/vk/util.cpp
+    src/vk/common.cpp
     src/vk/loader.cpp
     src/vk/instance.cpp
     src/vk/device.cpp
     src/vk/swapchain.cpp
+    src/vk/swapchain-policy.cpp
     src/vk/shader.cpp
     src/vk/shader-stages.cpp
     src/vk/buffer.cpp
+    src/vk/image.cpp
+    src/vk/texture.cpp
     src/vk/mesh.cpp
     src/vk/pipeline.cpp
     src/vk/frame_loop.cpp
     src/vk/renderer.cpp
     src/vk/memory.cpp
 
+    src/stb-image.cpp
     src/game-clock.cpp
 )
 
@@ -57,9 +61,11 @@ target_link_libraries(lc1_engine PUBLIC
 
 target_compile_definitions(lc1_engine PUBLIC
     GLM_FORCE_DEFAULT_ALIGNED_GENTYPES # Makes glm aligns with shader
+    GLM_FORCE_DEPTH_ZERO_TO_ONE # Force depth from glm in range of [0, 1], which
+                                # is required by Vulkan.
 )
 
-# app: the game executable. Output name stays lc1 so run.sh / Makefile work.
+# app: the game executable. Output name stays lc1 so the Makefile works.
 add_executable(lc1 app/main.cpp)
 target_link_libraries(lc1 PRIVATE lc1_engine)
 # The .spv files are loaded at runtime, so `--target lc1` must build them too.

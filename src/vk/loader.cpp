@@ -5,7 +5,6 @@
 #include <GLFW/glfw3.h>
 
 #include <stdexcept>
-#include <string>
 
 namespace lc1 {
 
@@ -18,7 +17,7 @@ try {
 catch (std::runtime_error const &error) {
     // What vk::raii::Context throws when the dlopen fails, i.e. no Vulkan
     // loader is installed.
-    fail(std::string("could not load the Vulkan loader: ") + error.what());
+    fail("could not load the Vulkan loader: {}", error.what());
 }
 
 VulkanLoader::~VulkanLoader()

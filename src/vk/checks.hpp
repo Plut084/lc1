@@ -29,8 +29,7 @@ inline void check_extensions(std::vector<char const *> const &extensions,
     auto available_extensions = context.enumerateInstanceExtensionProperties();
     for (char const *name : extensions) {
         if (!extension_available(available_extensions, name)) {
-            fail(std::string("Vulkan instance extension not available: ") +
-                 name);
+            fail("Vulkan instance extension not available: {}", name);
         }
     }
 }
@@ -41,7 +40,7 @@ inline void check_extensions(std::vector<char const *> const &extensions,
     auto available_extensions = device.enumerateDeviceExtensionProperties();
     for (char const *name : extensions) {
         if (!extension_available(available_extensions, name)) {
-            fail(std::string("Vulkan device extension not available: ") + name);
+            fail("Vulkan device extension not available: {}", name);
         }
     }
 }
@@ -52,7 +51,7 @@ inline void check_layers(std::vector<char const *> const &layers,
     auto available_layers = context.enumerateInstanceLayerProperties();
     for (char const *name : layers) {
         if (!layer_available(available_layers, name)) {
-            fail(std::string("Vulkan instance layer not available: ") + name);
+            fail("Vulkan instance layer not available: {}", name);
         }
     }
 }

@@ -1,92 +1,66 @@
 #include "lc1/vk/renderer.hpp"
 
-#include "lc1/utils.hpp"
+#include "lc1/vk/common.hpp"
 #include "lc1/vk/device.hpp"
 #include "lc1/vk/frame_loop.hpp"
 #include "lc1/vk/memory.hpp"
 #include "lc1/vk/shader-stages.hpp"
-#include "lc1/vk/swapchain.hpp"
+#include "lc1/vk/texture.hpp"
 #include "lc1/vk/vertex.hpp"
 
 #include <array>
-#include <string>
 #include <vector>
 
 namespace lc1 {
 namespace {
 
-void transition_image_layout(vk::raii::CommandBuffer const &command_buffer, vk::Image image,
-                             vk::ImageLayout old_layout, vk::ImageLayout new_layout,
-                             vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
-                             vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access)
-{
-    // subresourceRange has to be spelled out: unlike most hpp structs, whose
-    // defaults are the Vulkan defaults, ImageSubresourceRange defaults to all
-    // zeros -- and levelCount = 0 is invalid.
-    vk::ImageMemoryBarrier2 barrier{
-        .srcStageMask = src_stage,
-        .srcAccessMask = src_access,
-        .dstStageMask = dst_stage,
-        .dstAccessMask = dst_access,
-        .oldLayout = old_layout,
-        .newLayout = new_layout,
-        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .image = image,
-        .subresourceRange =
-            vk::ImageSubresourceRange{
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-    };
-
-    vk::DependencyInfo dependency;
-    dependency.setImageMemoryBarriers(barrier);
-
-    command_buffer.pipelineBarrier2(dependency);
-}
-
 // The shader modules only need to live until the pipeline is created, so they
 // stay local to this function.
-Pipeline make_pipeline(Device const &device, Swapchain const &swapchain)
+Pipeline make_pipeline(Device const &device,
+                       std::vector<vk::Format> const &color_attachment_formats,
+                       vk::Format depth_image_format)
 {
     auto const shader_code = read_file("shaders/shader.spv");
-    ShaderModule const vert_module{device, shader_code};
-    ShaderModule const frag_module{device, shader_code};
+    ShaderModule const shader_module{device, shader_code};
 
     ShaderStages shader_stages;
-    shader_stages.append(vk::ShaderStageFlagBits::eVertex, vert_module, "vertMain");
-    shader_stages.append(vk::ShaderStageFlagBits::eFragment, frag_module, "fragMain");
-    return Pipeline{device, swapchain, shader_stages};
+    shader_stages.append(vk::ShaderStageFlagBits::eVertex, shader_module, "vertMain");
+    shader_stages.append(vk::ShaderStageFlagBits::eFragment, shader_module, "fragMain");
+    return Pipeline{device, shader_stages, color_attachment_formats, depth_image_format};
 }
 
 } // namespace
 
-Renderer::Renderer(Device const &device, Swapchain const &swapchain)
-    : pipeline_{make_pipeline(device, swapchain)}
+Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats)
+    : device_{device}, depth_format_{find_depth_format(device)},
+      pipeline_{make_pipeline(device, color_attachment_formats, depth_format_)},
+      descriptor_pool_(nullptr), sampler_(device)
 {
     try {
         vk::raii::Device const &raii_device = device.raii();
 
-        vk::DescriptorPoolSize pool_size{
+        // Set 0 once per frame in flight, set 1 once per material.
+        std::vector<vk::DescriptorPoolSize> pool_sizes;
+        pool_sizes.push_back({
             .type = vk::DescriptorType::eUniformBuffer,
             .descriptorCount = FrameLoop::frames_in_flight,
-        };
+        });
+        pool_sizes.push_back({
+            .type = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = max_materials,
+        });
         vk::DescriptorPoolCreateInfo pool_info{
             // Allows for individual descriptor set to be freed, which is what
             // ~vk::raii::DescriptorSet does.
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-            .maxSets = FrameLoop::frames_in_flight,
+            .maxSets = FrameLoop::frames_in_flight + max_materials,
         };
-        pool_info.setPoolSizes(pool_size);
+        pool_info.setPoolSizes(pool_sizes);
         descriptor_pool_ = raii_device.createDescriptorPool(pool_info);
 
         // One layout per set to allocate: the length of this array is the count.
         std::vector<vk::DescriptorSetLayout> const layouts(FrameLoop::frames_in_flight,
-                                                           *pipeline_.descriptor_set_layout());
+                                                           *pipeline_.frame_set_layout());
         vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = descriptor_pool_};
         alloc_info.setSetLayouts(layouts);
         auto descriptor_sets = raii_device.allocateDescriptorSets(alloc_info);
@@ -104,94 +78,148 @@ Renderer::Renderer(Device const &device, Swapchain const &swapchain)
                 .offset = 0,
                 .range = sizeof(UniformBufferObject),
             };
-            vk::WriteDescriptorSet write{
+            vk::WriteDescriptorSet const write{
                 .dstSet = descriptor_set,
                 .dstBinding = 0,
                 .dstArrayElement = 0,
+                .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eUniformBuffer,
+                .pBufferInfo = &buffer_info,
             };
-            write.setBufferInfo(buffer_info);
             raii_device.updateDescriptorSets(write, {});
 
             frames_.push_back({
                 .uniform_buffer = std::move(uniform_buffer),
                 .descriptor_set = std::move(descriptor_set),
+                .depth_image = std::nullopt, // Create on the fly.
             });
         }
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("descriptor resource creation failed: ") + error.what());
+        fail("descriptor resource creation failed: {}", error.what());
     }
 }
 
-void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32_t frame_index,
-                      Swapchain const &swapchain, std::uint32_t image_index,
-                      UniformBufferObject const &ubo, std::span<DrawItem const> draws) const
+Material Renderer::make_material(Texture const &texture)
 {
-    FrameData const &frame = frames_[frame_index];
-    SwapchainImage const &target = swapchain.images()[image_index];
+    try {
+        vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = descriptor_pool_};
+        alloc_info.setSetLayouts(*pipeline_.material_set_layout());
+        auto descriptor_sets = device_.raii().allocateDescriptorSets(alloc_info);
+
+        // Written once: the texture never changes, so no frame in flight can be
+        // reading an older version of this set.
+        vk::DescriptorImageInfo image_info{
+            .sampler = *sampler_.raii(),
+            .imageView = *texture.image().view(),
+            // Texture's constructor leaves the image in this layout.
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        };
+        vk::WriteDescriptorSet const write{
+            .dstSet = descriptor_sets.front(),
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .pImageInfo = &image_info,
+        };
+        device_.raii().updateDescriptorSets(write, {});
+
+        return Material{std::move(descriptor_sets.front())};
+    }
+    catch (vk::SystemError const &error) {
+        fail("material creation failed: {}", error.what());
+    }
+}
+
+Image const &Renderer::ensure_depth_image(FrameData &frame, vk::Extent2D extent)
+{
+    // This slot's fence protects its depth image. Other frames keep
+    // their own images, so a resize needs no device-wide wait here.
+    if (!frame.depth_image || frame.depth_image->extent() != extent) {
+        frame.depth_image.emplace(device_, depth_format_, extent,
+                                  vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                  vk::ImageAspectFlagBits::eDepth);
+    }
+    return *frame.depth_image;
+}
+
+void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32_t frame_index,
+                      RenderTarget const &target, UniformBufferObject const &ubo,
+                      std::span<DrawItem const> draws)
+{
+    if (target.extent.width == 0 || target.extent.height == 0) {
+        fail("cannot render to a target with a zero extent");
+    }
+
+    FrameData &frame = frames_[frame_index];
 
     // Safe to overwrite here: the frame loop calls record only after waiting on
     // this slot's fence, so the GPU is done with the frame that last read it.
     frame.uniform_buffer.upload(std::as_bytes(std::span{&ubo, 1}));
+    Image const &depth_image = ensure_depth_image(frame, target.extent);
 
-    command_buffer.begin({
-        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-    });
-
-    // UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL.
-    //
-    // srcStageMask must be COLOR_ATTACHMENT_OUTPUT, matching the stage at which
-    // frame_loop waits on the acquire semaphore. VK_PIPELINE_STAGE_2_NONE is
-    // the tempting sync2 idiom here ("the previous contents are irrelevant"),
-    // and it is legal against this barrier's own VUIDs -- but it leaves the
-    // layout transition unordered against vkAcquireNextImageKHR, and sync
-    // validation reports it as SYNC-HAZARD-WRITE-AFTER-READ.
-    //
-    // srcAccessMask stays NONE: the presentation engine's read is not tracked
-    // by access masks, so there is nothing to make available. This is
-    // deliberately an execution-only dependency.
-    transition_image_layout(command_buffer, target.image, vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::AccessFlags2{}, // VK_ACCESS_2_NONE
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::AccessFlagBits2::eColorAttachmentWrite);
-
-    // Deliberately not black. A black clear is indistinguishable from a broken
-    // swapchain or a blank window, which is exactly the failure this milestone
-    // exists to rule out.
-    constexpr vk::ClearColorValue clear_color{0.9F, 0.35F, 0.05F, 1.0F};
-
-    // One dereference back to the C++ handle. Going all the way to VkImageView
-    // would be two user-defined conversions, and those do not chain.
-    vk::RenderingAttachmentInfo color_attachment;
-    color_attachment
-        .setImageView(*target.view)
-        // NOT VK_IMAGE_LAYOUT_UNDEFINED:
-        // VUID-VkRenderingAttachmentInfo-imageView-06135 forbids it here, even
-        // though the barrier immediately above legitimately uses UNDEFINED as
-        // oldLayout. This is the single most common mistake in this path.
-        .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eStore)
-        .setClearValue(vk::ClearValue{}.setColor(clear_color));
+    vk::ImageAspectFlags depth_aspects = vk::ImageAspectFlagBits::eDepth;
+    if (depth_format_ == vk::Format::eD32SfloatS8Uint ||
+        depth_format_ == vk::Format::eD24UnormS8Uint) {
+        // separateDepthStencilLayouts is not enabled: transition both aspects
+        // of a combined format even though only depth is attached.
+        depth_aspects |= vk::ImageAspectFlagBits::eStencil;
+    }
+    constexpr auto depth_stages = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                  vk::PipelineStageFlagBits2::eLateFragmentTests;
+    // Depth is cleared every frame, so discard its old contents. Keep the
+    // dependency on earlier depth writes when reusing an existing image.
+    transition_image_layout(command_buffer, *depth_image.raii(), vk::ImageLayout::eUndefined,
+                            vk::ImageLayout::eDepthStencilAttachmentOptimal, depth_stages,
+                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite, depth_stages,
+                            vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                            depth_aspects);
 
     vk::RenderingInfo rendering{
-        .renderArea = {.offset = vk::Offset2D{.x = 0, .y = 0}, .extent = swapchain.extent()},
+        .renderArea =
+            {
+                .offset = vk::Offset2D{.x = 0, .y = 0},
+                .extent = target.extent,
+            },
         // must not be 0: VUID-VkRenderingInfo-viewMask-06069
         .layerCount = 1,
     };
+    // Deliberately not black, so an untouched target is easy to distinguish
+    // from a rendered frame.
+    constexpr vk::ClearColorValue clear_color{0.9F, 0.35F, 0.05F, 1.0F};
+
+    vk::RenderingAttachmentInfo const color_attachment{
+        .imageView = *target.view,
+        // NOT VK_IMAGE_LAYOUT_UNDEFINED:
+        // VUID-VkRenderingAttachmentInfo-imageView-06135 forbids it here.
+        // The caller transitions the target before record.
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = vk::ClearValue{}.setColor(clear_color),
+    };
     rendering.setColorAttachments(color_attachment);
+
+    vk::RenderingAttachmentInfo const depth_attachment{
+        .imageView = *depth_image.view(),
+        .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+        .clearValue = vk::ClearValue{}.setDepthStencil({.depth = 1.0F, .stencil = 0}),
+    };
+    rendering.setPDepthAttachment(&depth_attachment);
 
     command_buffer.beginRendering(rendering);
 
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_.raii());
+    // Set 0 once for the whole frame; set 1 per draw, below. Binding set 1
+    // leaves set 0 bound: the two layouts are compatible up to set 0.
     command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 0,
                                       *frame.descriptor_set, nullptr);
-    // Both cover the whole image, taken from the swapchain as it is now, so
-    // they are correct again right after a resize.
-    vk::Extent2D const extent = swapchain.extent();
+    // Render area, viewport and scissor use the same caller-provided extent.
+    vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where
     // Vulkan's points down. y moves to the bottom edge to match: with y = 0,
     // the flipped viewport would cover [-height, 0], entirely off-screen.
@@ -205,25 +233,13 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32
                                   });
     command_buffer.setScissor(0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent});
 
-    for (DrawItem const &item : draws)
+    for (DrawItem const &item : draws) {
+        command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 1,
+                                          *item.material->descriptor_set(), nullptr);
         item.mesh->draw(command_buffer);
+    }
 
     command_buffer.endRendering();
-
-    // COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR.
-    // Destination stage/access are NONE, not BOTTOM_OF_PIPE: presentation is
-    // not a pipeline stage. What actually orders this write against the
-    // presentation engine's read is the submit -> present semaphore pair, so a
-    // missing render_finished wait in present is a real race, not a style
-    // issue.
-    transition_image_layout(command_buffer, target.image, vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ImageLayout::ePresentSrcKHR,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::AccessFlagBits2::eColorAttachmentWrite,
-                            vk::PipelineStageFlagBits2{}, // VK_PIPELINE_STAGE_2_NONE
-                            vk::AccessFlags2{});          // VK_ACCESS_2_NONE
-
-    command_buffer.end();
 }
 
 } // namespace lc1

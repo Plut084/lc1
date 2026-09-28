@@ -1,8 +1,8 @@
 #pragma once
 
+#include <format>
 #include <stdexcept>
-#include <string>
-#include <string_view>
+#include <utility>
 
 namespace lc1 {
 
@@ -14,9 +14,12 @@ class Error : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-[[noreturn]] inline void fail(std::string_view what)
+// Formats like std::println. The format string is checked at compile time, so a
+// message built at runtime cannot be the format; pass it as an argument:
+// fail("{}", message).
+template <typename... Args> [[noreturn]] void fail(std::format_string<Args...> fmt, Args &&...args)
 {
-    throw Error(std::string(what));
+    throw Error(std::format(fmt, std::forward<Args>(args)...));
 }
 
 } // namespace lc1

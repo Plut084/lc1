@@ -38,16 +38,21 @@ std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice co
     return std::nullopt;
 }
 
-bool supports_required_features(vk::raii::PhysicalDevice const &device)
+bool supports_required_features(vk::raii::PhysicalDevice const &physical_device)
 {
     // Query through the *aggregate* Vulkan13Features struct. At device creation
     // we enable the same aggregate; chaining the promoted
     // VkPhysicalDeviceDynamicRenderingFeatures / ...Synchronization2Features
     // alongside it is explicitly forbidden.
     auto const chain =
-        device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>();
+        physical_device
+            .getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
+                          vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     auto const &features13 = chain.get<vk::PhysicalDeviceVulkan13Features>();
-    return features13.dynamicRendering == vk::True && features13.synchronization2 == vk::True;
+    auto const &features_extended_dynamic_state =
+        chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    return features13.dynamicRendering == vk::True && features13.synchronization2 == vk::True &&
+           features_extended_dynamic_state.extendedDynamicState == vk::True;
 }
 
 int score_device(vk::PhysicalDeviceType type)
@@ -119,7 +124,7 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
     // wrapper offers no null-handle comparison.
     if (best_score < 0) {
         if (filtered) {
-            fail(std::string("LC1_DEVICE=\"") + want + "\" matched no usable device");
+            fail("LC1_DEVICE=\"{}\" matched no usable device", want);
         }
         fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
              "VK_KHR_swapchain, dynamicRendering, synchronization2, and a "
@@ -132,7 +137,7 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
 
 Device::Device(Instance const &instance, Window const &window,
                std::vector<char const *> required_extensions)
-    : physical_{nullptr}, surface_{nullptr}, handle_{nullptr}, alloc_{nullptr}, queue_{nullptr}
+    : physical_{nullptr}, surface_{nullptr}, device_{nullptr}, alloc_{nullptr}, queue_{nullptr}
 {
     try {
         // GLFW creates the surface through the C API; adopt it immediately so
@@ -175,7 +180,7 @@ Device::Device(Instance const &instance, Window const &window,
                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
             feature_chain{
                 // vk::PhysicalDeviceFeatures2 (empty for now)
-                {},
+                {.features = {.samplerAnisotropy = 1}},
                 {.shaderDrawParameters = 1},
                 {.synchronization2 = 1, .dynamicRendering = 1},
                 {.extendedDynamicState = 1},
@@ -191,7 +196,7 @@ Device::Device(Instance const &instance, Window const &window,
 
         check_extensions(required_extensions, physical_);
 
-        handle_ = physical_.createDevice(info);
+        device_ = physical_.createDevice(info);
 
         // instance, device and pVulkanFunctions must stay null: the raii
         // constructor fills them from the raii objects, function pointers
@@ -201,22 +206,22 @@ Device::Device(Instance const &instance, Window const &window,
             .physicalDevice = *physical_,
             .vulkanApiVersion = vk::ApiVersion14,
         };
-        alloc_ = vma::raii::Allocator{instance.raii(), handle_, alloc_info};
+        alloc_ = vma::raii::Allocator{instance.raii(), device_, alloc_info};
 
-        queue_ = handle_.getQueue(queue_family_, 0);
+        queue_ = device_.getQueue(queue_family_, 0);
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("Vulkan device setup failed: ") + error.what());
+        fail("Vulkan device setup failed: {}", error.what());
     }
 }
 
 void Device::wait_idle() const
 {
     try {
-        handle_.waitIdle();
+        device_.waitIdle();
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("vkDeviceWaitIdle failed: ") + error.what());
+        fail("vkDeviceWaitIdle failed: {}", error.what());
     }
 }
 

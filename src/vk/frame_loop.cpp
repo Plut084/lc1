@@ -4,8 +4,6 @@
 #include "lc1/vk/renderer.hpp"
 #include "lc1/vk/swapchain.hpp"
 
-#include <string>
-
 namespace lc1 {
 namespace {
 
@@ -39,8 +37,8 @@ FrameLoop::FrameLoop(Device const &device) : device_{device}
         // the loop below indexes with it, and a short vector would be an
         // out-of-bounds read rather than an error message.
         if (command_buffers.size() != frames_in_flight) {
-            fail("vkAllocateCommandBuffers returned " + std::to_string(command_buffers.size()) +
-                 " command buffers, expected " + std::to_string(frames_in_flight));
+            fail("vkAllocateCommandBuffers returned {} command buffers, expected {}",
+                 command_buffers.size(), frames_in_flight);
         }
 
         vk::SemaphoreCreateInfo semaphore_info{};
@@ -59,13 +57,12 @@ FrameLoop::FrameLoop(Device const &device) : device_{device}
         }
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("per-frame resource creation failed: ") + error.what());
+        fail("per-frame resource creation failed: {}", error.what());
     }
 }
 
-FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer,
-                                  UniformBufferObject const &ubo,
-                                  std::span<DrawItem const> draws)
+FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
+                                  UniformBufferObject const &ubo, std::span<DrawItem const> draws)
 {
     Frame const &frame = frames_[frame_index_];
     vk::raii::Device const &raii_device = device_.raii();
@@ -76,13 +73,12 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer
         vk::Result const wait_result =
             raii_device.waitForFences(*frame.in_flight, vk::True, fence_timeout_ns);
         if (wait_result == vk::Result::eTimeout) {
-            fail("fence wait timed out on slot " + std::to_string(frame_index_) +
-                 " -- deadlock or GPU hang. The usual cause is vkResetFences on "
-                 "a path "
-                 "that never reaches vkQueueSubmit.");
+            fail("fence wait timed out on slot {} -- deadlock or GPU hang. The usual cause is "
+                 "vkResetFences on a path that never reaches vkQueueSubmit.",
+                 frame_index_);
         }
         if (wait_result != vk::Result::eSuccess) {
-            fail("vkWaitForFences failed: " + result_string(wait_result));
+            fail("vkWaitForFences failed: {}", result_string(wait_result));
         }
 
         // On a non-success result the driver left the index unwritten, so
@@ -102,7 +98,7 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer
         // vk::SurfaceLostKHRError and is caught below.
         if (acquire_result != vk::Result::eSuccess &&
             acquire_result != vk::Result::eSuboptimalKHR) {
-            fail("vkAcquireNextImageKHR failed: " + result_string(acquire_result));
+            fail("vkAcquireNextImageKHR failed: {}", result_string(acquire_result));
         }
 
         // VK_SUBOPTIMAL_KHR means an image WAS acquired and
@@ -129,14 +125,53 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer
         // exactly why the pool is created with
         // VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT.
         frame.command_buffer.reset({});
+        frame.command_buffer.begin({
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+        });
+
+        SwapchainImage const &image = swapchain.images()[image_index];
+
+        // UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL.
+        //
+        // srcStageMask must be COLOR_ATTACHMENT_OUTPUT, matching the stage at
+        // which submit waits on the acquire semaphore. NONE leaves this layout
+        // transition unordered against acquire, and synchronization validation
+        // reports SYNC-HAZARD-WRITE-AFTER-READ.
+        // srcAccessMask stays NONE: the presentation engine's read is not
+        // tracked by access masks. This is an execution-only dependency.
+        transition_image_layout(
+            frame.command_buffer, image.image, vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlags2{},
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageAspectFlagBits::eColor);
+
+        RenderTarget const target{
+            .view = image.view,
+            .extent = swapchain.extent(),
+        };
 
         // frame_index_, not image_index, selects the renderer's per-frame
         // uniform buffer: the fence waited on above is this slot's.
-        renderer.record(frame.command_buffer, frame_index_, swapchain, image_index, ubo, draws);
+        renderer.record(frame.command_buffer, frame_index_, target, ubo, draws);
+
+        // COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR.
+        // Destination stage/access are NONE, not BOTTOM_OF_PIPE: presentation
+        // is not a pipeline stage. The submit -> present semaphore pair orders
+        // this write against the presentation engine's read.
+        transition_image_layout(
+            frame.command_buffer, image.image, vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2{}, // VK_PIPELINE_STAGE_2_NONE
+            vk::AccessFlags2{},           // VK_ACCESS_2_NONE
+            vk::ImageAspectFlagBits::eColor);
+
+        frame.command_buffer.end();
 
         // One dereference to the C handle: vk::raii::Semaphore -> VkSemaphore
         // would be two user-defined conversions, and those do not chain.
-        vk::Semaphore const render_finished = *swapchain.images()[image_index].render_finished;
+        vk::Semaphore const render_finished = *image.render_finished;
 
         vk::SemaphoreSubmitInfo wait_semaphore;
         wait_semaphore
@@ -174,7 +209,7 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer
             return FrameResult::RecreateRequested;
         }
         if (presented != vk::Result::eSuccess) {
-            fail("vkQueuePresentKHR failed: " + result_string(presented));
+            fail("vkQueuePresentKHR failed: {}", result_string(presented));
         }
 
         frame_index_ = (frame_index_ + 1) % frames_in_flight;
@@ -185,7 +220,7 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer const &renderer
         return FrameResult::SurfaceLost;
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("frame failed: ") + error.what());
+        fail("frame failed: {}", error.what());
     }
 }
 

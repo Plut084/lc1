@@ -61,8 +61,8 @@ Instance::Instance(VulkanLoader const &loader,
 
         auto const loader_version = context.enumerateInstanceVersion();
         if (loader_version < vk::ApiVersion14) {
-            fail("Vulkan loader reports " + version_string(loader_version) +
-                 "; this build requires 1.4 or newer");
+            fail("Vulkan loader reports {}; this build requires 1.4 or newer",
+                 version_string(loader_version));
         }
 
         // 1.4 is both the target and the minimum; device.cpp checks the
@@ -108,10 +108,10 @@ Instance::Instance(VulkanLoader const &loader,
         handle_ = context.createInstance(info);
     }
     catch (vk::SystemError const &error) {
-        fail(std::string("Vulkan instance setup failed: ") + error.what());
+        fail("Vulkan instance setup failed: {}", error.what());
     }
     catch (lc1::Error const &error) {
-        fail(std::string("Vulkan instance setup failed: ") + error.what());
+        fail("Vulkan instance setup failed: {}", error.what());
     }
 }
 

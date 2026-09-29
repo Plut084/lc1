@@ -1,6 +1,7 @@
 #include "lc1/vk/swapchain.hpp"
 
 #include "lc1/vk/device.hpp"
+#include "lc1/vk/surface.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -28,8 +29,10 @@ char const *present_mode_name(vk::PresentModeKHR mode)
 
 } // namespace
 
-Swapchain::Swapchain(Device const &device, SwapchainConfig const &config, vk::Extent2D extent)
-    : device_{device}, swapchain_(nullptr), format_{vk::Format::eUndefined}, extent_{extent}
+Swapchain::Swapchain(Device const &device, Surface const &surface, SwapchainConfig const &config,
+                     vk::Extent2D extent)
+    : device_{device}, surface_{&surface}, swapchain_(nullptr), format_{vk::Format::eUndefined},
+      extent_{extent}
 {
     recreate(config, extent);
 }
@@ -43,7 +46,7 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
     }
 
     try {
-        vk::SurfaceKHR const surface = *device_.raii_surface();
+        vk::SurfaceKHR const surface = *surface_->raii();
 
         auto const caps = device_.raii_physical().getSurfaceCapabilitiesKHR(surface);
 

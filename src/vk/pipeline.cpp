@@ -90,9 +90,8 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
     };
     color_blending.setAttachments(color_blend_attachments);
 
-    // Split by how often they change, not by what they hold: a set is bound as
-    // a whole, so one that mixed per-frame and per-draw data would have to
-    // exist once per (frame, material) pair.
+    // Stable low sets: camera (0), object (1), then material (2).
+    // Materials are shared across frames; writable camera/object data is not.
     vk::DescriptorSetLayoutBinding const frame_binding{
         .binding = 0,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
@@ -100,6 +99,9 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .stageFlags = vk::ShaderStageFlagBits::eVertex,
     };
     frame_set_layout_ = device.raii().createDescriptorSetLayout(
+        vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_binding));
+
+    object_set_layout_ = device.raii().createDescriptorSetLayout(
         vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_binding));
 
     vk::DescriptorSetLayoutBinding const material_binding{
@@ -112,8 +114,8 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         vk::DescriptorSetLayoutCreateInfo{}.setBindings(material_binding));
 
     // Index in this array is the set number the shader declares.
-    std::array<vk::DescriptorSetLayout, 2> const set_layouts{*frame_set_layout_,
-                                                             *material_set_layout_};
+    std::array<vk::DescriptorSetLayout, 3> const set_layouts{
+        *frame_set_layout_, *object_set_layout_, *material_set_layout_};
     vk::PipelineLayoutCreateInfo pipeline_layout_info{
         .pushConstantRangeCount = 0,
     };

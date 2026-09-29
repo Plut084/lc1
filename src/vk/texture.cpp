@@ -37,7 +37,12 @@ constexpr std::uint32_t max_supported_mip_levels(vk::Extent2D extent)
            static_cast<std::uint32_t>(std::floor(std::log2(std::max(extent.width, extent.height))));
 }
 
-Texture::Pixels Texture::load_from_file(std::filesystem::path const &path)
+Texture Texture::load_from_file(Device const &device, std::filesystem::path const &path)
+{
+    return {device, path};
+}
+
+Texture::Pixels Texture::load_from_file(std::filesystem::path const &path, int /*_*/)
 {
     int width = 0;
     int height = 0;
@@ -56,7 +61,7 @@ Texture::Pixels Texture::load_from_file(std::filesystem::path const &path)
 }
 
 Texture::Texture(Device const &device, std::filesystem::path const &path)
-    : Texture(device, load_from_file(path))
+    : Texture(device, load_from_file(path, 1))
 {
     spdlog::info("[Texture] loaded {}", path.string());
 }

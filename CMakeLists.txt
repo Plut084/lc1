@@ -30,9 +30,12 @@ add_subdirectory(shaders)
 # (e.g. vk/checks.hpp) that the app cannot see.
 add_library(lc1_engine STATIC
     src/window.cpp
+    src/input.cpp
+    src/resource-manager.cpp
     src/vk/common.cpp
     src/vk/loader.cpp
     src/vk/instance.cpp
+    src/vk/surface.cpp
     src/vk/device.cpp
     src/vk/swapchain.cpp
     src/vk/swapchain-policy.cpp
@@ -43,7 +46,6 @@ add_library(lc1_engine STATIC
     src/vk/texture.cpp
     src/vk/mesh.cpp
     src/vk/pipeline.cpp
-    src/vk/frame_loop.cpp
     src/vk/renderer.cpp
     src/vk/memory.cpp
 
@@ -107,7 +109,13 @@ if(MINGW)
 endif()
 
 # The .spv files are loaded at runtime, so `--target lc1` must build them too.
-add_dependencies(lc1 shaders)
+# Keep the runtime tree relocatable. Copy on each build so edited assets are refreshed.
+add_custom_target(copy_assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_BINARY_DIR}/assets"
+    VERBATIM
+)
+add_dependencies(lc1 shaders copy_assets)
 
 # -Wno-missing-field-initializers: Vulkan's universal idiom is
 # `VkFoo foo{VK_STRUCTURE_TYPE_FOO};`, which zero-initializes the remaining

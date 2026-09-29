@@ -107,6 +107,7 @@ class Mesh {
 struct DrawItem {
     Mesh const *mesh = nullptr;
     Material const *material = nullptr;
+    glm::mat4 model{1.0F};
 };
 
 } // namespace lc1

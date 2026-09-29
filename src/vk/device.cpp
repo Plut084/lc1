@@ -2,10 +2,7 @@
 
 #include "lc1/vk/instance.hpp"
 #include "lc1/vk/memory.hpp"
-#include "lc1/window.hpp"
-#include "vk/checks.hpp"
-
-#include <GLFW/glfw3.h>
+#include "lc1/vk/surface.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -15,12 +12,15 @@
 namespace lc1 {
 namespace {
 
-bool has_swapchain_extension(vk::raii::PhysicalDevice const &device)
+bool supports_extensions(vk::raii::PhysicalDevice const &device,
+                         std::span<char const *const> required_extensions)
 {
-    return std::ranges::any_of(
-        device.enumerateDeviceExtensionProperties(), [](vk::ExtensionProperties const &extension) {
-            return std::strcmp(extension.extensionName, vk::KHRSwapchainExtensionName) == 0;
+    auto const available = device.enumerateDeviceExtensionProperties();
+    return std::ranges::all_of(required_extensions, [&](char const *required) {
+        return std::ranges::any_of(available, [&](vk::ExtensionProperties const &extension) {
+            return std::strcmp(extension.extensionName, required) == 0;
         });
+    });
 }
 
 std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice const &device,
@@ -38,23 +38,43 @@ std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice co
     return std::nullopt;
 }
 
-bool supports_required_features(vk::raii::PhysicalDevice const &physical_device)
+using FeatureChain =
+    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
+                       vk::PhysicalDeviceVulkan13Features,
+                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>;
+
+// One declaration of the enabled features, used for both selection and creation.
+FeatureChain required_features()
 {
-    // Query through the *aggregate* Vulkan13Features struct. At device creation
-    // we enable the same aggregate; chaining the promoted
-    // VkPhysicalDeviceDynamicRenderingFeatures / ...Synchronization2Features
-    // alongside it is explicitly forbidden.
-    auto const chain =
-        physical_device
-            .getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
-                          vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-    auto const &features = chain.get<vk::PhysicalDeviceFeatures2>().features;
-    auto const &features13 = chain.get<vk::PhysicalDeviceVulkan13Features>();
-    auto const &features_extended_dynamic_state =
-        chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-    return features.sampleRateShading == vk::True && features13.dynamicRendering == vk::True &&
-           features13.synchronization2 == vk::True &&
-           features_extended_dynamic_state.extendedDynamicState == vk::True;
+    return FeatureChain{
+        {.features = {.sampleRateShading = vk::True, .samplerAnisotropy = vk::True}},
+        {.shaderDrawParameters = vk::True},
+        {.synchronization2 = vk::True, .dynamicRendering = vk::True},
+        {.extendedDynamicState = vk::True},
+    };
+}
+
+bool supports_required_features(vk::raii::PhysicalDevice const &physical_device,
+                                FeatureChain const &required)
+{
+    auto const available = physical_device.getFeatures2<
+        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
+        vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    auto const &have = available.get<vk::PhysicalDeviceFeatures2>().features;
+    auto const &want = required.get<vk::PhysicalDeviceFeatures2>().features;
+    auto const &have11 = available.get<vk::PhysicalDeviceVulkan11Features>();
+    auto const &want11 = required.get<vk::PhysicalDeviceVulkan11Features>();
+    auto const &have13 = available.get<vk::PhysicalDeviceVulkan13Features>();
+    auto const &want13 = required.get<vk::PhysicalDeviceVulkan13Features>();
+    auto const &have_dynamic = available.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    auto const &want_dynamic = required.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    // When adding a requested feature, add its support comparison here too.
+    return have.sampleRateShading >= want.sampleRateShading &&
+           have.samplerAnisotropy >= want.samplerAnisotropy &&
+           have11.shaderDrawParameters >= want11.shaderDrawParameters &&
+           have13.synchronization2 >= want13.synchronization2 &&
+           have13.dynamicRendering >= want13.dynamicRendering &&
+           have_dynamic.extendedDynamicState >= want_dynamic.extendedDynamicState;
 }
 
 int score_device(vk::PhysicalDeviceType type)
@@ -78,7 +98,9 @@ struct PickedDevice {
     uint32_t queue_family;
 };
 
-PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::SurfaceKHR surface)
+PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::SurfaceKHR surface,
+                                  std::span<char const *const> required_extensions,
+                                  FeatureChain const &features)
 {
     auto devices = instance.enumeratePhysicalDevices();
     if (devices.empty())
@@ -106,9 +128,9 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
             continue;
         if (filtered && std::strstr(props.deviceName, want) == nullptr)
             continue;
-        if (!has_swapchain_extension(device))
+        if (!supports_extensions(device, required_extensions))
             continue;
-        if (!supports_required_features(device))
+        if (!supports_required_features(device, features))
             continue;
 
         auto const family = find_graphics_present_family(device, surface);
@@ -129,27 +151,21 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
             fail("LC1_DEVICE=\"{}\" matched no usable device", want);
         }
         fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
-             "VK_KHR_swapchain, dynamicRendering, synchronization2, "
-             "sampleRateShading, and a graphics+present queue family)");
+             "all requested extensions/features and a graphics+present queue family)");
     }
     return best;
 }
 
 } // namespace
 
-Device::Device(Instance const &instance, Window const &window,
-               std::vector<char const *> required_extensions)
-    : physical_{nullptr}, surface_{nullptr}, device_{nullptr}, alloc_{nullptr}, queue_{nullptr}
+Device::Device(Instance const &instance, Surface const &surface,
+               std::span<char const *const> required_extensions)
+    : physical_{nullptr}, device_{nullptr}, alloc_{nullptr}, queue_{nullptr}
 {
     try {
-        // GLFW creates the surface through the C API; adopt it immediately so
-        // the raii object owns it.
-        VkSurfaceKHR raw_surface = VK_NULL_HANDLE;
-        VK_CHECK(
-            glfwCreateWindowSurface(instance.handle(), window.handle(), nullptr, &raw_surface));
-        surface_ = vk::raii::SurfaceKHR{instance.raii(), raw_surface};
-
-        auto picked = pick_physical_device(instance.raii(), *surface_);
+        auto feature_chain = required_features();
+        auto picked = pick_physical_device(instance.raii(), *surface.raii(), required_extensions,
+                                           feature_chain);
         physical_ = std::move(picked.device);
         queue_family_ = picked.queue_family;
 
@@ -177,19 +193,6 @@ Device::Device(Instance const &instance, Window const &window,
         vk::DeviceQueueCreateInfo queue_info;
         queue_info.setQueueFamilyIndex(queue_family_).setQueueCount(1).setQueuePriorities(priority);
 
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
-                           vk::PhysicalDeviceVulkan13Features,
-                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
-            feature_chain{
-                // sampleRateShading is what makes the pipeline's
-                // VkPipelineMultisampleStateCreateInfo::sampleShadingEnable
-                // legal, and the pipeline always sets it.
-                {.features = {.sampleRateShading = 1, .samplerAnisotropy = 1}},
-                {.shaderDrawParameters = 1},
-                {.synchronization2 = 1, .dynamicRendering = 1},
-                {.extendedDynamicState = 1},
-            };
-
         // pEnabledFeatures stays null: features go through the pNext chain.
 
         vk::DeviceCreateInfo info;
@@ -197,8 +200,6 @@ Device::Device(Instance const &instance, Window const &window,
             .setQueueCreateInfos(queue_info)
             .setPEnabledExtensionNames(required_extensions);
         // We don't set validation layers, as not required (and not necessary).
-
-        check_extensions(required_extensions, physical_);
 
         device_ = physical_.createDevice(info);
 

@@ -6,7 +6,7 @@
 
 namespace lc1 {
 
-// How a mesh's surface looks: for now, one texture. Holds descriptor set 1
+// How a mesh's surface looks: for now, one texture. Holds descriptor set 2
 // (see Pipeline::material_set_layout), written once and never changed, so
 // unlike the uniform buffer's set there is one per material, not one per frame
 // in flight. Shared like Mesh: a hundred soldiers carrying the same banner

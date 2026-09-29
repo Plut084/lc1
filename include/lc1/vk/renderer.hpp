@@ -18,10 +18,10 @@ namespace lc1 {
 
 class Device;
 class Texture;
+class FpsCamera;
 
-// Matches `UniformBuffer` in shaders/shader.slang, field for field.
-struct UniformBufferObject {
-    glm::mat4 model;
+// Matches Camera in shaders/shader.slang, field for field.
+struct CameraData {
     glm::mat4 view;
     glm::mat4 proj;
 };
@@ -44,7 +44,7 @@ class Renderer {
     Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats,
              vk::SampleCountFlagBits samples);
 
-    // Allocates set 1 from this renderer's pool and points it at `texture`.
+    // Allocates set 2 from this renderer's pool and points it at `texture`.
     // Here rather than in Material because only the renderer has the pool, the
     // sampler, and the pipeline whose layout the set must match. Throws once
     // max_materials sets are live.
@@ -52,7 +52,8 @@ class Renderer {
 
     // Creates one set of drawing resources with its own descriptor pool. The
     // caller decides how many sets to keep and when each is safe to reuse.
-    FrameResources make_frame_resources() const;
+    // Capacity counts draws; it is fixed for the lifetime of this resource set.
+    FrameResources make_frame_resources(std::uint32_t object_capacity) const;
 
     // resources must have been made by this renderer, and its previous GPU use
     // must have completed. The target format must match the pipeline's format.
@@ -61,7 +62,7 @@ class Renderer {
     // layout transitions; record leaves it in COLOR_ATTACHMENT_OPTIMAL.
     // `target.extent` must be nonzero and fit the attachment.
     void record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
-                RenderTarget const &target, UniformBufferObject const &ubo,
+                RenderTarget const &target, FpsCamera const &camera,
                 std::span<DrawItem const> draws);
 
   private:

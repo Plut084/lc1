@@ -33,6 +33,16 @@ class FpsCamera {
     glm::vec3 right() const { return glm::normalize(glm::cross(forward(), world_up)); }
     glm::vec3 up() const { return glm::normalize(glm::cross(right(), forward())); }
 
+    // Without pitch
+    glm::vec3 heading() const
+    {
+        glm::vec3 direction;
+        direction.x = glm::cos(glm::radians(yaw_));
+        direction.y = 0.0F;
+        direction.z = glm::sin(glm::radians(yaw_));
+        return glm::normalize(direction);
+    }
+
     void add_yaw(float delta)
     {
         yaw_ = std::fmod(yaw_ + delta + 180.0F, 360.0F);
@@ -75,7 +85,13 @@ class FpsCamera {
 
     glm::vec3 position() const { return position_; }
     void set_position(glm::vec3 position) { position_ = position; }
-    void move(glm::vec3 delta) { position_ += delta; }
+
+    // +x->right +y->world_up -z->heading, in camera space.
+    void move_groud(glm::vec3 groud_delta)
+    {
+        position_ += right() * groud_delta.x + world_up * groud_delta.y + heading() * groud_delta.z;
+    }
+
     void move_local(glm::vec3 local_delta)
     {
         position_ += right() * local_delta.x + up() * local_delta.y + forward() * local_delta.z;

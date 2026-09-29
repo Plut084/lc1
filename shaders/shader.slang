@@ -3,17 +3,22 @@ struct VSInput {
     float2 uv;
 };
 
-struct UniformBuffer {
-    float4x4 model;
+struct Camera {
     float4x4 view;
     float4x4 proj;
 };
-ConstantBuffer<UniformBuffer> ubo;
+[[vk::binding(0, 0)]]
+ConstantBuffer<Camera> camera;
 
-// Set 1 (the Material), not set 0: without the attribute Slang would place it
-// after ubo, at set 0 binding 1.
+struct ObjectData {
+    float4x4 model;
+};
+
 [[vk::binding(0, 1)]]
-Sampler2D texture;
+ConstantBuffer<ObjectData> object_data;
+
+[[vk::binding(0, 2)]]
+Sampler2D material;
 
 struct VSOutput {
     float4 pos : SV_Position;
@@ -24,7 +29,7 @@ struct VSOutput {
 VSOutput vertMain(VSInput input)
 {
     VSOutput output;
-    output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.position, 1.0))));
+    output.pos = mul(camera.proj, mul(camera.view, mul(object_data.model, float4(input.position, 1.0))));
     output.uv = input.uv;
     return output;
 }
@@ -33,5 +38,5 @@ VSOutput vertMain(VSInput input)
 float4 fragMain(VSOutput input) : SV_TARGET
 {
     // float4(input.color, 1) * ;
-    return texture.Sample(input.uv);
+    return material.Sample(input.uv);
 }

@@ -8,6 +8,7 @@
 namespace lc1 {
 
 class Device;
+class Surface;
 
 // Choices supplied by the caller, not selected by Swapchain. Capabilities
 // must be queried again before recreation; the requested minimum can differ
@@ -37,13 +38,14 @@ struct SwapchainImage {
 };
 
 // Must not outlive the Device it was constructed from: its raii handles are
-// destroyed through that device.
+// destroyed through that device. The presentation Surface must also outlive it.
 //
 // Construction creates the swapchain: format, extent and images are valid
 // immediately. The caller resolves a nonzero extent from the surface first.
 class Swapchain {
   public:
-    Swapchain(Device const &device, SwapchainConfig const &config, vk::Extent2D extent);
+    Swapchain(Device const &device, Surface const &surface, SwapchainConfig const &config,
+              vk::Extent2D extent);
 
     // Rebuilds the swapchain after a resize, VK_ERROR_OUT_OF_DATE_KHR, or
     // VK_SUBOPTIMAL_KHR.
@@ -59,6 +61,8 @@ class Swapchain {
 
   private:
     Device const &device_;
+    // Non-owning: Surface must outlive this swapchain, including recreation.
+    Surface const *surface_;
 
     vk::raii::SwapchainKHR swapchain_;
     vk::Format format_;

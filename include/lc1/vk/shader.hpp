@@ -10,6 +10,11 @@ class Device;
 
 class ShaderModule {
   public:
+    static ShaderModule load_from_file(Device const &device, std::filesystem::path const &path)
+    {
+        return ShaderModule{device, read_file(path)};
+    }
+
     ShaderModule(Device const &device, std::string_view code);
 
     ShaderModule(ShaderModule const &) = delete;

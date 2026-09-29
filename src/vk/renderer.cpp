@@ -1,5 +1,6 @@
 #include "lc1/vk/renderer.hpp"
 
+#include "lc1/camera.hpp"
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/device.hpp"
 #include "lc1/vk/memory.hpp"
@@ -8,6 +9,7 @@
 #include "lc1/vk/vertex.hpp"
 
 #include <array>
+#include <limits>
 #include <vector>
 
 namespace lc1 {
@@ -27,9 +29,7 @@ Pipeline make_pipeline(Device const &device,
                        std::vector<vk::Format> const &color_attachment_formats,
                        vk::Format depth_image_format, vk::SampleCountFlagBits samples)
 {
-    auto const shader_code = read_file("shaders/shader.spv");
-    ShaderModule const shader_module{device, shader_code};
-
+    auto const shader_module = ShaderModule::load_from_file(device, "shaders/shader.spv");
     ShaderStages shader_stages;
     shader_stages.append(vk::ShaderStageFlagBits::eVertex, shader_module, "vertMain");
     shader_stages.append(vk::ShaderStageFlagBits::eFragment, shader_module, "fragMain");
@@ -57,42 +57,53 @@ Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_at
     material_pool_ = device.raii().createDescriptorPool(pool_info);
 }
 
-FrameResources Renderer::make_frame_resources() const
+FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) const
 {
-    // Host-visible: record rewrites this buffer after its previous GPU use.
-    Buffer uniform_buffer{device_, sizeof(UniformBufferObject),
-                          vk::BufferUsageFlagBits::eUniformBuffer,
-                          vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+    if (object_capacity == std::numeric_limits<std::uint32_t>::max()) {
+        fail("object capacity leaves no descriptor for the camera");
+    }
     vk::DescriptorPoolSize const pool_size{
         .type = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = 1,
+        .descriptorCount = object_capacity + 1,
     };
     vk::DescriptorPoolCreateInfo pool_info{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = 1,
+        .maxSets = object_capacity + 1,
     };
     pool_info.setPoolSizes(pool_size);
     auto descriptor_pool = device_.raii().createDescriptorPool(pool_info);
-    vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = *descriptor_pool};
-    alloc_info.setSetLayouts(*pipeline_.frame_set_layout());
-    auto descriptor_sets = device_.raii().allocateDescriptorSets(alloc_info);
 
-    vk::DescriptorBufferInfo const buffer_info{
-        .buffer = *uniform_buffer.raii(),
-        .offset = 0,
-        .range = sizeof(UniformBufferObject),
+    auto const make_uniform = [&](vk::DeviceSize size,
+                                  vk::raii::DescriptorSetLayout const &layout) {
+        Buffer buffer{device_, size, vk::BufferUsageFlagBits::eUniformBuffer,
+                      vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+        vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = *descriptor_pool};
+        alloc_info.setSetLayouts(*layout);
+        auto sets = device_.raii().allocateDescriptorSets(alloc_info);
+        vk::DescriptorBufferInfo const buffer_info{
+            .buffer = *buffer.raii(),
+            .offset = 0,
+            .range = size,
+        };
+        vk::WriteDescriptorSet const write{
+            .dstSet = *sets.front(),
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .pBufferInfo = &buffer_info,
+        };
+        device_.raii().updateDescriptorSets(write, {});
+        return ObjectResources{std::move(buffer), std::move(sets.front())};
     };
-    vk::WriteDescriptorSet const write{
-        .dstSet = *descriptor_sets.front(),
-        .dstBinding = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .pBufferInfo = &buffer_info,
-    };
-    device_.raii().updateDescriptorSets(write, {});
 
-    return FrameResources{std::move(uniform_buffer), std::move(descriptor_pool),
-                          std::move(descriptor_sets.front())};
+    auto camera = make_uniform(sizeof(CameraData), pipeline_.frame_set_layout());
+    std::vector<ObjectResources> objects;
+    objects.reserve(object_capacity);
+    for (std::uint32_t i = 0; i < object_capacity; ++i) {
+        objects.push_back(make_uniform(sizeof(glm::mat4), pipeline_.object_set_layout()));
+    }
+    return FrameResources{std::move(camera.uniform_buffer), std::move(descriptor_pool),
+                          std::move(camera.descriptor_set), std::move(objects)};
 }
 
 Material Renderer::make_material(Texture const &texture)
@@ -153,14 +164,29 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
 }
 
 void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
-                      RenderTarget const &target, UniformBufferObject const &ubo,
+                      RenderTarget const &target, FpsCamera const &camera,
                       std::span<DrawItem const> draws)
 {
     if (target.extent.width == 0 || target.extent.height == 0) {
         fail("cannot render to a target with a zero extent");
     }
 
+    if (draws.size() > resources.objects.size()) {
+        fail("draw count {} exceeds frame object capacity {}", draws.size(),
+             resources.objects.size());
+    }
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+        if (!draws[i].mesh || !draws[i].material) {
+            fail("draw {} requires a mesh and material", i);
+        }
+        resources.objects[i].uniform_buffer.upload(std::as_bytes(std::span{&draws[i].model, 1}));
+    }
+
     // Safe to overwrite: the caller has waited for these resources' GPU use.
+    CameraData const ubo{
+        .view = camera.view_matrix(),
+        .proj = camera.projection_matrix(),
+    };
     resources.uniform_buffer.upload(std::as_bytes(std::span{&ubo, 1}));
     ensure_attachments(resources, target.extent);
     Image const &depth_image = *resources.depth_image;
@@ -226,8 +252,7 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResour
     command_buffer.beginRendering(rendering);
 
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_.raii());
-    // Set 0 once for the whole frame; set 1 per draw, below. Binding set 1
-    // leaves set 0 bound: the two layouts are compatible up to set 0.
+    // Set 0 is shared by every draw; sets 1 and 2 select object and material.
     command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 0,
                                       *resources.descriptor_set, nullptr);
     // Render area, viewport and scissor use the same caller-provided extent.
@@ -245,8 +270,11 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResour
                                   });
     command_buffer.setScissor(0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent});
 
-    for (DrawItem const &item : draws) {
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+        DrawItem const &item = draws[i];
         command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 1,
+                                          *resources.objects[i].descriptor_set, nullptr);
+        command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 2,
                                           *item.material->descriptor_set(), nullptr);
         item.mesh->draw(command_buffer);
     }

@@ -5,8 +5,15 @@
 
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace lc1 {
+
+// One draw's data within one frame slot. The enclosing frame owns the pool.
+struct ObjectResources {
+    Buffer uniform_buffer;
+    vk::raii::DescriptorSet descriptor_set;
+};
 
 // One independently reusable set of drawing resources, made by
 // Renderer::make_frame_resources. The caller owns it and must wait for its
@@ -14,9 +21,9 @@ namespace lc1 {
 // Must not outlive the Device it was created from.
 struct FrameResources {
     FrameResources(Buffer uniform_buffer, vk::raii::DescriptorPool descriptor_pool,
-                   vk::raii::DescriptorSet descriptor_set)
+                   vk::raii::DescriptorSet descriptor_set, std::vector<ObjectResources> objects)
         : uniform_buffer{std::move(uniform_buffer)}, descriptor_pool{std::move(descriptor_pool)},
-          descriptor_set{std::move(descriptor_set)}
+          descriptor_set{std::move(descriptor_set)}, objects{std::move(objects)}
     {
     }
 
@@ -31,6 +38,7 @@ struct FrameResources {
     // Declared before the set so that the set is freed before its pool.
     vk::raii::DescriptorPool descriptor_pool;
     vk::raii::DescriptorSet descriptor_set;
+    std::vector<ObjectResources> objects;
     // Created lazily from the output extent. The color image is only needed
     // for MSAA; the single-sampled resolve destination belongs to the caller.
     std::optional<Image> depth_image;

@@ -18,7 +18,9 @@ class Pipeline {
     // Set 0: what changes every frame (the uniform buffer). One set per frame
     // in flight.
     vk::raii::DescriptorSetLayout const &frame_set_layout() const { return frame_set_layout_; }
-    // Set 1: what changes per draw (the texture). One set per Material.
+    // Set 1: model matrix, one set per draw per frame slot.
+    vk::raii::DescriptorSetLayout const &object_set_layout() const { return object_set_layout_; }
+    // Set 2: material texture. One set per Material.
     vk::raii::DescriptorSetLayout const &material_set_layout() const
     {
         return material_set_layout_;
@@ -30,6 +32,7 @@ class Pipeline {
   private:
     // In creation order, so each is destroyed before what it was built from.
     vk::raii::DescriptorSetLayout frame_set_layout_{nullptr};
+    vk::raii::DescriptorSetLayout object_set_layout_{nullptr};
     vk::raii::DescriptorSetLayout material_set_layout_{nullptr};
     vk::raii::PipelineLayout layout_{nullptr};
     vk::raii::Pipeline graphics_pipeline_{nullptr};

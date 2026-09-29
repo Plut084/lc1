@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project status
 
 A **Vulkan 1.4 renderer skeleton** exists (`include/`, `src/`, `app/`): window, swapchain, resize
-handling, clean shutdown, an indexed mesh drawn through a graphics pipeline with a per-frame uniform
-buffer (model/view/proj) bound through descriptor sets, and textures loaded from files — all with
+handling, clean shutdown, indexed meshes drawn through a graphics pipeline with a per-frame camera UBO
+and per-draw model UBOs bound through descriptor sets, and textures loaded from files — all with
 validation + synchronization validation on and **zero output**. It is being built chapter by chapter
 along the official tutorial (https://docs.vulkan.org/tutorial/latest/). The game itself — 养成 / 战斗 /
 地图 — is not started.
@@ -159,8 +159,8 @@ Four parts of this are easy to get wrong:
     finds them only via `VK_LAYER_PATH`, which that env exports. Without it, startup fails with a
     "layer not found" error that looks like the layer is missing when it is not.
   - It runs from the build tree. `shaders/shader.spv` is opened by a path relative to the working
-    directory, and the build puts it next to the binary (`main.cpp`'s glTF/PNG paths are still
-    absolute, and point at this checkout).
+    directory, and the build puts it next to the binary alongside the copied `assets/` directory. Resource IDs are relative to that
+    asset root; `LC1_ASSET_ROOT` can override its location.
 
   Release builds have no layer to find, but still need the working directory.
 
@@ -299,19 +299,44 @@ change to argue for rather than slip in:
     negative viewport height (and `y` = height, or the viewport lands off-screen). A flip reverses
     every triangle's winding, which is why `Pipeline` uses `eCounterClockwise` as the front face.
 
+### Descriptor set layout convention
+
+**Assign higher set numbers to bindings that change more frequently during drawing.** Frequency
+means descriptor-set binding changes (including dynamic-offset changes), not writes to buffer contents.
+For the per-object rendering path, where an object can have multiple material submeshes, the target
+layout is:
+
+| set | data | expected binding changes |
+|---|---|---|
+| 0 | camera / global | once per frame or view |
+| 1 | object | per draw; dynamic offsets may be used in a later implementation |
+| 2 | material | as needed per submesh |
+
+The renderer and shader implement this layout. The first version uses a separate model UBO and
+descriptor set per draw per frame slot; dynamic UBO offsets are a possible later optimization. Keep low-numbered set layouts shared across pipelines where possible. Vulkan's
+ordinary pipeline-layout compatibility for set N requires identically defined set layouts from 0
+through N and identical push-constant ranges; matching only set N is insufficient. Putting layout
+variation at higher set numbers helps preserve compatible lower-set bindings.
+
+Treat frequency ordering as a design default, not a reason to renumber sets whenever draw sorting
+changes. Stable layouts and cross-pipeline compatibility take priority over matching every draw
+order's measured binding frequency.
+
 ## Architecture
 
 Init order is load-bearing — device *selection* needs the surface, and each stage must be up before the
 next is constructed:
 
 ```
-VulkanLoader(dlopen) -> Window(glfwInit + GLFWwindow) -> Instance(loader) -> Device(window)
-  -> Swapchain -> FrameLoop -> Renderer
+VulkanLoader(dlopen) -> Window(glfwInit + GLFWwindow) -> Instance(loader)
+  -> Surface(instance, window) -> Device(instance, surface)
+  -> Renderer -> FrameLoop<FrameResources>
+  -> Swapchain (created lazily when the framebuffer has a usable extent)
 ```
 
 Both GLFW steps are inside `Window`'s constructor, and the loader `dlopen` is inside `VulkanLoader`'s,
 which is what makes the ordering enforceable rather than conventional: `Instance` takes the loader and
-`Device` takes the window, so neither can be built without them, and there is no way to leave the scope
+`Surface` takes the instance and window, while `Device` borrows the surface during selection, and there is no way to leave the scope
 without terminating GLFW. The one order the types do *not* enforce is `VulkanLoader` before `Window`:
 GLFW reads the loader it is handed only in `glfwInit`, so the other order silently makes GLFW dlopen
 `libvulkan.so.1` itself.
@@ -405,7 +430,8 @@ Construction happens in the constructor, and a constructor that fails throws, so
 exists is one that works** — there is no valid-but-uninitialized state for a later call to trip over.
 Destruction is the destructor, running at the closing brace of the block in `main()` that declares them,
 in reverse declaration order. Member declaration order inside those classes is therefore load-bearing:
-`Device` declares `surface_` before `handle_` so the *device* dies first, `Instance` declares
+`Device` declares its allocator after its logical device so the allocator dies first. `Surface`
+is declared before `Device` in `main()` and outlives the swapchain. `Instance` declares
 `messenger_` after `handle_` so the *messenger* dies first, and `Swapchain` declares `images_` after
 `handle_` so the image views and semaphores — which reference the swapchain's images — die before the
 swapchain itself.
@@ -420,8 +446,8 @@ not run the destructor, while members already constructed are destroyed during u
 immediately when GLFW is not initialized, which is exactly the state after a failed `glfwInit` — so the
 guard needs no "is it armed" flag.
 
-`FrameLoop` and `Swapchain` both hold `Device const&`. The raii handles they own call back through that
-device to be destroyed, and a destroyed `Device` has already cleared its dispatcher — so outliving the
+`FrameLoop` holds a non-owning, non-null `Device const*` initialized from its constructor reference;
+`Swapchain` holds `Device const&`. The raii handles they own call back through that device to be destroyed, and a destroyed `Device` has already cleared its dispatcher — so outliving the
 device is a null call, not a stale value. `main()`'s declaration order is what guarantees it.
 
 `Swapchain::recreate` has to repeat that last ordering **by hand** (`images_.clear()` then
@@ -439,14 +465,13 @@ destroyed, and a destroyed `Device` has already cleared its dispatcher — so a 
 its `Device` is a null call, not a stale value. `main()`'s declaration order is what guarantees it, and
 it is the same contract the raw handle copies used to carry, only now enforced sharply.
 
-**`Swapchain` also holds `Window const&`, and that contract is a different shape** — the distinction is
-worth keeping straight, because it is the one reference member here whose absence would *not* be a null
-call. `~Swapchain` never touches the window; the reference is read only by `recreate()`, to ask how big
-the framebuffer currently is. So the requirement is "Window must outlive every call to `recreate()`",
-not "Window must outlive Swapchain". `main()` declaring `Window` first happens to satisfy both at once.
-`Device` takes a `Window const&` too but stores nothing, because it needs the window only inside its
-constructor, for `glfwCreateWindowSurface` — a construction-time contract, with no member and no
-lifetime rule at all.
+**`Surface` owns presentation integration; `Device` only borrows it during construction.**
+`Surface` creates the Vulkan surface through GLFW and immediately adopts it into `vk::raii`.
+`Instance` and `Window` must outlive `Surface`. `Swapchain` holds a non-owning `Surface const*`
+for creation and recreation; Surface must outlive the swapchain. `Device` stores neither Surface
+nor Window and includes no GLFW header. Its constructor only needs the surface to select a queue
+family that supports presentation. Framebuffer size is queried by `main()` and passed to Swapchain
+as an explicit extent; Swapchain does not depend on Window.
 
 This is not cosmetic. `vk::raii` operation methods dereference their dispatcher unguarded —
 `Device::waitIdle()` calls `getDispatcher()`, which does `m_dispatcher->getVkHeaderVersion()` on a
@@ -460,13 +485,43 @@ for it. `main()` waits on both normal and exceptional exits from the drawing loo
 resources, materials and meshes are still alive. RAII destruction alone does not make pending GPU
 access safe. A validation error that `abort()`s never unwinds at all.
 
-**Frame scheduling and drawing resources meet only in `main()`.** `FrameLoop::draw_frame` calls a
-synchronous recording callback after waiting for its slot's fence; it knows neither `Renderer` nor
-`FrameResources`. `Renderer::record` accepts one `FrameResources &`, with no frame count or index.
-The application creates one resource set per slot through `Renderer::make_frame_resources()` and
-selects it in the callback. Each set owns its UBO, descriptor pool/set, depth image and optional MSAA
-color image. The renderer owns only the pipeline, material pool and sampler. `RenderTarget` is the
-shared non-owning output contract, defined separately from either class.
+**Frame scheduling owns per-slot drawing resources through a template parameter.**
+`FrameLoop<FrameResources>` constructs one resource set per slot using a factory supplied by `main()`.
+The factory calls `Renderer::make_frame_resources(object_capacity)` and is not retained. After waiting
+for its slot's fence, the loop passes that slot's resources by mutable reference to the synchronous
+recording callback. It does not interpret the resource contents or depend on `Renderer`.
+The template definitions live in `frame-loop-impl.hpp`, included by `frame_loop.hpp`.
+
+`Renderer::record` accepts one `FrameResources &`, the camera, and a span of `DrawItem`s, with no
+frame count or slot index. Each resource set owns a camera UBO/set, a descriptor pool, a fixed-capacity
+array of model UBOs/sets, and depth/MSAA attachments. Draw i uses resource i for that frame only;
+there is no persistent object-to-slot mapping. Capacity is passed by the application (currently 16),
+and exceeding it fails explicitly. `Buffer::upload` copies and performs the necessary VMA flush;
+the caller's fence wait makes overwriting safe. Descriptors are written at resource creation.
+
+`RenderObject` holds CPU transform data and non-owning mesh/material pointers; `draw_item()` extracts
+its model matrix. `Transform` defaults to zero translation/rotation and unit scale. The demo draws
+two objects sharing mesh/material, with one stationary and one moving. The renderer owns the pipeline,
+material pool and sampler. `RenderTarget` remains the shared non-owning output contract.
+`main()` creates the renderer before the frame loop and waits for the device on normal and exceptional
+loop exits before destroying any resources used by submitted draws.
+
+**Resource ownership is scene-scoped and exclusive.** `ResourceManager::load<T>` stores resources
+in type-indexed, relative-ID-keyed maps of `std::unique_ptr<Resource>`. T must derive from Resource
+and provide `load_from_file(Device const&, path const&) -> T`; the current storage construction also
+requires T to be move-constructible. The pure virtual Resource destructor has an inline definition.
+Each type bucket contains only T, which permits casting cached Resource references back to T.
+Repeated loads return the cached resource; failed loads do not leave a null resource entry.
+Mesh loading still uses a separate typed cache during this migration. Materials are currently created
+and owned by the application through Renderer; ResourceManager no longer depends on Renderer.
+
+Resource IDs are normalized paths relative to the constructor-supplied asset root. Absolute IDs and
+paths escaping lexically above the root are rejected; symlink aliases are not deduplicated. CMake
+copies assets into each build tree. The application chooses the root; objects and Renderer do not
+resolve resource paths. Returned pointers remain stable as the caches grow. There is no individual
+eviction or reference counting: stop using borrowed pointers and wait for GPU completion before
+manager destruction. Device must outlive the manager. Material owners must keep their textures and
+Renderer alive until those materials are destroyed. Cache access is render-thread-only.
 
 Layout: **library** `lc1_engine` = public headers in `include/lc1/` + sources and private headers
 (e.g. `vk/checks.hpp`) in `src/`; **app** `lc1` = `app/main.cpp`, linking `lc1_engine`. Include
@@ -475,14 +530,17 @@ the app cannot reach private headers.
 
 | module | owns |
 |---|---|
-| `window.*` | GLFW init/terminate, the `GLFWwindow`, required surface extensions, the resize flag |
+| `resource-manager.*` | scene-owned typed resource caches and legacy mesh cache; relative paths identify resources |
+| `window.*` | GLFW init/terminate, the `GLFWwindow`, required surface extensions, the resize flag, every input callback and the `InputState` they fill, cursor capture |
+| `input.hpp`, `input.cpp` | `Key`, `InputState`, `Action`, `InputContext`, `Binding`, `InputRouter`: device state, the data-driven bindings, and the active context's resolved actions |
 | `vk/loader.*` | the one `dlopen` of the Vulkan loader (`vk::raii::Context`), and GLFW's copy of its `vkGetInstanceProcAddr` |
 | `vk/instance.*` | `vk::raii::Instance`, validation + sync validation, debug messenger |
-| `vk/device.*` | surface, physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
+| `vk/surface.*` | the window presentation surface, created via GLFW and owned by `vk::raii` |
+| `vk/device.*` | physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
 | `vk/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
-| `vk/frame_loop.*` | per-FRAME sync (fences, `image_available`, command buffers), WSI state machine |
+| `vk/frame_loop.hpp`, `vk/frame-loop-impl.hpp` | per-frame sync, templated per-slot resources, WSI state machine |
 | `vk/renderer.*` | the pipeline, material descriptor pool and sampler; records using caller-owned resources |
-| `vk/frame-resources.hpp` | one UBO, descriptor pool/set, depth image and optional MSAA color image; owned by the app |
+| `vk/frame-resources.hpp` | camera and per-draw UBOs/sets, pool and attachments; owned by each frame slot |
 | `vk/render-target.hpp` | the borrowed single-sampled output view and extent shared by recording and presentation |
 | `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
 | `vk/shader.*`, `vk/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
@@ -496,24 +554,86 @@ the app cannot reach private headers.
 | `camera.hpp` | `FpsCamera`: yaw/pitch camera producing view and projection matrices |
 | `game-clock.*` | `Stopwatch`: frame delta, total time, fps |
 
-**`window.*` is the only non-Vulkan module**, and it lives outside `vk/` for that
-reason. It includes no Vulkan header — not even `common.hpp` — and `Device`/`Swapchain` take a
-`Window const&` precisely so that they do not have to name `GLFWwindow` either. That is what makes
-"the Vulkan layer does not know about GLFW" a fact about the include graph rather than a convention.
-It gets `lc1::Error` from `include/lc1/error.hpp`, which exists as a separate header for exactly this case.
+**Window and input keep platform integration out of the rendering interfaces.**
+`window.*` includes no Vulkan header, and obtains `lc1::Error` from `include/lc1/error.hpp`.
+`surface.cpp` is the Vulkan/GLFW bridge: it includes both APIs to call `glfwCreateWindowSurface`.
+Neither Device nor Swapchain depends on Window or includes GLFW. Surface's public header forward
+declares Window and exposes only its raii Vulkan surface accessor.
 
 Fixed-size framebuffer sizes cross that boundary as `lc1::FrameExtent` rather than `vk::Extent2D`, for
 the same reason: a `vk::Extent2D` in `window.hpp` would make it a Vulkan module in all but name and drag
 the load-bearing include order in with it. The cost is one parallel 8-byte type and one conversion,
 which `compute_extent` in `swapchain.cpp` performs.
 
-The other five are on `vk::raii`; the C API is gone from the project. The raii classes still hand out raw
+### Input: device state, bindings, one active context
+
+Three layers, and the split is what keeps rebinding cheap — game code asks `held(Action::MoveForward)`
+and never "is W down":
+
+- **`InputState`** — which switches are down, which went down or came up this frame, cursor
+  position/delta/scroll. No meaning, no game rules. Window owns it because Window owns the callbacks.
+- **`Binding`** — a row of data: in this context, this `Key` means this `Action`. The table lives in
+  `app/main.cpp`; nothing else maps a key to a meaning, so a rebind is a row edit.
+- **`InputRouter`** — resolves the active context's rows into `held`/`pressed`/`released` per action.
+
+Five things are load-bearing:
+
+- **`Window::poll_events()` is the input frame boundary.** It calls `InputState::begin_frame()` and
+  *then* pumps GLFW, so an edge means "happened during this frame's polling" and can be neither
+  consumed twice nor land in the wrong frame. The application does not call `begin_frame` itself on
+  purpose: a boundary the caller has to remember is one that ends up in the wrong place. `wait_events()`
+  is deliberately *not* a boundary — it runs only while there is nothing to draw, so whatever it pumps
+  is discarded by the next `poll_events` instead of leaking into a later frame.
+- **`GLFW_REPEAT` is dropped in `key_callback`.** Passing it on would make a held key look like a fresh
+  press every few frames — right for a text field, wrong for every game action, where a held W would
+  stutter. A text field wants the repeat rate and a context of its own, not a change in the callback.
+- **Losing focus releases everything** (`glfwSetWindowFocusCallback` → `InputState::release_all()`),
+  reporting each held key as released so a drag cannot stay half-open across an Alt-Tab. An unfocused
+  window receives no key events, so "still held" is unknowable and "none" is the only safe answer.
+  Cursor discontinuities — capture toggled, focus regained, pointer re-entered — reset the delta
+  baseline for the same class of reason: the pointer travelled while nothing was tracking it, and that
+  distance is not camera motion.
+- **Exactly one context is active**, the top of `InputRouter`'s stack. Switching modes has to be able to
+  turn a whole set of controls off, and "off" is easier to reason about than priority between
+  overlapping layers. Action state is **recomputed from scratch** every frame rather than updated in
+  place, which is what makes a switch safe — a key still held from the old mode has no binding in the new
+  one and simply resolves to false — and what makes `update()` idempotent within a frame.
+  `InputContext::Ui` binds nothing on purpose: pushing it *is* the gate for "a text field or ImGui owns
+  the keyboard now", and it has to exist from the start, because retrofitting it means auditing every
+  `held()`/`pressed()` call site.
+- **`released` is masked by `!held`**, so it means "the action ended", not "some key bound to it came
+  up". Without the mask, letting go of one of two keys bound to one action tells a consumer its drag
+  finished while it is still running. `pressed` is deliberately *not* masked the other way: a second
+  key's press while the action is already held is harmless, and suppressing it would require comparing
+  against the previous frame — state that would make `update()` depend on how many times it was called.
+
+**`Key` covers mouse buttons as well as keys** — `Key::MouseLeft`, not a parallel `MouseButton` enum. An
+action does not care which device triggered it, and one vocabulary keeps `Binding` a flat row instead of
+a tagged union. Unreal's `FKey` makes the same call.
+
+**`input.hpp` includes neither a Vulkan header nor a GLFW one**, and `src/window.cpp` is the only place
+that knows `GLFW_KEY_*` exists: it holds the `Key` ↔ GLFW table under two `static_assert`s that turn
+"forgot one" and "listed one twice" into compile errors, so the table is provably a bijection. This is
+the `FrameExtent` argument again — a public header stays free of a platform API it does not need.
+
+**`InputState::cursor()` is in screen coordinates, not pixels** — GLFW's logical points. On a display
+with a scale factor the two differ, and nothing in `input.hpp` converts, because the conversion needs the
+framebuffer size: multiply by `glfwGetWindowContentScale` at the point where a cursor must become a pixel
+or a world ray. Mouse *motion* (camera look) needs no conversion and is why the demo works without it;
+picking will, and that is the one place to add it.
+
+**`Window` interprets no key at all.** ESC-to-close moved to `main()` when input arrived: a hardcoded
+ESC-to-close makes ESC unusable as the pause/back key every strategy game needs, and "this key closes
+the window" is application policy, not a property of a window.
+
+`Instance`, `Surface`, `Device`, `Swapchain`, `FrameLoop` and `Renderer` are on `vk::raii`; the C API is gone
+from the project. The raii classes still hand out raw
 handles where a C-only caller needs one, and there is exactly one such caller left: `Instance::handle()`
-for `glfwCreateWindowSurface`, which takes a `VkInstance` and nothing else — paired with
+for `glfwCreateWindowSurface` in `surface.cpp`, which takes a `VkInstance` and nothing else — paired with
 `Window::handle()` for the `GLFWwindow *` half of the same call. The remaining accessors are
 `Device::queue_family()` (a `uint32_t`, not a handle), `Swapchain::extent()` and `Swapchain::images()`
 (both consumed by renderer, which borrows rather than owns). The non-owning raii accessors are
-`Instance::raii()`, and `Device::raii()` / `raii_physical()` / `raii_surface()` / `raii_queue()` — those
+`Instance::raii()`, `Surface::raii()`, and `Device::raii()` / `raii_physical()` / `raii_queue()` — those
 exist because a `vk::raii::SwapchainKHR` is created *through* the raii device and the surface queries go
 through the raii physical device, which is also why `Swapchain` and `FrameLoop` take the whole `Device`
 rather than a handful of handles.
@@ -571,6 +691,14 @@ Match them up by the argument shapes, not by the spelling.
    passes validation" is not the same as "it is correct"; only sync validation catches the difference.
 
 ## Device selection
+
+Selection checks every extension passed to the Device constructor, not just `VK_KHR_swapchain`.
+`required_features()` builds the feature chain used both for selection and device creation:
+`sampleRateShading`, `samplerAnisotropy`, `shaderDrawParameters`, `synchronization2`,
+`dynamicRendering`, and `extendedDynamicState`. When adding an enabled feature, also add its
+support comparison in `supports_required_features`; unsupported candidates must be rejected before
+ranking, so a usable lower-ranked GPU can still be selected. Surface presentation support is checked
+against the caller's Surface, which Device does not own or retain.
 
 `VK_PHYSICAL_DEVICE_TYPE_CPU` devices are **excluded**, not deprioritized. llvmpipe is enumerated as a
 real device on the dev machine and nothing reorders devices (`VK_LAYER_NV_optimus` is dormant without

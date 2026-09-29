@@ -1,9 +1,10 @@
 #pragma once
 
+#include "lc1/lights/light.hpp"
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/frame-resources.hpp"
+#include "lc1/vk/gpu-mesh.hpp"
 #include "lc1/vk/material.hpp"
-#include "lc1/vk/mesh.hpp"
 #include "lc1/vk/pipeline.hpp"
 #include "lc1/vk/render-target.hpp"
 #include "lc1/vk/sampler.hpp"
@@ -17,13 +18,34 @@
 namespace lc1 {
 
 class Device;
-class Texture;
+class GpuTexture;
 class FpsCamera;
 
 // Matches Camera in shaders/shader.slang, field for field.
 struct CameraData {
     glm::mat4 view;
     glm::mat4 proj;
+    glm::vec4 position; // World-space camera position; w is unused.
+};
+
+struct ObjectData {
+    glm::mat4 model;
+    glm::mat4 normal_transform; // Inverse transpose; padded to match shader matrices.
+};
+
+static_assert(sizeof(CameraData) == 144 && offsetof(CameraData, position) == 128);
+static_assert(sizeof(ObjectData) == 128 && offsetof(ObjectData, normal_transform) == 64);
+
+struct ShadowData {
+    glm::mat4 view_projection{1.0F};
+    glm::uvec4 light_index{10U, 0U, 0U, 0U}; // x selects the shadowed light; 10 disables it.
+};
+static_assert(sizeof(ShadowData) == 80 && offsetof(ShadowData, light_index) == 64);
+
+constexpr auto max_num_lights = 10U;
+struct LightsData {
+    std::uint32_t count{};
+    std::array<Light, max_num_lights> lights;
 };
 
 // Owns the pipeline, material descriptor pool and sampler. Records using one
@@ -48,7 +70,7 @@ class Renderer {
     // Here rather than in Material because only the renderer has the pool, the
     // sampler, and the pipeline whose layout the set must match. Throws once
     // max_materials sets are live.
-    Material make_material(Texture const &texture);
+    Material make_material(GpuTexture const &texture);
 
     // Creates one set of drawing resources with its own descriptor pool. The
     // caller decides how many sets to keep and when each is safe to reuse.
@@ -62,8 +84,9 @@ class Renderer {
     // layout transitions; record leaves it in COLOR_ATTACHMENT_OPTIMAL.
     // `target.extent` must be nonzero and fit the attachment.
     void record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
-                RenderTarget const &target, FpsCamera const &camera,
-                std::span<DrawItem const> draws);
+                RenderTarget const &target, FpsCamera const &camera, std::span<Light> lights,
+                std::span<DrawItem const> draws, glm::vec3 shadow_center,
+                bool preview_shadow = false);
 
   private:
     // The caller has waited for the resources' previous GPU use.
@@ -74,6 +97,10 @@ class Renderer {
     vk::Format depth_format_;
     vk::SampleCountFlagBits samples_;
     Pipeline pipeline_;
+    vk::Format shadow_format_;
+    Pipeline shadow_pipeline_;
+    Pipeline shadow_preview_pipeline_;
+    vk::raii::Sampler shadow_sampler_;
     // Material sets free themselves back into this pool: the caller must
     // destroy Materials before this renderer. FrameResources own separate pools.
     vk::raii::DescriptorPool material_pool_;

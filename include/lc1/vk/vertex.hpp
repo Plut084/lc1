@@ -12,6 +12,8 @@ namespace lc1 {
 struct Vertex {
     glm::vec3 position;
     glm::vec2 uv; // texture coordinate
+    glm::vec3 color{1.0F};
+    glm::vec3 normal{0.0F, 1.0F, 0.0F}; // Object-space unit surface normal.
 
     friend constexpr bool operator==(Vertex const &lhs, Vertex const &rhs) = default;
 
@@ -31,6 +33,14 @@ struct Vertex {
              .binding = 0,
              .format = vk::Format::eR32G32Sfloat,
              .offset = offsetof(Vertex, uv)},
+            {.location = 2,
+             .binding = 0,
+             .format = vk::Format::eR32G32B32Sfloat,
+             .offset = offsetof(Vertex, color)},
+            {.location = 3,
+             .binding = 0,
+             .format = vk::Format::eR32G32B32Sfloat,
+             .offset = offsetof(Vertex, normal)},
         }};
     }
 };
@@ -41,7 +51,9 @@ namespace std {
 template <> struct hash<lc1::Vertex> {
     size_t operator()(lc1::Vertex const &vertex) const
     {
-        return std::hash<glm::vec3>{}(vertex.position) ^ (std::hash<glm::vec2>{}(vertex.uv) << 1);
+        return std::hash<glm::vec3>{}(vertex.position) ^ (std::hash<glm::vec2>{}(vertex.uv) << 1) ^
+               (std::hash<glm::vec3>{}(vertex.color) << 2) ^
+               (std::hash<glm::vec3>{}(vertex.normal) << 3);
     }
 };
 } // namespace std

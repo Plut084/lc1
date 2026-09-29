@@ -3,17 +3,47 @@
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/shader.hpp"
 
+#include <array>
+
 namespace lc1 {
 
 class Device;
 class Swapchain;
 class ShaderStages;
 
+enum class PipelineKind { Lit, Shadow, ShadowPreview };
+
 class Pipeline {
   public:
+    static constexpr std::array<vk::DescriptorSetLayoutBinding, 4> frame_bindings{{
+        {.binding = 0,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
+        {.binding = 1,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {.binding = 2,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
+        {.binding = 3,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+    }};
+    static constexpr std::array<vk::DescriptorSetLayoutBinding, 1> object_bindings{{
+        {.binding = 0,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eVertex},
+    }};
+
     Pipeline(Device const &device, ShaderStages const &shader_stages,
              std::vector<vk::Format> const &color_attachment_formats,
-             vk::Format depth_attachment_format, vk::SampleCountFlagBits samples);
+             vk::Format depth_attachment_format, vk::SampleCountFlagBits samples,
+             PipelineKind kind = PipelineKind::Lit);
 
     // Set 0: what changes every frame (the uniform buffer). One set per frame
     // in flight.

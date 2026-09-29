@@ -33,14 +33,14 @@ enum class FrameResult : std::uint8_t {
 // to rebuild X" hard to write.
 //
 // Must not outlive the Device it was constructed from.
-template <typename GpuResource> class FrameLoop {
+template <typename FrameResource> class FrameLoop {
   public:
     static constexpr uint32_t max_frames_in_flight = 2;
 
     // The queue comes from the Device: there is exactly one vk::raii::Queue in
     // the program, and it belongs to the Device.
     // Factory is called once per slot during construction and is not retained.
-    FrameLoop(Device const &device, std::function<GpuResource()> const &make_resource);
+    FrameLoop(Device const &device, std::function<FrameResource()> const &make_resource);
 
     std::uint32_t frame_count() const
     {
@@ -54,7 +54,7 @@ template <typename GpuResource> class FrameLoop {
     // The callback is not retained. If it throws, stop drawing and wait for the
     // device before releasing resources; the acquired image is not presented.
     FrameResult draw_frame(Swapchain &swapchain,
-                           std::function<void(vk::raii::CommandBuffer const &, GpuResource &,
+                           std::function<void(vk::raii::CommandBuffer const &, FrameResource &,
                                               RenderTarget const &)> const &record);
 
   private:
@@ -69,7 +69,7 @@ template <typename GpuResource> class FrameLoop {
         // the slot is reused.
         vk::raii::Fence in_flight; // Signaled when available
 
-        GpuResource gpu_resource; // Reused only after this slot's fence completes.
+        FrameResource gpu_resource; // Reused only after this slot's fence completes.
     };
 
     // Non-owning, non-null: the constructor takes a reference; Device must outlive this loop.

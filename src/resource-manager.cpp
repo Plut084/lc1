@@ -17,14 +17,14 @@ ResourceManager::ResourceManager(Device const &device, std::filesystem::path con
 {
 }
 
-Mesh const &ResourceManager::load_mesh(std::filesystem::path const &path)
+GpuMesh const &ResourceManager::load_mesh(std::filesystem::path const &path)
 {
     auto const key = to_resource_key(path);
     if (auto const found = meshes_.find(key); found != meshes_.end()) {
         return *found->second;
     }
     auto const model = Model::load_from_file(asset_root_ / key);
-    auto mesh = std::make_unique<Mesh>(model.gen_mesh(*device_));
+    auto mesh = std::make_unique<GpuMesh>(model.gen_mesh(*device_));
     // Only cache completed resources; a failed load leaves no empty entry.
     auto const [entry, inserted] = meshes_.emplace(key, std::move(mesh));
     return *entry->second;

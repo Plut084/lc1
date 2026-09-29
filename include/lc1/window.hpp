@@ -43,6 +43,7 @@ class Window {
     GLFWwindow *handle() const { return handle_; }
 
     bool should_close() const;
+    void set_title(std::string_view title);
 
     // Device state, valid for the frame poll_events() most recently opened. Always wired:
     // the callbacks are registered in the constructor, so there is no state where this
@@ -50,8 +51,8 @@ class Window {
     InputState const &input() const { return input_; }
 
     // Captured means the cursor is hidden, held inside the window and reported as
-    // unaccelerated raw motion -- the first-person mode. The RTS mode needs a visible
-    // pointer instead, and which one is wanted is a decision only the application can
+    // unaccelerated raw motion when supported. UI interaction needs a visible
+    // pointer, and which one is wanted is a decision only the application can
     // make, so this is an explicit call rather than something Window infers from focus.
     //
     // Re-enabling the cursor does not move it back: where it reappears is the platform's
@@ -83,6 +84,11 @@ class Window {
 
     // {0, 0} when the window is minimized or the framebuffer is unusable.
     FrameExtent framebuffer_extent() const;
+
+    // GLFW cursor positions use logical window coordinates, not framebuffer pixels.
+    glm::vec2 content_size() const;
+    bool focused() const;
+    bool hovered() const;
 
   private:
     // Every callback starts here. The user pointer is the only channel GLFW gives a C

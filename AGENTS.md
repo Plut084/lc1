@@ -8,8 +8,11 @@ A **Vulkan 1.4 renderer skeleton** exists (`include/`, `src/`, `app/`): window, 
 handling, clean shutdown, indexed meshes drawn through a graphics pipeline with a per-frame camera UBO
 and per-draw model UBOs bound through descriptor sets, and textures loaded from files — all with
 validation + synchronization validation on and **zero output**. It is being built chapter by chapter
-along the official tutorial (https://docs.vulkan.org/tutorial/latest/). The game itself — 养成 / 战斗 /
-地图 — is not started.
+along the official tutorial (https://docs.vulkan.org/tutorial/latest/). A first continent walking
+prototype now exists: tiled terrain, a full-scale blockout city, one ground-level player controller,
+and static collision. The world now has named regions (all five terrain types), six location types
+and a validated, walkable road network; see `docs/world-map.md`. Progression, combat, NPC pathfinding and persistent city simulation are not
+implemented yet.
 
 `docs/` holds the design draft and stays in Chinese; keep new design docs in Chinese too.
 
@@ -28,13 +31,29 @@ load-bearing design axis, not just vocabulary:
   economic layer (resource production).
 - **战斗 (combat)** — 城池建设 again but as the in-game layer (defenses, troop deployment); combat
   consumes troops, time, and equipment.
-- **地图 (map)** — a two-tier map: a world map with RPG-style character movement, plus a top-down
-  minimap with Red Alert–style (类红警) RTS controls.
+- **地图 (map)** — one consistent camera perspective for countryside, cities, and combat, with
+  WASD movement. Cities occupy large, traversable spaces with walls, gates, streets and buildings,
+  at the same spatial scale as the character and countryside. This replaces the earlier world-map /
+  top-down RTS-map split (user decision, 2026-09-29). The current requested view is fixed oblique,
+  like Don't Starve / Red Alert: `update_player2` follows the player using a perspective projection
+  (user decision, 2026-09-30), a visible cursor and wheel zoom. The vertical FOV is fixed at 45 degrees;
+  zoom moves the camera along its viewing direction. This is the default view inside and outside cities.
+  M toggles between `update_player2` and first-person `update_player`, sharing player position and
+  collision. First-person captures the cursor; returning releases it and recenters while preserving
+  zoom and the Y lock state.
+  Y toggles following the player; while unlocked, edge pan moves the camera independently and
+  Space recenters (holding temporarily follows without changing the lock).
+  The loading strategy is not yet decided; a consistent perspective does not require loading the entire world
+  at once. See `docs/continent.md` for the proposed spatial design.
 
 Note that 城池建设 (city building) deliberately appears in both 养成 and 战斗 — it is the same system
 serving an out-of-game economic role and an in-game defensive/deployment role. Similarly, the
 per-soldier equipment model ties the army system to the equipment system. When implementing, treat
 these as shared systems with two modes rather than duplicated features.
+The in-game / out-of-game distinction describes gameplay state, not a camera or map-scale change.
+The prototype uses one `Gameplay` input context; the previous `WorldMap` / `Minimap` contexts
+have been removed. M now toggles camera views within Gameplay, not input contexts.
+Input routing and the UI context remain useful independently.
 
 ## Rendering stack (decided 2026-09-20)
 
@@ -296,8 +315,10 @@ change to argue for rather than slip in:
   glTF use Z-up (`lookAt` with up = (0,0,1)); translate them rather than copying the up vector. Its
   `viking_room.obj` is Z-up and needs −90° about X.
   - Vulkan's clip-space Y points down, where glm's points up. `Renderer::record` flips it with a
-    negative viewport height (and `y` = height, or the viewport lands off-screen). A flip reverses
-    every triangle's winding, which is why `Pipeline` uses `eCounterClockwise` as the front face.
+    negative viewport height (and `y` = height, or the viewport lands off-screen). The base front face
+    is `eCounterClockwise`. `eFrontFace` is dynamic: before each draw Renderer selects clockwise
+    when the model's 3x3 determinant is negative, otherwise counter-clockwise. Back-face culling
+    stays enabled; mirrored transforms need no caller-side cull-mode changes.
 
 ### Descriptor set layout convention
 
@@ -495,13 +516,16 @@ The template definitions live in `frame-loop-impl.hpp`, included by `frame_loop.
 `Renderer::record` accepts one `FrameResources &`, the camera, and a span of `DrawItem`s, with no
 frame count or slot index. Each resource set owns a camera UBO/set, a descriptor pool, a fixed-capacity
 array of model UBOs/sets, and depth/MSAA attachments. Draw i uses resource i for that frame only;
-there is no persistent object-to-slot mapping. Capacity is passed by the application (currently 16),
+there is no persistent object-to-slot mapping. Capacity is passed by the application (currently the
+continent view's chunk draw count),
 and exceeding it fails explicitly. `Buffer::upload` copies and performs the necessary VMA flush;
 the caller's fence wait makes overwriting safe. Descriptors are written at resource creation.
 
 `RenderObject` holds CPU transform data and non-owning mesh/material pointers; `draw_item()` extracts
-its model matrix. `Transform` defaults to zero translation/rotation and unit scale. The demo draws
-two objects sharing mesh/material, with one stationary and one moving. The renderer owns the pipeline,
+its model matrix. `Transform` defaults to zero translation/rotation and unit scale. The prototype draws
+the chunks produced by `ContinentView`, sharing one material. Frame capacity follows the generated
+draw count. `Vertex::color` defaults to white for existing textured meshes; procedural world geometry
+uses per-vertex colors and a white texture. The renderer owns the pipeline,
 material pool and sampler. `RenderTarget` remains the shared non-owning output contract.
 `main()` creates the renderer before the frame loop and waits for the device on normal and exceptional
 loop exits before destroying any resources used by submitted draws.
@@ -512,7 +536,9 @@ and provide `load_from_file(Device const&, path const&) -> T`; the current stora
 requires T to be move-constructible. The pure virtual Resource destructor has an inline definition.
 Each type bucket contains only T, which permits casting cached Resource references back to T.
 Repeated loads return the cached resource; failed loads do not leave a null resource entry.
-Mesh loading still uses a separate typed cache during this migration. Materials are currently created
+Mesh loading still uses a separate typed cache during this migration.
+The application currently loads CPU Image data and constructs GpuTexture directly;
+GpuTexture has no file-loading interface or Resource base class. Materials are currently created
 and owned by the application through Renderer; ResourceManager no longer depends on Renderer.
 
 Resource IDs are normalized paths relative to the constructor-supplied asset root. Absolute IDs and
@@ -545,13 +571,19 @@ the app cannot reach private headers.
 | `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
 | `vk/shader.*`, `vk/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
 | `vk/buffer.*` | a `VkBuffer` + its VMA allocation; vertex/index/uniform/staging differ only in flags |
-| `vk/image.*` | a `VkImage` + its VMA allocation + a whole-image view; does not fill itself |
-| `vk/texture.*` | an `Image` loaded from a file (stb) through a staging buffer, left `SHADER_READ_ONLY` |
+| `vk/descriptor-set.*` | one set owning its Buffer objects, with UBO size checks, borrowed combined image samplers and layout binding validation; FrameResources owns the pool |
+| `vk/gpu-image.*` | a `VkImage` + its VMA allocation + a whole-image view; does not fill itself |
+| `vk/gpu-texture.*` | uploads a CPU `Image` into a `GpuImage` through a staging buffer, left `SHADER_READ_ONLY`; file loading stays with the caller |
 | `vk/sampler.*` | a `vk::raii::Sampler`; one serves many textures |
 | `vk/mesh.*`, `vk/vertex.*` | vertex + index buffers uploaded through staging; the vertex layout; `DrawItem` |
 | `vk/one-time-submit.hpp` | record, submit and wait for one-off setup work (uploads) |
 | `vk/common.*` | hpp configuration macros, `VK_CHECK`, `transition_image_layout`, `read_file`, string helpers |
-| `camera.hpp` | `FpsCamera`: yaw/pitch camera producing view and projection matrices |
+| `camera.hpp` | `FpsCamera`: yaw/pitch view with perspective projection |
+| `game/continent.*` | region IDs on terrain tiles, location footprints, road graph and spatial queries, map validation and swept ground movement |
+| `game/continent-prototype.cpp` | sample five-region, six-location world and connecting roads, with shared render/collision blocks |
+| `game/player-controller.*` | ground-level player position, speed, body dimensions and eye position |
+| `game/map-camera-controller.*` | oblique camera center, follow lock, zoom, temporary recenter and bounded edge pan |
+| `game/continent-view.*` | static 64-metre chunk meshes and their shared material; all chunks currently resident |
 | `game-clock.*` | `Stopwatch`: frame delta, total time, fps |
 
 **Window and input keep platform integration out of the rendering interfaces.**
@@ -654,6 +686,10 @@ a `vk::raii::Semaphore` member now, which is what turns "recreation forgot a res
 has to be caught into one that cannot be written — `images_.clear()` frees its own semaphores.
 
 ## Validation discipline
+
+`ctest --test-dir build/linux-x86_64/Debug --output-on-failure` runs CPU tests for continent data,
+continuous collision, wall sliding, body clearance, boundaries, movement speed and city traversal.
+They create no window or Vulkan device. Runtime rendering still needs validation-layer smoke testing.
 
 Validation **and synchronization validation** run by default in debug builds. This is the safety net for
 the whole renderer; a clean run is a real assertion, not a formality. It has already paid for itself —

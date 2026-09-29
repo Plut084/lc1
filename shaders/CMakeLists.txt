@@ -27,13 +27,13 @@ find_program(SLANGC_EXECUTABLE slangc REQUIRED)
 # slangc writes a depfile, so editing a module that a shader imports also
 # triggers a rebuild, not only editing the shader itself.
 function(add_slang_shaders target)
-    set(outputs)
-    foreach(source IN LISTS ARGN)
-        cmake_path(ABSOLUTE_PATH source NORMALIZE)
-        cmake_path(GET source STEM name)
-        set(spv ${CMAKE_CURRENT_BINARY_DIR}/${name}.spv)
+  set(outputs)
+  foreach(source IN LISTS ARGN)
+    cmake_path(ABSOLUTE_PATH source NORMALIZE)
+    cmake_path(GET source STEM name)
+    set(spv ${CMAKE_CURRENT_BINARY_DIR}/${name}.spv)
 
-        add_custom_command(
+    add_custom_command(
             OUTPUT  ${spv}
             COMMAND ${SLANGC_EXECUTABLE} ${source}
                     -target spirv
@@ -49,11 +49,13 @@ function(add_slang_shaders target)
             VERBATIM
             COMMAND_EXPAND_LISTS
         )
-        list(APPEND outputs ${spv})
-    endforeach()
-    add_custom_target(${target} ALL DEPENDS ${outputs})
+    list(APPEND outputs ${spv})
+  endforeach()
+  add_custom_target(${target} ALL DEPENDS ${outputs})
 endfunction()
 
 add_slang_shaders(shaders
     shader.slang
+    shadow.slang
+    shadow-preview.slang
 )

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "lc1/vk/buffer.hpp"
-#include "lc1/vk/image.hpp"
+#include "lc1/vk/descriptor-set.hpp"
+#include "lc1/vk/gpu-image.hpp"
 
 #include <optional>
 #include <utility>
@@ -9,21 +9,15 @@
 
 namespace lc1 {
 
-// One draw's data within one frame slot. The enclosing frame owns the pool.
-struct ObjectResources {
-    Buffer uniform_buffer;
-    vk::raii::DescriptorSet descriptor_set;
-};
-
 // One independently reusable set of drawing resources, made by
 // Renderer::make_frame_resources. The caller owns it and must wait for its
 // previous GPU use before recording with it again, replacing it or destroying it.
 // Must not outlive the Device it was created from.
 struct FrameResources {
-    FrameResources(Buffer uniform_buffer, vk::raii::DescriptorPool descriptor_pool,
-                   vk::raii::DescriptorSet descriptor_set, std::vector<ObjectResources> objects)
-        : uniform_buffer{std::move(uniform_buffer)}, descriptor_pool{std::move(descriptor_pool)},
-          descriptor_set{std::move(descriptor_set)}, objects{std::move(objects)}
+    FrameResources(vk::raii::DescriptorPool descriptor_pool, DescriptorSet globals,
+                   std::vector<DescriptorSet> objects, GpuImage shadow_image)
+        : descriptor_pool{std::move(descriptor_pool)}, globals{std::move(globals)},
+          objects{std::move(objects)}, shadow_image{std::move(shadow_image)}
     {
     }
 
@@ -34,15 +28,15 @@ struct FrameResources {
     // Memberwise assignment would destroy the old pool before freeing its set.
     FrameResources &operator=(FrameResources &&) = delete;
 
-    Buffer uniform_buffer;
-    // Declared before the set so that the set is freed before its pool.
+    // Declared first so all descriptor sets are freed before the pool.
     vk::raii::DescriptorPool descriptor_pool;
-    vk::raii::DescriptorSet descriptor_set;
-    std::vector<ObjectResources> objects;
+    DescriptorSet globals;
+    std::vector<DescriptorSet> objects;
     // Created lazily from the output extent. The color image is only needed
     // for MSAA; the single-sampled resolve destination belongs to the caller.
-    std::optional<Image> depth_image;
-    std::optional<Image> color_image;
+    GpuImage shadow_image; // One independent depth map per in-flight slot.
+    std::optional<GpuImage> depth_image;
+    std::optional<GpuImage> color_image;
 };
 
 } // namespace lc1

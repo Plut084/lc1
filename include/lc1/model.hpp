@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lc1/vk/mesh.hpp"
+#include "lc1/vk/gpu-mesh.hpp"
 
 #include <tiny_obj_loader.h>
 
@@ -25,26 +25,40 @@ class Model {
         Model model;
         std::unordered_map<Vertex, std::uint32_t> index_of_vertex;
 
+        auto position_of = [&](tinyobj::index_t const &index) {
+            return glm::vec3{attrib.vertices[3 * index.vertex_index],
+                             attrib.vertices[3 * index.vertex_index + 1],
+                             attrib.vertices[3 * index.vertex_index + 2]};
+        };
+        // LoadObj triangulates by default. Missing normals use flat triangle normals;
+        // including normals in Vertex equality preserves authored hard edges.
         for (auto const &shape : shapes) {
-            for (auto const &index : shape.mesh.indices) {
-                Vertex vertex{
-                    .position =
-                        {
-                            attrib.vertices[3 * index.vertex_index + 0],
-                            attrib.vertices[3 * index.vertex_index + 1],
-                            attrib.vertices[3 * index.vertex_index + 2],
-
-                        },
-                    .uv =
-                        {
-                            attrib.texcoords[2 * index.texcoord_index + 0],
-                            attrib.texcoords[2 * index.texcoord_index + 1],
-                        },
-                };
-                auto [it, inserted] = index_of_vertex.insert({vertex, model.vertices_.size()});
-                if (inserted)
-                    model.vertices_.push_back(vertex);
-                model.indices_.push_back(it->second);
+            for (std::size_t i = 0; i + 2 < shape.mesh.indices.size(); i += 3) {
+                auto const face_normal = glm::cross(
+                    position_of(shape.mesh.indices[i + 1]) - position_of(shape.mesh.indices[i]),
+                    position_of(shape.mesh.indices[i + 2]) - position_of(shape.mesh.indices[i]));
+                float const face_length = glm::length(face_normal);
+                for (std::size_t corner = 0; corner < 3; ++corner) {
+                    auto const &index = shape.mesh.indices[i + corner];
+                    Vertex vertex{.position = position_of(index), .uv = {0.0F, 0.0F}};
+                    if (index.texcoord_index >= 0)
+                        vertex.uv = {attrib.texcoords[2 * index.texcoord_index],
+                                     attrib.texcoords[2 * index.texcoord_index + 1]};
+                    if (face_length > 0.0F)
+                        vertex.normal = face_normal / face_length;
+                    if (index.normal_index >= 0) {
+                        glm::vec3 const normal{attrib.normals[3 * index.normal_index],
+                                               attrib.normals[3 * index.normal_index + 1],
+                                               attrib.normals[3 * index.normal_index + 2]};
+                        float const length = glm::length(normal);
+                        if (length > 0.0F)
+                            vertex.normal = normal / length;
+                    }
+                    auto [it, inserted] = index_of_vertex.insert({vertex, model.vertices_.size()});
+                    if (inserted)
+                        model.vertices_.push_back(vertex);
+                    model.indices_.push_back(it->second);
+                }
             }
         }
 
@@ -56,7 +70,7 @@ class Model {
     {
     }
 
-    Mesh gen_mesh(Device const &device) const { return {device, vertices_, indices_}; }
+    GpuMesh gen_mesh(Device const &device) const { return {device, vertices_, indices_}; }
 
   private:
     Model() = default;

@@ -31,6 +31,11 @@ add_subdirectory(shaders)
 add_library(lc1_engine STATIC
     src/window.cpp
     src/input.cpp
+    src/game/continent.cpp
+    src/game/continent-prototype.cpp
+    src/game/player-controller.cpp
+    src/game/map-camera-controller.cpp
+    src/game/continent-view.cpp
     src/resource-manager.cpp
     src/vk/common.cpp
     src/vk/loader.cpp
@@ -42,9 +47,10 @@ add_library(lc1_engine STATIC
     src/vk/shader.cpp
     src/vk/shader-stages.cpp
     src/vk/buffer.cpp
-    src/vk/image.cpp
-    src/vk/texture.cpp
-    src/vk/mesh.cpp
+    src/vk/descriptor-set.cpp
+    src/vk/gpu-image.cpp
+    src/vk/gpu-texture.cpp
+    src/vk/gpu-mesh.cpp
     src/vk/pipeline.cpp
     src/vk/renderer.cpp
     src/vk/memory.cpp
@@ -116,6 +122,24 @@ add_custom_target(copy_assets
     VERBATIM
 )
 add_dependencies(lc1 shaders copy_assets)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(lc1_world_map_tests tests/world-map.cpp)
+    target_link_libraries(lc1_world_map_tests PRIVATE lc1_engine)
+    target_compile_options(lc1_world_map_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_executable(lc1_continent_tests tests/continent.cpp)
+    target_link_libraries(lc1_continent_tests PRIVATE lc1_engine)
+    target_compile_options(lc1_continent_tests PRIVATE -Wall -Wextra -Wpedantic)
+    if(MINGW)
+        target_link_options(lc1_world_map_tests PRIVATE -static)
+        target_link_options(lc1_continent_tests PRIVATE -static)
+    endif()
+    if(NOT CMAKE_CROSSCOMPILING)
+        add_test(NAME world_map COMMAND lc1_world_map_tests)
+        add_test(NAME continent COMMAND lc1_continent_tests)
+    endif()
+endif()
 
 # -Wno-missing-field-initializers: Vulkan's universal idiom is
 # `VkFoo foo{VK_STRUCTURE_TYPE_FOO};`, which zero-initializes the remaining

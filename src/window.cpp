@@ -358,6 +358,11 @@ std::vector<char const *> Window::required_instance_extensions() const
     return {extensions, extensions + count};
 }
 
+void Window::set_title(std::string_view title)
+{
+    glfwSetWindowTitle(handle_, std::string{title}.c_str());
+}
+
 bool Window::should_close() const
 {
     return glfwWindowShouldClose(handle_) != GLFW_FALSE;
@@ -381,6 +386,24 @@ void Window::poll_events()
 void Window::wait_events(double timeout_seconds)
 {
     glfwWaitEventsTimeout(timeout_seconds);
+}
+
+glm::vec2 Window::content_size() const
+{
+    int width = 0;
+    int height = 0;
+    glfwGetWindowSize(handle_, &width, &height);
+    return {static_cast<float>(width), static_cast<float>(height)};
+}
+
+bool Window::focused() const
+{
+    return glfwGetWindowAttrib(handle_, GLFW_FOCUSED) == GLFW_TRUE;
+}
+
+bool Window::hovered() const
+{
+    return glfwGetWindowAttrib(handle_, GLFW_HOVERED) == GLFW_TRUE;
 }
 
 FrameExtent Window::framebuffer_extent() const

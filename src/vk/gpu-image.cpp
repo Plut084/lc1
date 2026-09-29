@@ -1,4 +1,4 @@
-#include "lc1/vk/image.hpp"
+#include "lc1/vk/gpu-image.hpp"
 
 #include "lc1/vk/device.hpp"
 
@@ -30,7 +30,7 @@ vk::Format find_depth_format(Device const &device)
         vk::ImageTiling::eOptimal, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
 }
 
-Image::Image(Device const &device, vk::Format format, vk::Extent2D extent, std::uint32_t mip_levels,
+GpuImage::GpuImage(Device const &device, vk::Format format, vk::Extent2D extent, std::uint32_t mip_levels,
              vk::SampleCountFlagBits samples, vk::ImageUsageFlags usage,
              vk::ImageAspectFlags aspect)
     : image_{device.allocator().createImage(
@@ -69,11 +69,11 @@ Image::Image(Device const &device, vk::Format format, vk::Extent2D extent, std::
           device.raii_physical().getFormatProperties(format).optimalTilingFeatures},
       extent_{extent}, mip_levels_{mip_levels}, aspect_{aspect}
 {
-    spdlog::info("[Image] created a {}x{} image, format {}, usage {}", extent.width, extent.height,
+    spdlog::info("[GpuImage] created a {}x{} image, format {}, usage {}", extent.width, extent.height,
                  vk::to_string(format), vk::to_string(usage));
 }
 
-void Image::transition_layout(vk::raii::CommandBuffer const &command_buffer,
+void GpuImage::transition_layout(vk::raii::CommandBuffer const &command_buffer,
                               vk::ImageLayout old_layout, vk::ImageLayout new_layout,
                               vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
                               vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) const
@@ -107,7 +107,7 @@ void Image::transition_layout(vk::raii::CommandBuffer const &command_buffer,
     command_buffer.pipelineBarrier2(dependency);
 }
 
-void Image::generate_mipmaps(vk::raii::CommandBuffer const &command_buffer) const
+void GpuImage::generate_mipmaps(vk::raii::CommandBuffer const &command_buffer) const
 {
     if (mip_levels_ > 1) {
         constexpr auto required = vk::FormatFeatureFlagBits::eBlitSrc |

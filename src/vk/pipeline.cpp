@@ -1,7 +1,7 @@
 #include "lc1/vk/pipeline.hpp"
 
 #include "lc1/vk/device.hpp"
-#include "lc1/vk/image.hpp"
+#include "lc1/vk/gpu-image.hpp"
 #include "lc1/vk/shader-stages.hpp"
 #include "lc1/vk/swapchain.hpp"
 #include "lc1/vk/vertex.hpp"
@@ -13,13 +13,17 @@ namespace lc1 {
 
 Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
                    std::vector<vk::Format> const &color_attachment_formats,
-                   vk::Format depth_attachment_format, vk::SampleCountFlagBits samples)
+                   vk::Format depth_attachment_format, vk::SampleCountFlagBits samples,
+                   PipelineKind kind)
 {
-    // Dynamic so that they follow the swapchain extent: Renderer::record sets
-    // them every frame, and a resize never rebuilds the pipeline.
+    bool const depth_only = kind == PipelineKind::Shadow;
+    bool const preview = kind == PipelineKind::ShadowPreview;
+    // Viewport/scissor follow the swapchain; front face follows each model's handedness.
+    // Neither a resize nor a mirrored draw requires another pipeline.
     std::vector<vk::DynamicState> dynamic_states{
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor,
+        vk::DynamicState::eFrontFace,
     };
 
     vk::PipelineDynamicStateCreateInfo dynamic_state;
@@ -27,9 +31,16 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
 
     auto binding_description = Vertex::binding_description();
     auto attribute_descriptions = Vertex::attribute_descriptions();
+    if (depth_only)
+        attribute_descriptions.resize(1);
     vk::PipelineVertexInputStateCreateInfo vertex_input_info;
     vertex_input_info.setVertexBindingDescriptions(binding_description)
         .setVertexAttributeDescriptions(attribute_descriptions);
+
+    if (preview) {
+        vertex_input_info.setVertexBindingDescriptions({});
+        vertex_input_info.setVertexAttributeDescriptions({});
+    }
 
     vk::PipelineInputAssemblyStateCreateInfo input_assembly{
         .topology = vk::PrimitiveTopology::eTriangleList,
@@ -44,11 +55,13 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .depthClampEnable = vk::False,
         .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eBack,
+        .cullMode = preview ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack,
         // Counter-clockwise because the negative viewport height in
         // Renderer::record flips Y, and a flip reverses every triangle's winding.
         .frontFace = vk::FrontFace::eCounterClockwise,
-        .depthBiasEnable = vk::False,
+        .depthBiasEnable = depth_only,
+        .depthBiasConstantFactor = depth_only ? 1.25F : 0.0F,
+        .depthBiasSlopeFactor = depth_only ? 1.75F : 0.0F,
         .lineWidth = 1.0F,
     };
 
@@ -66,8 +79,8 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
     };
 
     vk::PipelineDepthStencilStateCreateInfo depth_stencil_state{
-        .depthTestEnable = vk::True,
-        .depthWriteEnable = vk::True,
+        .depthTestEnable = !preview,
+        .depthWriteEnable = !preview,
         .depthCompareOp = vk::CompareOp::eLess,
         .depthBoundsTestEnable = vk::False,
         .stencilTestEnable = vk::False,
@@ -88,21 +101,17 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .logicOpEnable = vk::False,
         .logicOp = vk::LogicOp::eCopy,
     };
+    if (depth_only)
+        color_blend_attachments.clear();
     color_blending.setAttachments(color_blend_attachments);
 
     // Stable low sets: camera (0), object (1), then material (2).
     // Materials are shared across frames; writable camera/object data is not.
-    vk::DescriptorSetLayoutBinding const frame_binding{
-        .binding = 0,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex,
-    };
     frame_set_layout_ = device.raii().createDescriptorSetLayout(
-        vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_binding));
+        vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_bindings));
 
     object_set_layout_ = device.raii().createDescriptorSetLayout(
-        vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_binding));
+        vk::DescriptorSetLayoutCreateInfo{}.setBindings(object_bindings));
 
     vk::DescriptorSetLayoutBinding const material_binding{
         .binding = 0,

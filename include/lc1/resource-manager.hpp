@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lc1/vk/material.hpp"
-#include "lc1/vk/mesh.hpp"
+#include "lc1/vk/gpu-mesh.hpp"
 
 #include <concepts>
 #include <filesystem>
@@ -49,10 +49,10 @@ class ResourceManager {
         requires HasLoadFromFile<T>
     T &load(std::string_view id);
 
-    template <typename T> void offload(std::string_view id);
+    template <typename T> void unload(std::string_view id);
 
     // IDs are normalized paths relative to asset_root, never machine-specific paths.
-    Mesh const &load_mesh(std::filesystem::path const &path);
+    GpuMesh const &load_mesh(std::filesystem::path const &path);
 
   private:
     static std::filesystem::path to_resource_key(std::filesystem::path const &id);
@@ -65,7 +65,7 @@ class ResourceManager {
     std::unordered_map<std::type_index, std::unordered_map<std::string, std::unique_ptr<Resource>>>
         resources_;
 
-    std::unordered_map<std::filesystem::path, std::unique_ptr<Mesh>> meshes_;
+    std::unordered_map<std::filesystem::path, std::unique_ptr<GpuMesh>> meshes_;
 };
 
 template <std::derived_from<Resource> T>
@@ -84,7 +84,7 @@ inline T &ResourceManager::load(std::string_view id)
     return static_cast<T &>(*it->second);
 }
 
-template <typename T> inline void ResourceManager::offload(std::string_view id)
+template <typename T> inline void ResourceManager::unload(std::string_view id)
 {
     auto const type_key = std::type_index(typeid(T));
     auto const resouce_key = to_resource_key(id).generic_string();

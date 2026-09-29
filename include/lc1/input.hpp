@@ -230,14 +230,11 @@ enum class Action : std::uint16_t {
     MoveBackward,
     MoveLeft,
     MoveRight,
-    MoveUp,
-    MoveDown,
     Sprint,
-    // A command rather than a state: read with pressed(), not held().
-    ToggleMapMode,
-    // RTS box-select drag. Held, not pressed, because the drag lasts several frames.
-    Select,
-    OrderMove,
+    ToggleCameraView,
+    ToggleShadowPreview,
+    ToggleCameraLock,
+    RecenterCamera,
     Count,
 };
 
@@ -249,10 +246,8 @@ inline constexpr std::size_t action_count = static_cast<std::size_t>(Action::Cou
 // because switching modes has to be able to turn a whole set of controls off, and "off" is
 // far easier to reason about than priority rules between overlapping layers.
 enum class InputContext : std::uint8_t {
-    // 大地图: RPG movement, cursor captured, mouse motion turns the camera.
-    WorldMap,
-    // 小地图: top-down RTS controls, cursor visible, the mouse belongs to the map.
-    Minimap,
+    // One ground-level control scheme for countryside, cities and combat.
+    Gameplay,
     // Nothing binds here. Pushing it is the gate that hands the keyboard to a text field
     // or to ImGui -- every action simply resolves to false. Included from the start
     // because retrofitting it means auditing every held()/pressed() call site.

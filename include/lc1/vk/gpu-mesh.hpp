@@ -17,14 +17,14 @@ class Material;
 
 // Something drawable: vertex data on the GPU plus how many vertices to draw.
 // A resource, loaded once and shared -- a hundred soldiers are a hundred
-// DrawItems pointing at one Mesh.
-class Mesh {
+// DrawItems pointing at one GpuMesh.
+class GpuMesh {
   public:
     // Vertex data lives in DEVICE_LOCAL memory, which the CPU usually cannot map.
     // So it goes through a staging buffer: the CPU writes a host-visible copy, and
     // the GPU copies that into the device-local one.
     template <std::unsigned_integral T>
-    Mesh(Device const &device, std::span<Vertex const> vertices, std::span<T const> indices)
+    GpuMesh(Device const &device, std::span<Vertex const> vertices, std::span<T const> indices)
         : vertices_{device, vertices.size_bytes(),
                     vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst},
           vertex_count_{static_cast<std::uint32_t>(vertices.size())},
@@ -81,13 +81,13 @@ class Mesh {
             command_buffer.pipelineBarrier2(vk::DependencyInfo{}.setBufferMemoryBarriers(barrier2));
         });
 
-        spdlog::info("[Mesh] loaded {} vertices, {} indices", vertex_count_, index_count_);
+        spdlog::info("[GpuMesh] loaded {} vertices, {} indices", vertex_count_, index_count_);
     }
 
     template <std::ranges::contiguous_range Container>
         requires std::unsigned_integral<std::ranges::range_value_t<Container>>
-    Mesh(Device const &device, std::span<Vertex const> vertices, Container const &indices)
-        : Mesh(device, vertices, std::span(indices))
+    GpuMesh(Device const &device, std::span<Vertex const> vertices, Container const &indices)
+        : GpuMesh(device, vertices, std::span(indices))
     {
     }
 
@@ -103,9 +103,9 @@ class Mesh {
 };
 
 // One entry of "what to draw this frame", rebuilt every frame. Non-owning: the
-// Mesh and the Material must outlive the frame that draws them.
+// GpuMesh and the Material must outlive the frame that draws them.
 struct DrawItem {
-    Mesh const *mesh = nullptr;
+    GpuMesh const *mesh = nullptr;
     Material const *material = nullptr;
     glm::mat4 model{1.0F};
 };

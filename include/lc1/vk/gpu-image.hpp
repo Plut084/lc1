@@ -16,10 +16,10 @@ vk::Format find_depth_format(Device const &device);
 // A GPU image, its VMA allocation, and a view of the whole image. Knows nothing
 // about what it holds: a texture and a depth buffer differ only in format and
 // usage (and, for depth, the view's aspect). Filling it is the owner's job --
-// see Texture.
-class Image {
+// see GpuTexture.
+class GpuImage {
   public:
-    Image(Device const &device, vk::Format format, vk::Extent2D extent, std::uint32_t mip_levels,
+    GpuImage(Device const &device, vk::Format format, vk::Extent2D extent, std::uint32_t mip_levels,
           vk::SampleCountFlagBits samples, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect);
 
     vk::raii::Image const &raii() const { return image_; }

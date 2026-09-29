@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lc1/vk/mesh.hpp"
+#include "lc1/vk/gpu-mesh.hpp"
 
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/glm.hpp>
@@ -24,10 +24,10 @@ struct Transform {
     }
 };
 
-// Mesh and material are borrowed and must outlive submitted draws.
+// GpuMesh and material are borrowed and must outlive submitted draws.
 struct RenderObject {
     Transform transform;
-    Mesh const *mesh = nullptr;
+    GpuMesh const *mesh = nullptr;
     Material const *material = nullptr;
 
     DrawItem draw_item() const

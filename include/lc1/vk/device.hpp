@@ -36,6 +36,8 @@ class Device {
     MemoryAllocator const &allocator() const { return alloc_; }
     vk::raii::Queue const &raii_queue() const { return queue_; }
 
+    vk::SampleCountFlagBits max_sample_count() const;
+
   private:
     vk::raii::PhysicalDevice physical_{nullptr};
     // Declared before handle_ so the device is destroyed first.

@@ -1,17 +1,16 @@
 #pragma once
 
-#include "lc1/vk/buffer.hpp"
 #include "lc1/vk/common.hpp"
-#include "lc1/vk/image.hpp"
+#include "lc1/vk/frame-resources.hpp"
 #include "lc1/vk/material.hpp"
 #include "lc1/vk/mesh.hpp"
 #include "lc1/vk/pipeline.hpp"
+#include "lc1/vk/render-target.hpp"
 #include "lc1/vk/sampler.hpp"
 
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -20,15 +19,6 @@ namespace lc1 {
 class Device;
 class Texture;
 
-// A single color attachment covering `extent`, with a format matching the
-// renderer's pipeline. Its image must already be in COLOR_ATTACHMENT_OPTIMAL.
-struct RenderTarget {
-    // Non-owning reference: the wrapper must remain valid through record;
-    // its view and image must stay alive until the GPU finishes using them.
-    vk::raii::ImageView const &view;
-    vk::Extent2D extent;
-};
-
 // Matches `UniformBuffer` in shaders/shader.slang, field for field.
 struct UniformBufferObject {
     glm::mat4 model;
@@ -36,10 +26,9 @@ struct UniformBufferObject {
     glm::mat4 proj;
 };
 
-// Owns what drawing needs (the pipeline, plus the uniform buffers and
-// descriptor sets its shaders read) and records into a command buffer the
-// frame loop owns and submits. What to draw is decided here, so the frame loop
-// never sees a pipeline.
+// Owns the pipeline, material descriptor pool and sampler. Records using one
+// caller-owned set of FrameResources; neither resource counts nor frame-slot
+// indices are part of this interface.
 //
 // Takes the raii command buffer: a non-raii vk::CommandBuffer dispatches
 // through VULKAN_HPP_DEFAULT_DISPATCHER, which this project never defines.
@@ -51,8 +40,9 @@ class Renderer {
     // cannot grow.
     static constexpr std::uint32_t max_materials = 16;
 
-    // Depth images are allocated lazily from the target extent in record.
-    Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats);
+    // Color/depth images are allocated lazily from the target extent in record.
+    Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats,
+             vk::SampleCountFlagBits samples);
 
     // Allocates set 1 from this renderer's pool and points it at `texture`.
     // Here rather than in Material because only the renderer has the pool, the
@@ -60,44 +50,35 @@ class Renderer {
     // max_materials sets are live.
     Material make_material(Texture const &texture);
 
-    // `frame_index` picks the uniform buffer and descriptor set. It must be the
-    // frame loop's slot, because only that slot's fence proves the GPU is done
-    // reading them. The target is independent of that slot.
+    // Creates one set of drawing resources with its own descriptor pool. The
+    // caller decides how many sets to keep and when each is safe to reuse.
+    FrameResources make_frame_resources() const;
+
+    // resources must have been made by this renderer, and its previous GPU use
+    // must have completed. The target format must match the pipeline's format.
     // Records a rendering pass into an already recording command buffer,
     // outside any rendering pass. The caller owns begin/end and the target's
     // layout transitions; record leaves it in COLOR_ATTACHMENT_OPTIMAL.
     // `target.extent` must be nonzero and fit the attachment.
-    void record(vk::raii::CommandBuffer const &command_buffer, std::uint32_t frame_index,
+    void record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
                 RenderTarget const &target, UniformBufferObject const &ubo,
                 std::span<DrawItem const> draws);
 
   private:
-    // One per frame in flight: the CPU writes one slot's buffer while the GPU
-    // may still be reading the other's.
-    struct FrameData {
-        Buffer uniform_buffer;
-        // Set 0. Points at uniform_buffer.
-        vk::raii::DescriptorSet descriptor_set;
-        // Created on first use, replaced when this slot's target size changes.
-        // Only this slot's fence is needed before replacing it.
-        std::optional<Image> depth_image;
-    };
-
-    // The caller has waited for this frame slot's fence.
-    Image const &ensure_depth_image(FrameData &frame, vk::Extent2D extent);
+    // The caller has waited for the resources' previous GPU use.
+    void ensure_attachments(FrameResources &resources, vk::Extent2D extent) const;
 
     Device const &device_;
+    vk::Format color_format_;
     vk::Format depth_format_;
+    vk::SampleCountFlagBits samples_;
     Pipeline pipeline_;
-    // Declared before frames_: each vk::raii::DescriptorSet frees itself back
-    // into this pool, so the pool must outlive them -- and, for the same
-    // reason, this Renderer must outlive every Material it made.
-    vk::raii::DescriptorPool descriptor_pool_;
+    // Material sets free themselves back into this pool: the caller must
+    // destroy Materials before this renderer. FrameResources own separate pools.
+    vk::raii::DescriptorPool material_pool_;
     // One for every material: how to filter and wrap does not depend on which
     // image is sampled.
     Sampler sampler_;
-    // Sized to FrameLoop::frames_in_flight in the constructor.
-    std::vector<FrameData> frames_;
 };
 
 } // namespace lc1

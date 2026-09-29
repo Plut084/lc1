@@ -1,18 +1,16 @@
 #pragma once
 
 #include "lc1/vk/common.hpp"
+#include "lc1/vk/render-target.hpp"
 
 #include <cstdint>
-#include <span>
+#include <functional>
 #include <vector>
 
 namespace lc1 {
 
 class Device;
-struct DrawItem;
-class Renderer;
 class Swapchain;
-struct UniformBufferObject;
 
 enum class FrameResult : std::uint8_t {
     Ok,
@@ -37,7 +35,7 @@ struct Frame {
 
 // The swapchain/WSI state machine: wait, acquire, submit, present. Owns the
 // command buffer's recording boundaries and the swapchain image's layout
-// transitions around Renderer::record.
+// transitions around the caller's recording callback.
 //
 // Owns only per-FRAME resources (fences, image-available semaphores, command
 // buffers). Per-IMAGE resources live in SwapchainImage, so swapchain recreation
@@ -53,11 +51,16 @@ class FrameLoop {
     // the program, and it belongs to the Device.
     explicit FrameLoop(Device const &device);
 
-    // `ubo` is this frame's uniform data and `draws` its list of what to draw;
-    // see DrawItem. Both are handed to the renderer together with this slot's
-    // index, once the slot's fence says the GPU is done with it.
-    FrameResult draw_frame(Swapchain &swapchain, Renderer &renderer, UniformBufferObject const &ubo,
-                           std::span<DrawItem const> draws);
+    std::uint32_t frame_count() const { return static_cast<std::uint32_t>(frames_.size()); }
+
+    // Calls record synchronously after this slot's fence has completed, with
+    // an already recording command buffer and a COLOR_ATTACHMENT_OPTIMAL target.
+    // record must leave the target in that layout and close any rendering pass.
+    // The callback is not retained. If it throws, stop drawing and wait for the
+    // device before releasing resources; the acquired image is not presented.
+    FrameResult draw_frame(Swapchain &swapchain,
+                           std::function<void(vk::raii::CommandBuffer const &, std::uint32_t,
+                                              RenderTarget const &)> const &record);
 
   private:
     Device const &device_;

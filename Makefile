@@ -1,12 +1,123 @@
-.PHONY: install-debug-deps build-debug run-debug
+# Cross-platform build driver. Every knob is a variable, so one set of recipes covers
+# every build tree; the tree itself is build/<platform>/<build_type> (conanfile.py
+# pins that shape in layout()).
+#
+#   make                                    # Linux native, Debug
+#   make run                                # ... and then run it
+#   make run PLATFORM=windows-x86_64        # the cross build, under wine
+#   make build PLATFORM=windows-x86_64 BUILD_TYPE=Release
+#   make deps  PLATFORM=windows-x86_64      # conan install only
+#   make clean                              # rm -rf build/
+#
+# The platforms, and the preset each one selects:
+#
+#   linux-x86_64    profiles/linux    ->  cmake --preset linux-x86_64-debug
+#   windows-x86_64  profiles/mingw64  ->  cmake --preset windows-x86_64-debug
+#
+# Preset names carry the platform because CMakeUserPresets.json includes every
+# platform's generated presets at once, and CMake rejects duplicate preset names.
+
+PLATFORM   ?= linux-x86_64
+BUILD_TYPE ?= Debug
+
+# Parallelism for both halves of a build: conan passes it to every dependency it
+# compiles (tools.build:jobs) and bakes it into the generated CMake preset, and the
+# build step overrides the preset with it explicitly. Capped rather than left at nproc
+# because the binding constraint on a desktop is RAM, not cores -- 32 concurrent C++
+# translation units on a 15 GB machine is what makes the whole session stutter, and a
+# first-time `--build=missing` per platform is the only step that ever needs it.
+# `make JOBS=$(nproc)` when the machine is otherwise idle.
+JOBS ?= 8
+
+# Which slangc builds the shaders. Empty (the default) means whatever is on PATH, which
+# is right on a machine with a complete Slang install. Set it when the one on PATH is
+# incomplete -- a Release build needs slangc's spirv-opt shim, which some packages omit
+# entirely (see the comment at the top of shaders/CMakeLists.txt):
+#   make SLANGC=~/.local/share/nvim/mason/packages/slang/bin/slangc BUILD_TYPE=Release
+SLANGC ?=
+
+# Target -> host conan profile. The build profile is always `default`: that describes
+# the machine doing the compiling, which stays Linux even when the host is Windows.
+PROFILE_linux-x86_64   := profiles/linux
+PROFILE_windows-x86_64 := profiles/mingw64
+HOST_PROFILE := $(PROFILE_$(PLATFORM))
+
+ifndef HOST_PROFILE
+$(error no host profile for PLATFORM=$(PLATFORM); known platforms: linux-x86_64 windows-x86_64)
+endif
+
+PRESET    := $(PLATFORM)-$(shell echo $(BUILD_TYPE) | tr '[:upper:]' '[:lower:]')
+BUILD_DIR := build/$(PLATFORM)/$(BUILD_TYPE)
+
+# Windows binaries cannot be executed by Linux, but wine runs them, which is the only
+# way to exercise the cross build without rebooting. Inside the gitignored build/ so
+# `make clean` takes it along with everything else, and deliberately not ~/.wine: a
+# throwaway prefix for a build artifact should not share a C: drive with whatever else
+# the machine uses wine for. wine insists this be an absolute path.
+WINE_PREFIX ?= $(CURDIR)/build/wine-prefix
+WINE_ENV    := WINEPREFIX=$(WINE_PREFIX) WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
+
+.PHONY: all deps configure build run clean \
+        build-debug run-debug install-debug-deps install-debug-deps-windows
+
+all: build
+
+# --build=missing builds whatever the local cache has no binary for, which is every
+# dependency the first time a platform is built.
+deps:
+	conan install . -pr:h $(HOST_PROFILE) -pr:b default --build=missing -s build_type=$(BUILD_TYPE) -c tools.build:jobs=$(JOBS)
+
+# Configure explicitly instead of leaving it to `cmake --build`: a build preset needs
+# an already-configured tree, and a fresh clone has none.
+configure: deps
+	cmake --preset $(PRESET) $(if $(SLANGC),-DSLANGC_EXECUTABLE=$(SLANGC))
+
+build: configure
+	cmake --build --preset $(PRESET) -j $(JOBS)
+
+# `make run` runs whichever platform was asked for, because running the Windows build
+# under wine is the whole point of having it.
+#
+# Two things in the invocation are load-bearing: shaders/shader.spv is opened relative
+# to the working directory, so it cd's into the build tree first, and the Linux side
+# sources the conan run env, which is what puts the conan validation layer on
+# VK_LAYER_PATH -- startup fails without it, with a "layer not found" error that looks
+# like the layer is missing when it is not.
+#
+# The Windows side has the mirror-image problem: profiles/mingw64 deliberately does not
+# build the layers (see conanfile.py), and a plain wine prefix has none either, so a
+# Debug exe gets as far as instance creation and stops. LC1_NO_VALIDATION=1 is the
+# switch main.cpp already has for exactly this, and it is left to the caller to set:
+# silently disabling the safety net on every wine run is how it stops being one.
+run: build
+	@case "$(PLATFORM)" in \
+	linux-x86_64) \
+		cd $(BUILD_DIR) && . ./generators/conanrun.sh && ./lc1 ;; \
+	windows-x86_64) \
+		command -v wine >/dev/null || { echo "run: wine is not installed"; exit 1; }; \
+		if [ ! -d $(WINE_PREFIX) ]; then \
+			echo "run: creating $(WINE_PREFIX) (first time only)"; \
+			$(WINE_ENV) wineboot -u >/dev/null 2>&1; \
+		fi; \
+		echo "run: if this stops at 'layer not available', use LC1_NO_VALIDATION=1 make run PLATFORM=$(PLATFORM)"; \
+		cd $(BUILD_DIR) && $(WINE_ENV) wine ./lc1.exe ;; \
+	*) \
+		echo "run: unknown platform $(PLATFORM)"; exit 1 ;; \
+	esac
+
+clean:
+	rm -rf build/
+
+# Kept so muscle memory and older notes keep working. The parameterised targets above
+# are the real interface now.
+build-debug:
+	$(MAKE) BUILD_TYPE=Debug build
+
+run-debug:
+	$(MAKE) BUILD_TYPE=Debug run
 
 install-debug-deps:
-	conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug
+	$(MAKE) BUILD_TYPE=Debug deps
 
-build-debug: install-debug-deps
-	@echo "Building debug..."
-	@cmake --build --preset=conan-debug
-
-run-debug: build-debug
-	@echo "Running in debug mode..."
-	@source ./build/Debug/generators/conanrunenv-debug-x86_64.sh && cd ./build/Debug/ && ./lc1
+install-debug-deps-windows:
+	$(MAKE) PLATFORM=windows-x86_64 BUILD_TYPE=Debug deps

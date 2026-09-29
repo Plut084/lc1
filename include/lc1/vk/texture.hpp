@@ -21,7 +21,7 @@ class Texture {
   private:
     // Decoded pixels. Defined in texture.cpp, so stb stays out of this header.
     struct Pixels;
-    static Pixels load(std::filesystem::path const &path);
+    static Pixels load_from_file(std::filesystem::path const &path);
 
     // Delegated to: image_'s size is only known once the file is decoded, and
     // image_ has to be built in the initializer list.

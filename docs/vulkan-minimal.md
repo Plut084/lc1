@@ -11,7 +11,7 @@
 ## 1. Queue / 队列族 —— 命令提交的通道，以及为什么只有一条
 
 **核心模型：GPU 不等你。** CPU 把命令录进 command buffer，然后**提交**到队列，GPU 异步执行。
-提交这个动作在 `frame_loop.cpp` 的 `submit2`（`draw_frame` 里，紧跟在 `renderer.record` 之后）。
+提交这个动作在 `frame_loop.cpp` 的 `submit2`（`draw_frame` 里，在录制回调和呈现前的布局转换之后）。
 
 队列族（queue family）是"能力相同的一组队列"。物理设备报告它有哪几个族，每族有几个队列。
 族之间能力不同：图形、计算、传输、稀疏绑定。
@@ -94,6 +94,12 @@ vk::Result const waited = raii_device.waitForFences(
 
 所以要两份（`FrameLoop::frames_in_flight`）：CPU 在录第 N+1 帧时，GPU 还在画第 N 帧。fence
 保证的不是"整条流水线空了"，而是"**这一格**空了，可以复用"。
+
+当前代码由 `main()` 按 `frame_loop.frame_count()` 创建对应数量的 `FrameResources`。每套资源
+包含 UBO、独立的 descriptor pool/set、深度图和 MSAA 颜色图。`FrameLoop` 等待槽的 fence 后
+调用录制回调；回调按槽索引选择资源，交给 `Renderer::record`。所以 Renderer 只处理眼前这一套
+资源，不知道有多少在途帧，FrameLoop 也不需要认识绘制资源。正常退出或录制回调抛出异常时，
+都要先等待设备，再销毁这些资源。
 
 ### 最容易写死的那个 bug
 

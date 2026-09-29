@@ -2,6 +2,7 @@
 
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/memory.hpp"
+#include <glm/glm.hpp>
 
 namespace lc1 {
 
@@ -18,12 +19,23 @@ vk::Format find_depth_format(Device const &device);
 // see Texture.
 class Image {
   public:
-    Image(Device const &device, vk::Format format, vk::Extent2D extent, vk::ImageUsageFlags usage,
-          vk::ImageAspectFlags aspect);
+    Image(Device const &device, vk::Format format, vk::Extent2D extent, std::uint32_t mip_levels,
+          vk::SampleCountFlagBits samples, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect);
 
     vk::raii::Image const &raii() const { return image_; }
     vk::raii::ImageView const &view() const { return view_; }
     vk::Extent2D extent() const { return extent_; }
+    vk::Format format() const { return format_; }
+
+    void transition_layout(vk::raii::CommandBuffer const &command_buffer,
+                           vk::ImageLayout old_layout, vk::ImageLayout new_layout,
+                           vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                           vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) const;
+
+    // Requires every level in TRANSFER_DST_OPTIMAL, with level 0 filled.
+    // Checks linear blit support when there is more than one level, then
+    // leaves every level in SHADER_READ_ONLY_OPTIMAL for fragment sampling.
+    void generate_mipmaps(vk::raii::CommandBuffer const &command_buffer) const;
 
   private:
     // Owns both the VkImage and the VmaAllocation, and frees them together.
@@ -32,7 +44,11 @@ class Image {
     vma::raii::Image image_{nullptr};
     // Declared after image_ so it is destroyed first: the view refers to it.
     vk::raii::ImageView view_{nullptr};
+    vk::Format format_;
+    vk::FormatFeatureFlags optimal_tiling_features_;
     vk::Extent2D extent_;
+    std::uint32_t mip_levels_;
+    vk::ImageAspectFlags aspect_;
 };
 
 } // namespace lc1

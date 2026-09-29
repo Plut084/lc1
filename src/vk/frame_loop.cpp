@@ -1,7 +1,6 @@
 #include "lc1/vk/frame_loop.hpp"
 
 #include "lc1/vk/device.hpp"
-#include "lc1/vk/renderer.hpp"
 #include "lc1/vk/swapchain.hpp"
 
 namespace lc1 {
@@ -61,9 +60,13 @@ FrameLoop::FrameLoop(Device const &device) : device_{device}
     }
 }
 
-FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
-                                  UniformBufferObject const &ubo, std::span<DrawItem const> draws)
+FrameResult FrameLoop::draw_frame(Swapchain &swapchain,
+                                  std::function<void(vk::raii::CommandBuffer const &, std::uint32_t,
+                                                     RenderTarget const &)> const &record)
 {
+    if (!record) {
+        fail("frame recording callback is empty");
+    }
     Frame const &frame = frames_[frame_index_];
     vk::raii::Device const &raii_device = device_.raii();
 
@@ -83,8 +86,9 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
 
         // On a non-success result the driver left the index unwritten, so
         // .value must not be read before .result has been checked.
-        auto const [acquire_result, image_index] =
+        auto const acquired =
             swapchain.raii().acquireNextImage(acquire_timeout_ns, *frame.image_available, nullptr);
+        auto const acquire_result = acquired.result;
 
         if (acquire_result == vk::Result::eErrorOutOfDateKHR) {
             // No image was acquired and both the semaphore and the fence are
@@ -100,6 +104,7 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
             acquire_result != vk::Result::eSuboptimalKHR) {
             fail("vkAcquireNextImageKHR failed: {}", result_string(acquire_result));
         }
+        auto const image_index = acquired.value;
 
         // VK_SUBOPTIMAL_KHR means an image WAS acquired and
         // frame.image_available IS signaled. Render and present it normally
@@ -108,13 +113,6 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
         // VUID-vkAcquireNextImageKHR-semaphore-01286. Recreate after
         // presenting.
         bool const recreate_after_present = (acquire_result == vk::Result::eSuboptimalKHR);
-
-        // vkResetFences belongs HERE and nowhere else: on the path that
-        // definitely reaches vkQueueSubmit. Resetting it any earlier (say,
-        // right after the wait above) leaves the fence unsignaled with nothing
-        // ever submitted, and the next wait on this slot blocks forever with no
-        // validation message and no output.
-        raii_device.resetFences(*frame.in_flight);
 
         // Reset THIS slot's command buffer, never the whole pool.
         // vkResetCommandPool resets every buffer allocated from the pool,
@@ -151,9 +149,9 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
             .extent = swapchain.extent(),
         };
 
-        // frame_index_, not image_index, selects the renderer's per-frame
-        // uniform buffer: the fence waited on above is this slot's.
-        renderer.record(frame.command_buffer, frame_index_, target, ubo, draws);
+        // The caller selects its resources by this slot, not image_index:
+        // the fence waited on above only protects this slot's previous use.
+        record(frame.command_buffer, frame_index_, target);
 
         // COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR.
         // Destination stage/access are NONE, not BOTTOM_OF_PIPE: presentation
@@ -193,6 +191,10 @@ FrameResult FrameLoop::draw_frame(Swapchain &swapchain, Renderer &renderer,
             .setCommandBufferInfos(command_info)
             .setSignalSemaphoreInfos(signal_semaphore);
 
+        // Reset only after recording succeeds, immediately before submitting.
+        // An early return or a throwing callback must not leave an unsignaled
+        // fence with no submission to signal it.
+        raii_device.resetFences(*frame.in_flight);
         device_.raii_queue().submit2(submit, *frame.in_flight);
 
         // Never present without the submit above: the wait semaphore must

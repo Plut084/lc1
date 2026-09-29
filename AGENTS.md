@@ -65,25 +65,102 @@ use Vulkan) without revisiting this.
 
 ## Build
 
+**The build tree is `build/<platform>/<build_type>/`** — `build/linux-x86_64/Debug/`,
+`build/windows-x86_64/Release/`. `<platform>` is the *target* os and arch, so a MinGW cross build
+running on Linux lands in `build/windows-x86_64/`, beside nothing it shares a CMake cache with. Each
+tree is self-contained: its own conan generators, its own VMA-Hpp FetchContent download, its own
+compiled shaders.
+
+`conanfile.py`'s `layout()` pins that shape instead of calling `cmake_layout()`, which adds the
+build-type level only for single-config generators — with Visual Studio it would collapse to
+`build/<platform>/` with the build type living in the CMake cache. Pinning it makes the shape a
+property of the project rather than of the generator.
+
 ```bash
-conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug
-cmake --preset conan-debug
-cmake --build --preset conan-debug
-make run-debug    # or all of the above in one step
+make                                            # Linux native Debug: install + configure + build
+make run                                        # the above, then run it
+make build PLATFORM=windows-x86_64 BUILD_TYPE=Release
+make deps  PLATFORM=windows-x86_64              # conan install only
 ```
 
-Three parts of that are easy to get wrong:
+`make` drives three steps, which by hand are:
+
+```bash
+conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug
+cmake --preset linux-x86_64-debug
+cmake --build --preset linux-x86_64-debug
+```
+
+| `PLATFORM` | host profile | target | runnable here |
+|---|---|---|---|
+| `linux-x86_64` | `profiles/linux` | Linux, clang | yes |
+| `windows-x86_64` | `profiles/mingw64` | Windows, MinGW-w64 cross | yes, via wine |
+
+Anything else errors out at `make` parse time. The build profile is always `default` — that is the
+machine doing the compiling, which stays Linux even when the target is Windows — and conan sets
+`CMAKE_SYSTEM_NAME=Windows` on its own when the two disagree.
+
+**`JOBS` caps parallelism, and defaults to 8 rather than `nproc`.** The first `--build=missing` for a
+new platform compiles every dependency from source, and that is the only step where this matters; it
+goes to conan as `tools.build:jobs` (which conan also bakes into the generated build preset) and to
+`cmake --build` as `-j`. The cap is about RAM, not cores — 32 concurrent C++ translation units on this
+15 GB machine is what makes the whole desktop stutter, while the dependencies themselves are small once
+the validation layers are out of the graph. `make JOBS=$(nproc)` when nothing else is running.
+
+**Cross-compiling to Windows has two wrinkles that are not about profiles.**
+
+The first is at link time. GCC keeps the non-inline half of `<print>` in a separate `libstdc++exp`,
+and that is where `vprint_unicode`'s terminal helpers live. Linux never notices — `libstdc++.so.6`
+exports `std::__open_terminal` and `std::__write_to_terminal` already — but MinGW's `libstdc++.dll.a`
+does not, so every one of the 23 targets compiles and the *link* dies with
+`undefined reference to 'std::__open_terminal(_iobuf*)'`, which reads like libstdc++ is missing a
+standard function. `CMakeLists.txt` links `stdc++exp` for `MINGW` only; it is on `lc1_engine` because
+`std::println` is used by the library, not just the app.
+
+The second is that a MinGW link pulls the compiler's own runtime in as **DLLs** —
+`libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`. Those exist on the machine that
+compiled the exe and nowhere it is meant to run, so `CMakeLists.txt` passes `-static` to `lc1` for
+`MINGW`, and `objdump -p` on the result lists only `KERNEL32`/`USER32`/`GDI32`/`SHELL32`/`msvcrt`.
+Nothing else in the link is affected: conan already builds every dependency static
+(`*:shared=False`), and the Vulkan loader is `dlopen`ed rather than linked. The flag is in CMake
+rather than in `profiles/mingw64`'s `tools.build:exelinkflags` deliberately —
+`CMAKE_EXE_LINKER_FLAGS_INIT` is read only on a tree's **first** configure, so a profile-only change
+would silently do nothing to an existing tree, and the exe would look fine until it was copied
+somewhere else.
+
+**`make run PLATFORM=windows-x86_64` runs the exe under wine**, in a prefix at `build/wine-prefix`
+(inside the gitignored tree so `make clean` takes it along, and not `~/.wine`, so a build artifact
+does not share a `C:` drive with everything else the machine uses wine for). Verified end to end: the
+exe loads the mesh and texture, enumerates the real GPU through winevulkan, creates a swapchain and
+renders — which is what makes the cross build testable without leaving the machine.
+
+One thing it needs is not obvious: a **Debug exe asks for `VK_LAYER_KHRONOS_validation` and stops if
+it is missing**, and here it is missing — `profiles/mingw64` deliberately does not build the layers,
+and a fresh wine prefix has none. On a real Windows box the layers come from the Vulkan SDK, which is
+also why not shipping them is normal. Locally,
+`LC1_NO_VALIDATION=1 make run PLATFORM=windows-x86_64` is the switch `main.cpp` already has for this.
+The Makefile prints that hint when a run stops but does not set it for you: silently disabling the
+safety net on every wine run is how it stops being one.
+
+Four parts of this are easy to get wrong:
 
 - **`-pr:h profiles/linux` is required.** The default profile is missing options the graph needs, and
   omitting it fails with a confusing `xorg/system` error about missing X11 `-devel` packages.
-- **`-s build_type=Debug` is required on every install.** The profile defaults to `Release`, and Conan
+- **`-s build_type=Debug` is required on every install.** The profiles default to `Release`, and Conan
   only writes presets for build types it actually generated.
-- **Run `make run-debug`, not `./build/Debug/lc1`.** It does two things the bare binary lacks:
+- **The preset name carries the platform: `linux-x86_64-debug`, not `conan-debug`.** One
+  `CMakeUserPresets.json` at the repo root includes every platform's generated presets at once, and
+  CMake refuses to read a file whose includes define the same name twice
+  (`CMake Error: Duplicate preset`). The default prefix is `conan` for every install, so `conanfile.py`
+  sets `CMakeToolchain.presets_prefix` to the platform — it is also why `generate()` instantiates the
+  generators by hand instead of using the `generators = ...` attribute.
+- **Run `make run`, not `./build/linux-x86_64/Debug/lc1`.** It does two things the bare binary lacks:
   - It sources the conan run env. Debug builds take the validation layers from conan, and the loader
     finds them only via `VK_LAYER_PATH`, which that env exports. Without it, startup fails with a
     "layer not found" error that looks like the layer is missing when it is not.
-  - It runs from `build/Debug/`. Assets such as `shaders/shader.spv` are opened by paths relative
-    to the working directory, and the build puts them next to the binary.
+  - It runs from the build tree. `shaders/shader.spv` is opened by a path relative to the working
+    directory, and the build puts it next to the binary (`main.cpp`'s glTF/PNG paths are still
+    absolute, and point at this checkout).
 
   Release builds have no layer to find, but still need the working directory.
 
@@ -105,7 +182,7 @@ redundant and are not:
   `lc1::VulkanLoader`'s `vk::raii::Context` (`libvulkan.so` → `libvulkan.so.1` on Linux,
   `vulkan-1.dll` on Windows), which hands its `vkGetInstanceProcAddr` to GLFW through
   `glfwInitVulkanLoader`, so GLFW never loads one of its own. Measured, not assumed: `ldd` on the binary
-  shows no `libvulkan`, and `LD_DEBUG=libs ./build/Debug/lc1` shows exactly one `find library=libvulkan`
+  shows no `libvulkan`, and `LD_DEBUG=libs ./build/linux-x86_64/Debug/lc1` shows exactly one `find library=libvulkan`
   (two until 2026-09-24, when GLFW still dlopened `libvulkan.so.1` itself). A conan loader could only be
   a *second* one: `Context{}` dlopens by name regardless of what is linked, and `VK_NO_PROTOTYPES` means
   nothing would call into the linked copy. Holds on both platforms.
@@ -113,6 +190,11 @@ redundant and are not:
   `with_wayland=False`, an X11-only build.
 - **Validation layers come from conan, Debug only.** They are a dev tool; Release does not need them,
   and building them from source is expensive. Version skew against the system loader is harmless.
+  `profiles/mingw64` turns them off even for Debug, through the `with_validation_layers` option in
+  `conanfile.py`: a cross-compiled binary cannot be run on the machine building it, so the layers would
+  be a from-source build of one of the largest CMake projects there is — 30+ minutes with all cores
+  saturated — for something nothing here executes. This is the single biggest lever on how long a
+  first-time `--build=missing` for a new platform takes.
 
 ## The profile is load-bearing
 
@@ -134,7 +216,13 @@ four `with_x11`/`with_wsi_*` lines and install the X11 dev packages (manually, o
 `-c tools.system.package_manager:mode=install`). conan cannot vendor X11 headers — they *are* the
 system integration layer — so this is the one place "all dependencies from conan" has a real limit.
 
-Windows will need a sibling profile without the Wayland lines; `conanfile.py` should not need to change.
+`profiles/mingw64` is the Windows sibling the earlier version of this section said would be needed. It
+drops the four Wayland/X11 lines outright — Windows glfw uses Win32 — and replaces clang with a
+target-triple-prefixed MinGW-w64 gcc, including `rc`, which CMake passes `.rc` files through. It does
+not `include(default)`: the default profile describes the Linux machine compiling, this one describes
+the Windows binaries it produces, and conan's cross-compilation handling is driven by exactly that
+disagreement. The one thing it adds that is not about the compiler is
+`lc1/*:with_validation_layers=False` — see the dependency-rules section.
 
 ## Coding conventions
 
@@ -368,9 +456,17 @@ table. Only `clear()` and the destructor check for null. Not having that state a
 guarding against it.
 
 `Device::wait_idle()` stays explicit because `~vk::raii::Device` destroys the device **without** waiting
-for it. A `vk::SystemError` escaping the scope unwinds it, which destroys `FrameLoop`, `Swapchain`,
-`Device`, and `Instance` on the way out; `vkDestroyDevice` frees child objects implicitly, so validation
-still reports no leak. A validation error that `abort()`s never unwinds at all.
+for it. `main()` waits on both normal and exceptional exits from the drawing loop, while the frame
+resources, materials and meshes are still alive. RAII destruction alone does not make pending GPU
+access safe. A validation error that `abort()`s never unwinds at all.
+
+**Frame scheduling and drawing resources meet only in `main()`.** `FrameLoop::draw_frame` calls a
+synchronous recording callback after waiting for its slot's fence; it knows neither `Renderer` nor
+`FrameResources`. `Renderer::record` accepts one `FrameResources &`, with no frame count or index.
+The application creates one resource set per slot through `Renderer::make_frame_resources()` and
+selects it in the callback. Each set owns its UBO, descriptor pool/set, depth image and optional MSAA
+color image. The renderer owns only the pipeline, material pool and sampler. `RenderTarget` is the
+shared non-owning output contract, defined separately from either class.
 
 Layout: **library** `lc1_engine` = public headers in `include/lc1/` + sources and private headers
 (e.g. `vk/checks.hpp`) in `src/`; **app** `lc1` = `app/main.cpp`, linking `lc1_engine`. Include
@@ -385,7 +481,9 @@ the app cannot reach private headers.
 | `vk/device.*` | surface, physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
 | `vk/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
 | `vk/frame_loop.*` | per-FRAME sync (fences, `image_available`, command buffers), WSI state machine |
-| `vk/renderer.*` | the pipeline, its uniform buffers, descriptor pool/sets and sampler; records each frame |
+| `vk/renderer.*` | the pipeline, material descriptor pool and sampler; records using caller-owned resources |
+| `vk/frame-resources.hpp` | one UBO, descriptor pool/set, depth image and optional MSAA color image; owned by the app |
+| `vk/render-target.hpp` | the borrowed single-sampled output view and extent shared by recording and presentation |
 | `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
 | `vk/shader.*`, `vk/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
 | `vk/buffer.*` | a `VkBuffer` + its VMA allocation; vertex/index/uniform/staging differ only in flags |
@@ -481,6 +579,19 @@ the pick on multi-GPU machines.
 
 ## Known environment quirks
 
+- **Fedora's `shader-slang` package ships no downstream-compiler shims, and only a *Release* build
+  notices.** Debug passes `-O0`, which skips the optimizer; Release runs the full pipeline and dies in
+  the shader step with
+  `error[E00100]: failed to load downstream compiler 'spirv-opt'` and
+  `note[E99996]: failed to load dynamic library 'slang-glslang-2026.18'` — naming a library nothing in
+  this repo mentions. `/usr/bin/slangc` is installed, `libslang-compiler.so` is installed,
+  `libslang-glslang-<version>.so` is not (the copr package's 2026.18.3 has the same gap, and the
+  `slang-2.3.3` package is an unrelated older library). Any complete Slang install works — the
+  official release tarball, or the one the neovim mason package puts in
+  `~/.local/share/nvim/mason/packages/slang/bin/slangc` beside its `lib/`. Point the build at it with
+  `make SLANGC=<path-to-slangc>`, which forwards to `-DSLANGC_EXECUTABLE`; that is a CMake cache
+  variable, so it sticks to the build tree it was configured in and a fresh tree needs it again.
+  This is not MinGW-specific: a *Linux* Release build fails the same way.
 - **`XLOCALEDIR=/usr/share/X11/locale` is set in the profile's `[runenv]`.** The conan-built
   libxkbcommon has no compiled-in default, and the compose data lives in the system, not the package.
   Without it every run prints an `xkbcommon: couldn't find a Compose file` error plus a GLFW error

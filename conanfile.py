@@ -1,12 +1,29 @@
+import os
+
 from conan import ConanFile
-from conan.tools.cmake import cmake_layout
+from conan.tools.cmake import CMakeDeps, CMakeToolchain
+
+
+def build_platform(conanfile):
+    """The first level of the build tree: build/<platform>/<build_type>.
+
+    Platform is the *target* os and arch rather than the machine doing the compiling,
+    so a MinGW cross build running on Linux lands in build/windows-x86_64/ -- the same
+    tree a native Windows build would use, and never the one it is compiled from.
+    """
+    return f"{conanfile.settings.os}-{conanfile.settings.arch}".lower()
 
 
 class Lc1Recipe(ConanFile):
     name = "lc1"
     version = "0.1.0"
     settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeDeps", "CMakeToolchain"
+    # No `generators = ...` attribute: generate() below instantiates the same two
+    # generators by hand, because CMakeToolchain needs a per-platform presets_prefix
+    # that the attribute form cannot express.
+
+    options = {"with_validation_layers": [True, False]}
+    default_options = {"with_validation_layers": True}
 
     def requirements(self):
         self.requires("vulkan-headers/1.4.350.0")
@@ -14,6 +31,7 @@ class Lc1Recipe(ConanFile):
         self.requires("glm/1.0.3")
         self.requires("spdlog/1.17.0")
         self.requires("stb/cci.20240531")
+        self.requires("tinyobjloader/2.0.0-rc10")
 
         # Validation layers are a debug-only dependency: nothing needs them in a
         # Release build, and building them from source is expensive.
@@ -23,11 +41,45 @@ class Lc1Recipe(ConanFile):
         # platforms is worth the one-time build cost. The recipe exports
         # VK_LAYER_PATH via runenv_info, so Debug runs must source the generated
         # conanrun.sh (see AGENTS.md).
-        if self.settings.build_type == "Debug":
+        #
+        # The option is not a preference, it is a build-cost switch, and profiles set
+        # it: profiles/mingw64 turns it off because a cross-compiled Windows binary
+        # cannot be run on the machine building it, so there the layers would be a
+        # from-source build of one of the largest CMake projects there is -- 30+
+        # minutes and gigabytes of RAM -- for something nothing in this repo executes.
+        # A Debug build on the target itself (or on Linux) keeps them.
+        if self.settings.build_type == "Debug" and self.options.with_validation_layers:
             self.requires("vulkan-validationlayers/1.4.350.0")
 
     def layout(self):
-        cmake_layout(self)
+        # Deliberately NOT cmake_layout(): the shape it produces depends on the
+        # generator. It appends the build type only for single-config generators
+        # (Ninja, Unix Makefiles) and omits it for multi-config ones (Visual Studio,
+        # Xcode), so the tree would be build/<platform>/<build_type> with one and
+        # build/<platform> with the other, the build type living only inside the CMake
+        # cache. Pinning the folder here gives the requested shape for every generator.
+        build_folder = os.path.join("build", build_platform(self), str(self.settings.build_type))
+        self.folders.source = "."
+        self.folders.build = build_folder
+        self.folders.generators = os.path.join(build_folder, "generators")
+        self.cpp.source.includedirs = ["include"]
+        self.cpp.build.libdirs = ["."]
+        self.cpp.build.bindirs = ["."]
+
+    def generate(self):
+        CMakeDeps(self).generate()
+
+        toolchain = CMakeToolchain(self)
+        # One CMakeUserPresets.json at the repo root includes every platform's
+        # generated CMakePresets.json at once, and CMake refuses to read a file whose
+        # includes define the same preset name twice:
+        #   CMake Error: Duplicate preset: "conan-debug"
+        # The default prefix is "conan" for every install, so Debug under
+        # build/linux-x86_64/ and Debug under build/windows-x86_64/ would collide the
+        # moment both build trees exist. Prefixing with the platform makes them
+        # linux-x86_64-debug and windows-x86_64-debug instead.
+        toolchain.presets_prefix = build_platform(self)
+        toolchain.generate()
 
 
 # Dependency OPTIONS are deliberately not set here. They live in profiles/linux.

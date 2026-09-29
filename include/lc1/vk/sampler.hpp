@@ -24,7 +24,7 @@ class Sampler {
                                                    .setMipmapMode(vk::SamplerMipmapMode::eLinear)
                                                    .setMipLodBias(0.0F)
                                                    .setMinLod(0.0F)
-                                                   .setMaxLod(0.0F)))
+                                                   .setMaxLod(vk::LodClampNone)))
     {
     }
 

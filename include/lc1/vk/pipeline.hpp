@@ -13,7 +13,7 @@ class Pipeline {
   public:
     Pipeline(Device const &device, ShaderStages const &shader_stages,
              std::vector<vk::Format> const &color_attachment_formats,
-             vk::Format depth_attachment_format);
+             vk::Format depth_attachment_format, vk::SampleCountFlagBits samples);
 
     // Set 0: what changes every frame (the uniform buffer). One set per frame
     // in flight.

@@ -48,10 +48,12 @@ bool supports_required_features(vk::raii::PhysicalDevice const &physical_device)
         physical_device
             .getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    auto const &features = chain.get<vk::PhysicalDeviceFeatures2>().features;
     auto const &features13 = chain.get<vk::PhysicalDeviceVulkan13Features>();
     auto const &features_extended_dynamic_state =
         chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-    return features13.dynamicRendering == vk::True && features13.synchronization2 == vk::True &&
+    return features.sampleRateShading == vk::True && features13.dynamicRendering == vk::True &&
+           features13.synchronization2 == vk::True &&
            features_extended_dynamic_state.extendedDynamicState == vk::True;
 }
 
@@ -127,8 +129,8 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
             fail("LC1_DEVICE=\"{}\" matched no usable device", want);
         }
         fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
-             "VK_KHR_swapchain, dynamicRendering, synchronization2, and a "
-             "graphics+present queue family)");
+             "VK_KHR_swapchain, dynamicRendering, synchronization2, "
+             "sampleRateShading, and a graphics+present queue family)");
     }
     return best;
 }
@@ -179,8 +181,10 @@ Device::Device(Instance const &instance, Window const &window,
                            vk::PhysicalDeviceVulkan13Features,
                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
             feature_chain{
-                // vk::PhysicalDeviceFeatures2 (empty for now)
-                {.features = {.samplerAnisotropy = 1}},
+                // sampleRateShading is what makes the pipeline's
+                // VkPipelineMultisampleStateCreateInfo::sampleShadingEnable
+                // legal, and the pipeline always sets it.
+                {.features = {.sampleRateShading = 1, .samplerAnisotropy = 1}},
                 {.shaderDrawParameters = 1},
                 {.synchronization2 = 1, .dynamicRendering = 1},
                 {.extendedDynamicState = 1},
@@ -223,6 +227,26 @@ void Device::wait_idle() const
     catch (vk::SystemError const &error) {
         fail("vkDeviceWaitIdle failed: {}", error.what());
     }
+}
+
+vk::SampleCountFlagBits Device::max_sample_count() const
+{
+    auto physical_props = physical_.getProperties();
+    vk::SampleCountFlags counts = physical_props.limits.framebufferColorSampleCounts &
+                                  physical_props.limits.framebufferDepthSampleCounts;
+    if (counts & vk::SampleCountFlagBits::e64)
+        return vk::SampleCountFlagBits::e64;
+    if (counts & vk::SampleCountFlagBits::e32)
+        return vk::SampleCountFlagBits::e32;
+    if (counts & vk::SampleCountFlagBits::e16)
+        return vk::SampleCountFlagBits::e16;
+    if (counts & vk::SampleCountFlagBits::e8)
+        return vk::SampleCountFlagBits::e8;
+    if (counts & vk::SampleCountFlagBits::e4)
+        return vk::SampleCountFlagBits::e4;
+    if (counts & vk::SampleCountFlagBits::e2)
+        return vk::SampleCountFlagBits::e2;
+    return vk::SampleCountFlagBits::e1;
 }
 
 } // namespace lc1

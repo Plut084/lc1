@@ -1,6 +1,5 @@
 struct VSInput {
     float3 position;
-    float3 color;
     float2 uv;
 };
 
@@ -18,7 +17,6 @@ Sampler2D texture;
 
 struct VSOutput {
     float4 pos : SV_Position;
-    float3 color;
     float2 uv;
 };
 
@@ -27,7 +25,6 @@ VSOutput vertMain(VSInput input)
 {
     VSOutput output;
     output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.position, 1.0))));
-    output.color = input.color;
     output.uv = input.uv;
     return output;
 }

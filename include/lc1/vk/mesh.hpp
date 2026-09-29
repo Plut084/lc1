@@ -15,8 +15,6 @@ namespace lc1 {
 class Device;
 class Material;
 
-vk::IndexType index_type_for_size(std::size_t size);
-
 // Something drawable: vertex data on the GPU plus how many vertices to draw.
 // A resource, loaded once and shared -- a hundred soldiers are a hundred
 // DrawItems pointing at one Mesh.
@@ -33,7 +31,7 @@ class Mesh {
           indices_{device, indices.size_bytes(),
                    vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst},
           index_count_(static_cast<std::uint32_t>(indices.size())),
-          index_type_(index_type_for_size(sizeof(T)))
+          index_type_(vk::IndexTypeValue<T>::value)
     {
         // Only needed until the copy has finished; one_time_submit waits for that,
         // so it can die at the end of this constructor.

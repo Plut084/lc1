@@ -36,6 +36,7 @@ Window::Window(int width, int height, std::string_view title)
     // callback first would leave a window whose callback finds no Window.
     glfwSetWindowUserPointer(handle_, this);
     glfwSetFramebufferSizeCallback(handle_, &Window::framebuffer_size_callback);
+    glfwSetKeyCallback(handle_, &Window::key_callback);
 }
 
 Window::~Window()
@@ -57,6 +58,20 @@ void Window::framebuffer_size_callback(GLFWwindow *window, int /*width*/, int /*
     if (self == nullptr)
         return;
     self->framebuffer_resized_ = true;
+}
+
+void Window::key_callback(GLFWwindow *window, int key, int /*scancode*/, int action, int /*mods*/)
+{
+    if (action != GLFW_PRESS)
+        return;
+
+    auto *self = static_cast<Window *>(glfwGetWindowUserPointer(window));
+    if (self == nullptr)
+        return;
+
+    if (key == GLFW_KEY_ESCAPE) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
 }
 
 std::vector<char const *> Window::required_instance_extensions() const

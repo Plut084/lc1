@@ -60,8 +60,8 @@ class Window {
     FrameExtent framebuffer_extent() const;
 
   private:
-    static void framebuffer_size_callback(GLFWwindow *window, int width,
-                                          int height);
+    static void framebuffer_size_callback(GLFWwindow *window, int width, int height);
+    static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods);
 
     struct GlfwLifetime {
         ~GlfwLifetime();

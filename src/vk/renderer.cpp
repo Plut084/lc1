@@ -2,7 +2,6 @@
 
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/device.hpp"
-#include "lc1/vk/frame_loop.hpp"
 #include "lc1/vk/memory.hpp"
 #include "lc1/vk/shader-stages.hpp"
 #include "lc1/vk/texture.hpp"
@@ -14,11 +13,19 @@
 namespace lc1 {
 namespace {
 
+vk::Format single_color_format(std::vector<vk::Format> const &formats)
+{
+    if (formats.size() != 1) {
+        fail("renderer requires exactly one color attachment format");
+    }
+    return formats.front();
+}
+
 // The shader modules only need to live until the pipeline is created, so they
 // stay local to this function.
 Pipeline make_pipeline(Device const &device,
                        std::vector<vk::Format> const &color_attachment_formats,
-                       vk::Format depth_image_format)
+                       vk::Format depth_image_format, vk::SampleCountFlagBits samples)
 {
     auto const shader_code = read_file("shaders/shader.spv");
     ShaderModule const shader_module{device, shader_code};
@@ -26,84 +33,72 @@ Pipeline make_pipeline(Device const &device,
     ShaderStages shader_stages;
     shader_stages.append(vk::ShaderStageFlagBits::eVertex, shader_module, "vertMain");
     shader_stages.append(vk::ShaderStageFlagBits::eFragment, shader_module, "fragMain");
-    return Pipeline{device, shader_stages, color_attachment_formats, depth_image_format};
+    return Pipeline{device, shader_stages, color_attachment_formats, depth_image_format, samples};
 }
 
 } // namespace
 
-Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats)
-    : device_{device}, depth_format_{find_depth_format(device)},
-      pipeline_{make_pipeline(device, color_attachment_formats, depth_format_)},
-      descriptor_pool_(nullptr), sampler_(device)
+Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats,
+                   vk::SampleCountFlagBits samples)
+    : device_{device}, color_format_{single_color_format(color_attachment_formats)},
+      depth_format_{find_depth_format(device)}, samples_{samples},
+      pipeline_{make_pipeline(device, color_attachment_formats, depth_format_, samples)},
+      material_pool_(nullptr), sampler_(device)
 {
-    try {
-        vk::raii::Device const &raii_device = device.raii();
+    vk::DescriptorPoolSize const pool_size{
+        .type = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = max_materials,
+    };
+    vk::DescriptorPoolCreateInfo pool_info{
+        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+        .maxSets = max_materials,
+    };
+    pool_info.setPoolSizes(pool_size);
+    material_pool_ = device.raii().createDescriptorPool(pool_info);
+}
 
-        // Set 0 once per frame in flight, set 1 once per material.
-        std::vector<vk::DescriptorPoolSize> pool_sizes;
-        pool_sizes.push_back({
-            .type = vk::DescriptorType::eUniformBuffer,
-            .descriptorCount = FrameLoop::frames_in_flight,
-        });
-        pool_sizes.push_back({
-            .type = vk::DescriptorType::eCombinedImageSampler,
-            .descriptorCount = max_materials,
-        });
-        vk::DescriptorPoolCreateInfo pool_info{
-            // Allows for individual descriptor set to be freed, which is what
-            // ~vk::raii::DescriptorSet does.
-            .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-            .maxSets = FrameLoop::frames_in_flight + max_materials,
-        };
-        pool_info.setPoolSizes(pool_sizes);
-        descriptor_pool_ = raii_device.createDescriptorPool(pool_info);
+FrameResources Renderer::make_frame_resources() const
+{
+    // Host-visible: record rewrites this buffer after its previous GPU use.
+    Buffer uniform_buffer{device_, sizeof(UniformBufferObject),
+                          vk::BufferUsageFlagBits::eUniformBuffer,
+                          vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+    vk::DescriptorPoolSize const pool_size{
+        .type = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+    };
+    vk::DescriptorPoolCreateInfo pool_info{
+        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+        .maxSets = 1,
+    };
+    pool_info.setPoolSizes(pool_size);
+    auto descriptor_pool = device_.raii().createDescriptorPool(pool_info);
+    vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = *descriptor_pool};
+    alloc_info.setSetLayouts(*pipeline_.frame_set_layout());
+    auto descriptor_sets = device_.raii().allocateDescriptorSets(alloc_info);
 
-        // One layout per set to allocate: the length of this array is the count.
-        std::vector<vk::DescriptorSetLayout> const layouts(FrameLoop::frames_in_flight,
-                                                           *pipeline_.frame_set_layout());
-        vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = descriptor_pool_};
-        alloc_info.setSetLayouts(layouts);
-        auto descriptor_sets = raii_device.allocateDescriptorSets(alloc_info);
+    vk::DescriptorBufferInfo const buffer_info{
+        .buffer = *uniform_buffer.raii(),
+        .offset = 0,
+        .range = sizeof(UniformBufferObject),
+    };
+    vk::WriteDescriptorSet const write{
+        .dstSet = *descriptor_sets.front(),
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo = &buffer_info,
+    };
+    device_.raii().updateDescriptorSets(write, {});
 
-        frames_.reserve(FrameLoop::frames_in_flight);
-        for (auto &descriptor_set : descriptor_sets) {
-            // Host-visible with no staging buffer: the CPU rewrites it every
-            // frame, so a staging copy would only add work.
-            Buffer uniform_buffer{device, sizeof(UniformBufferObject),
-                                  vk::BufferUsageFlagBits::eUniformBuffer,
-                                  vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
-
-            vk::DescriptorBufferInfo buffer_info{
-                .buffer = *uniform_buffer.raii(),
-                .offset = 0,
-                .range = sizeof(UniformBufferObject),
-            };
-            vk::WriteDescriptorSet const write{
-                .dstSet = descriptor_set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eUniformBuffer,
-                .pBufferInfo = &buffer_info,
-            };
-            raii_device.updateDescriptorSets(write, {});
-
-            frames_.push_back({
-                .uniform_buffer = std::move(uniform_buffer),
-                .descriptor_set = std::move(descriptor_set),
-                .depth_image = std::nullopt, // Create on the fly.
-            });
-        }
-    }
-    catch (vk::SystemError const &error) {
-        fail("descriptor resource creation failed: {}", error.what());
-    }
+    return FrameResources{std::move(uniform_buffer), std::move(descriptor_pool),
+                          std::move(descriptor_sets.front())};
 }
 
 Material Renderer::make_material(Texture const &texture)
 {
     try {
-        vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = descriptor_pool_};
+        vk::DescriptorSetAllocateInfo alloc_info{.descriptorPool = material_pool_};
         alloc_info.setSetLayouts(*pipeline_.material_set_layout());
         auto descriptor_sets = device_.raii().allocateDescriptorSets(alloc_info);
 
@@ -132,19 +127,32 @@ Material Renderer::make_material(Texture const &texture)
     }
 }
 
-Image const &Renderer::ensure_depth_image(FrameData &frame, vk::Extent2D extent)
+void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent) const
 {
-    // This slot's fence protects its depth image. Other frames keep
-    // their own images, so a resize needs no device-wide wait here.
-    if (!frame.depth_image || frame.depth_image->extent() != extent) {
-        frame.depth_image.emplace(device_, depth_format_, extent,
-                                  vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                                  vk::ImageAspectFlagBits::eDepth);
+    // The caller has waited for these resources. Other submissions use their
+    // own resources, so replacing these images needs no device-wide wait here.
+    if (!resources.depth_image || resources.depth_image->extent() != extent) {
+        vk::ImageAspectFlags depth_aspects = vk::ImageAspectFlagBits::eDepth;
+        if (depth_format_ == vk::Format::eD32SfloatS8Uint ||
+            depth_format_ == vk::Format::eD24UnormS8Uint) {
+            // separateDepthStencilLayouts is not enabled: transition both aspects
+            // of a combined format even though only depth is attached.
+            depth_aspects |= vk::ImageAspectFlagBits::eStencil;
+        }
+        resources.depth_image.emplace(device_, depth_format_, extent, 1, samples_,
+                                      vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                      depth_aspects);
     }
-    return *frame.depth_image;
+    if (samples_ != vk::SampleCountFlagBits::e1 &&
+        (!resources.color_image || resources.color_image->extent() != extent)) {
+        resources.color_image.emplace(device_, color_format_, extent, 1, samples_,
+                                      vk::ImageUsageFlagBits::eColorAttachment |
+                                          vk::ImageUsageFlagBits::eTransientAttachment,
+                                      vk::ImageAspectFlagBits::eColor);
+    }
 }
 
-void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32_t frame_index,
+void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
                       RenderTarget const &target, UniformBufferObject const &ubo,
                       std::span<DrawItem const> draws)
 {
@@ -152,30 +160,20 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32
         fail("cannot render to a target with a zero extent");
     }
 
-    FrameData &frame = frames_[frame_index];
+    // Safe to overwrite: the caller has waited for these resources' GPU use.
+    resources.uniform_buffer.upload(std::as_bytes(std::span{&ubo, 1}));
+    ensure_attachments(resources, target.extent);
+    Image const &depth_image = *resources.depth_image;
 
-    // Safe to overwrite here: the frame loop calls record only after waiting on
-    // this slot's fence, so the GPU is done with the frame that last read it.
-    frame.uniform_buffer.upload(std::as_bytes(std::span{&ubo, 1}));
-    Image const &depth_image = ensure_depth_image(frame, target.extent);
-
-    vk::ImageAspectFlags depth_aspects = vk::ImageAspectFlagBits::eDepth;
-    if (depth_format_ == vk::Format::eD32SfloatS8Uint ||
-        depth_format_ == vk::Format::eD24UnormS8Uint) {
-        // separateDepthStencilLayouts is not enabled: transition both aspects
-        // of a combined format even though only depth is attached.
-        depth_aspects |= vk::ImageAspectFlagBits::eStencil;
-    }
     constexpr auto depth_stages = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                                   vk::PipelineStageFlagBits2::eLateFragmentTests;
     // Depth is cleared every frame, so discard its old contents. Keep the
     // dependency on earlier depth writes when reusing an existing image.
-    transition_image_layout(command_buffer, *depth_image.raii(), vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eDepthStencilAttachmentOptimal, depth_stages,
-                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite, depth_stages,
-                            vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-                                vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                            depth_aspects);
+    depth_image.transition_layout(command_buffer, vk::ImageLayout::eUndefined,
+                                  vk::ImageLayout::eDepthStencilAttachmentOptimal, depth_stages,
+                                  vk::AccessFlagBits2::eDepthStencilAttachmentWrite, depth_stages,
+                                  vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                      vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
 
     vk::RenderingInfo rendering{
         .renderArea =
@@ -190,7 +188,7 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32
     // from a rendered frame.
     constexpr vk::ClearColorValue clear_color{0.9F, 0.35F, 0.05F, 1.0F};
 
-    vk::RenderingAttachmentInfo const color_attachment{
+    vk::RenderingAttachmentInfo color_attachment{
         .imageView = *target.view,
         // NOT VK_IMAGE_LAYOUT_UNDEFINED:
         // VUID-VkRenderingAttachmentInfo-imageView-06135 forbids it here.
@@ -200,6 +198,20 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = vk::ClearValue{}.setColor(clear_color),
     };
+    if (resources.color_image) {
+        resources.color_image->transition_layout(
+            command_buffer, vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite);
+        color_attachment.imageView = *resources.color_image->view();
+        color_attachment.resolveMode = vk::ResolveModeFlagBits::eAverage;
+        color_attachment.resolveImageView = *target.view;
+        color_attachment.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        // Only the single-sampled output must survive the rendering pass.
+        color_attachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    }
     rendering.setColorAttachments(color_attachment);
 
     vk::RenderingAttachmentInfo const depth_attachment{
@@ -217,7 +229,7 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, std::uint32
     // Set 0 once for the whole frame; set 1 per draw, below. Binding set 1
     // leaves set 0 bound: the two layouts are compatible up to set 0.
     command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 0,
-                                      *frame.descriptor_set, nullptr);
+                                      *resources.descriptor_set, nullptr);
     // Render area, viewport and scissor use the same caller-provided extent.
     vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where

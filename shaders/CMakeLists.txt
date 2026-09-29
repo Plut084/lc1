@@ -1,3 +1,16 @@
+# Overridable: -DSLANGC_EXECUTABLE=/path/to/slangc, or `make SLANGC=...`, which the
+# Makefile forwards here.
+#
+# Worth knowing because the failure is unrecognisable from this side. The shader-slang
+# package on this machine (Fedora, copr lionheartp/Hyprland) installs /usr/bin/slangc
+# and libslang-compiler.so but NOT the downstream-compiler shims that spirv-opt lives
+# in -- libslang-glslang-<version>.so. A Debug build never notices, because -O0 below
+# skips the optimizer entirely; a Release build compiles every object and then dies in
+# the shader step with
+#   error[E00100]: failed to load downstream compiler 'spirv-opt'
+#   note[E99996]: failed to load dynamic library 'slang-glslang-2026.18'
+# naming a library this project never mentions. Any complete Slang install works: the
+# official release tarball, or a language-server package that ships bin/ alongside lib/.
 find_program(SLANGC_EXECUTABLE slangc REQUIRED)
 
 # add_slang_shaders(<target> <source>...)

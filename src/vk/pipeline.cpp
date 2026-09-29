@@ -13,7 +13,7 @@ namespace lc1 {
 
 Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
                    std::vector<vk::Format> const &color_attachment_formats,
-                   vk::Format depth_attachment_format)
+                   vk::Format depth_attachment_format, vk::SampleCountFlagBits samples)
 {
     // Dynamic so that they follow the swapchain extent: Renderer::record sets
     // them every frame, and a resize never rebuilds the pipeline.
@@ -52,9 +52,17 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .lineWidth = 1.0F,
     };
 
+    // Sample shading: the fragment shader is invoked minSampleShading *
+    // rasterizationSamples times per fragment -- every sample gets its own
+    // invocation, and FragCoord then reports that sample's location instead of
+    // the fragment center. MSAA on its own antialiases triangle coverage only;
+    // this is what also antialiases what the shader itself computes, at up to
+    // one fragment invocation per sample.
     vk::PipelineMultisampleStateCreateInfo multisampling{
-        .rasterizationSamples = vk::SampleCountFlagBits::e1,
-        .sampleShadingEnable = vk::False,
+        .rasterizationSamples = samples,
+        .sampleShadingEnable = vk::True,
+        // Samples per pixel: max(minSampleShading × rasterizationSamples, 1)
+        .minSampleShading = 1.0F,
     };
 
     vk::PipelineDepthStencilStateCreateInfo depth_stencil_state{

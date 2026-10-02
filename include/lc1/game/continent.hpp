@@ -96,7 +96,9 @@ struct ContinentData {
 class Continent {
   public:
     explicit Continent(ContinentData data);
-    static Continent make_prototype();
+    // Optional application scenery, relative to spawn. Blocks participate in
+    // both the continent's visible geometry and its static collision.
+    static Continent make_prototype(std::span<ContinentBlock const> spawn_blocks = {});
 
     GroundBounds bounds() const;
     float tile_size() const { return data_.tile_size; }

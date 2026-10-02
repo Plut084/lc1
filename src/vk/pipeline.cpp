@@ -17,7 +17,8 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
                    PipelineKind kind)
 {
     bool const depth_only = kind == PipelineKind::Shadow;
-    bool const preview = kind == PipelineKind::ShadowPreview;
+    bool const preview = kind == PipelineKind::ShadowPreview ||
+                         kind == PipelineKind::ShadowTemporal || kind == PipelineKind::ToneMap;
     // Viewport/scissor follow the swapchain; front face follows each model's handedness.
     // Neither a resize nor a mirrored draw requires another pipeline.
     std::vector<vk::DynamicState> dynamic_states{
@@ -65,16 +66,11 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .lineWidth = 1.0F,
     };
 
-    // Sample shading: the fragment shader is invoked minSampleShading *
-    // rasterizationSamples times per fragment -- every sample gets its own
-    // invocation, and FragCoord then reports that sample's location instead of
-    // the fragment center. MSAA on its own antialiases triangle coverage only;
-    // this is what also antialiases what the shader itself computes, at up to
-    // one fragment invocation per sample.
+    // Material/BRDF shading remains per sample. The independent visibility
+    // pipeline has one sample and performs the ray queries at pixel frequency.
     vk::PipelineMultisampleStateCreateInfo multisampling{
         .rasterizationSamples = samples,
-        .sampleShadingEnable = vk::True,
-        // Samples per pixel: max(minSampleShading × rasterizationSamples, 1)
+        .sampleShadingEnable = kind == PipelineKind::Lit,
         .minSampleShading = 1.0F,
     };
 
@@ -87,7 +83,9 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
     };
 
     std::vector<vk::PipelineColorBlendAttachmentState> color_blend_attachments{{
-        .blendEnable = vk::True,
+        // This path supports opaque materials. Alpha masking/blending also needs
+        // matching shadow semantics before it can be enabled.
+        .blendEnable = vk::False,
         .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
         .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
         .colorBlendOp = vk::BlendOp::eAdd,
@@ -101,26 +99,26 @@ Pipeline::Pipeline(Device const &device, ShaderStages const &shader_stages,
         .logicOpEnable = vk::False,
         .logicOp = vk::LogicOp::eCopy,
     };
-    if (depth_only)
-        color_blend_attachments.clear();
+    color_blend_attachments.resize(color_attachment_formats.size(),
+                                   color_blend_attachments.front());
     color_blending.setAttachments(color_blend_attachments);
 
     // Stable low sets: camera (0), object (1), then material (2).
     // Materials are shared across frames; writable camera/object data is not.
+    auto const bindings =
+        kind == PipelineKind::ToneMap
+            ? std::span<vk::DescriptorSetLayoutBinding const>{tone_map_bindings}
+        : depth_only || kind == PipelineKind::ShadowPreview
+            ? std::span<vk::DescriptorSetLayoutBinding const>{shadow_map_frame_bindings}
+            : std::span<vk::DescriptorSetLayoutBinding const>{frame_bindings};
     frame_set_layout_ = device.raii().createDescriptorSetLayout(
-        vk::DescriptorSetLayoutCreateInfo{}.setBindings(frame_bindings));
+        vk::DescriptorSetLayoutCreateInfo{}.setBindings(bindings));
 
     object_set_layout_ = device.raii().createDescriptorSetLayout(
         vk::DescriptorSetLayoutCreateInfo{}.setBindings(object_bindings));
 
-    vk::DescriptorSetLayoutBinding const material_binding{
-        .binding = 0,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eFragment,
-    };
     material_set_layout_ = device.raii().createDescriptorSetLayout(
-        vk::DescriptorSetLayoutCreateInfo{}.setBindings(material_binding));
+        vk::DescriptorSetLayoutCreateInfo{}.setBindings(material_bindings));
 
     // Index in this array is the set number the shader declares.
     std::array<vk::DescriptorSetLayout, 3> const set_layouts{

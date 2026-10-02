@@ -13,10 +13,12 @@ DescriptorSet::DescriptorSet(Device const &device, vk::raii::DescriptorPool cons
           for (std::size_t i = 0; i < bindings.size(); ++i) {
               auto const &binding = bindings[i];
               if ((binding.descriptorType != vk::DescriptorType::eUniformBuffer &&
-                   binding.descriptorType != vk::DescriptorType::eCombinedImageSampler) ||
+                   binding.descriptorType != vk::DescriptorType::eCombinedImageSampler &&
+                   binding.descriptorType != vk::DescriptorType::eAccelerationStructureKHR &&
+                   binding.descriptorType != vk::DescriptorType::eSampledImage) ||
                   binding.descriptorCount != 1)
                   fail("DescriptorSet requires single uniform-buffer or combined-image-sampler "
-                       "bindings");
+                       "or acceleration-structure bindings");
               for (std::size_t j = 0; j < i; ++j)
                   if (bindings[j].binding == binding.binding)
                       fail("duplicate descriptor layout binding {}", binding.binding);
@@ -60,20 +62,43 @@ void DescriptorSet::add_uniform(std::uint32_t binding, vk::DeviceSize size)
 
 void DescriptorSet::set_image(std::uint32_t binding, vk::DescriptorImageInfo const &info)
 {
-    if (std::ranges::none_of(bindings_, [binding](auto const &entry) {
-            return entry.binding == binding &&
-                   entry.descriptorType == vk::DescriptorType::eCombinedImageSampler;
-        }))
-        fail("unknown combined image sampler binding {}", binding);
+    auto const entry = std::ranges::find_if(bindings_, [binding](auto const &entry) {
+        return entry.binding == binding &&
+               (entry.descriptorType == vk::DescriptorType::eCombinedImageSampler ||
+                entry.descriptorType == vk::DescriptorType::eSampledImage);
+    });
+    if (entry == bindings_.end())
+        fail("unknown sampled image binding {}", binding);
     vk::WriteDescriptorSet const write{
         .dstSet = *handle_,
         .dstBinding = binding,
         .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorType = entry->descriptorType,
         .pImageInfo = &info,
     };
     device_->raii().updateDescriptorSets(write, {});
     images_.insert(binding);
+}
+
+void DescriptorSet::set_acceleration_structure(std::uint32_t binding,
+                                               vk::AccelerationStructureKHR structure)
+{
+    if (std::ranges::none_of(bindings_, [binding](auto const &entry) {
+            return entry.binding == binding &&
+                   entry.descriptorType == vk::DescriptorType::eAccelerationStructureKHR;
+        }))
+        fail("unknown acceleration structure binding {}", binding);
+    vk::WriteDescriptorSetAccelerationStructureKHR acceleration;
+    acceleration.setAccelerationStructures(structure);
+    vk::WriteDescriptorSet const write{
+        .pNext = &acceleration,
+        .dstSet = *handle_,
+        .dstBinding = binding,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eAccelerationStructureKHR,
+    };
+    device_->raii().updateDescriptorSets(write, {});
+    acceleration_structures_.insert(binding);
 }
 
 void DescriptorSet::upload(std::uint32_t binding, std::span<std::byte const> data)
@@ -86,9 +111,9 @@ void DescriptorSet::upload(std::uint32_t binding, std::span<std::byte const> dat
 
 vk::raii::DescriptorSet const &DescriptorSet::raii() const
 {
-    if (uniforms_.size() + images_.size() != bindings_.size())
+    if (uniforms_.size() + images_.size() + acceleration_structures_.size() != bindings_.size())
         fail("cannot bind descriptor set: {} of {} bindings initialized",
-             uniforms_.size() + images_.size(), bindings_.size());
+             uniforms_.size() + images_.size() + acceleration_structures_.size(), bindings_.size());
     return handle_;
 }
 

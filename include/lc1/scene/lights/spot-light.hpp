@@ -1,16 +1,17 @@
 #pragma once
 
-#include "lc1/lights/light-base.hpp"
+#include "lc1/scene/lights/light-base.hpp"
+#include "lc1/scene/lights/light.hpp"
 
 #include <glm/glm.hpp>
 
-namespace lc1 {
+namespace lc1::scene {
 
 struct SpotLight {
     LightBase base;
     glm::vec3 position{0.0F};               // World space, in metres.
     glm::vec3 direction{0.0F, -1.0F, 0.0F}; // Unit direction in which light travels.
-    float range = 0.0F; // Nonnegative cutoff distance in metres; zero means no finite cutoff.
+    // Unbounded inverse-square distance attenuation, weighted by the cone below.
     // Half-angles measured from direction, in radians:
     // 0 <= inner_angle <= outer_angle < pi/2.
     // Full angular strength inside inner_angle, fading to zero at outer_angle.
@@ -19,4 +20,14 @@ struct SpotLight {
     float outer_angle = glm::radians(30.0F);
 };
 
-} // namespace lc1
+inline Light to_light(SpotLight const &light)
+{
+    return {.position = light.position,
+            .type = 2,
+            .direction = light.direction,
+            .color = light.base.color,
+            .intensity = light.base.intensity,
+            .spot_angles = {light.inner_angle, light.outer_angle}};
+}
+
+} // namespace lc1::scene

@@ -22,6 +22,9 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(stb CONFIG REQUIRED)
 FetchContent_MakeAvailable(vmahpp)
 find_package(tinyobjloader CONFIG REQUIRED)
+find_package(TinyGLTF CONFIG REQUIRED)
+find_package(Ktx CONFIG REQUIRED)
+find_package(mikktspace CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -31,11 +34,13 @@ add_subdirectory(shaders)
 add_library(lc1_engine STATIC
     src/window.cpp
     src/input.cpp
+    src/tangent-space.cpp
     src/game/continent.cpp
     src/game/continent-prototype.cpp
     src/game/player-controller.cpp
     src/game/map-camera-controller.cpp
     src/game/continent-view.cpp
+    src/scene/character.cpp
     src/resource-manager.cpp
     src/vk/common.cpp
     src/vk/loader.cpp
@@ -46,6 +51,7 @@ add_library(lc1_engine STATIC
     src/vk/swapchain-policy.cpp
     src/vk/shader.cpp
     src/vk/shader-stages.cpp
+    src/vk/acceleration-structure.cpp
     src/vk/buffer.cpp
     src/vk/descriptor-set.cpp
     src/vk/gpu-image.cpp
@@ -53,6 +59,10 @@ add_library(lc1_engine STATIC
     src/vk/gpu-mesh.cpp
     src/vk/pipeline.cpp
     src/vk/renderer.cpp
+    src/vk/tone-mapping.cpp
+    src/vk/ray-query-shadows.cpp
+    src/vk/shadow-map-preview.cpp
+    src/vk/temporal-shadows.cpp
     src/vk/memory.cpp
 
     src/stb-image.cpp
@@ -72,7 +82,17 @@ target_link_libraries(lc1_engine PUBLIC
     spdlog::spdlog
     stb::stb
     tinyobjloader::tinyobjloader
+    TinyGLTF::TinyGLTF
+    KTX::ktx
 )
+target_link_libraries(lc1_engine PRIVATE mikktspace::mikktspace)
+
+# Conan's MinGW KTX package installs its ASTC encoder as a separate archive,
+# but KTX::ktx omits it from the link interface. Its package lib directory is
+# already propagated by that target; keep the companion archive after KTX.
+if(MINGW)
+    target_link_libraries(lc1_engine PRIVATE astcenc-avx2-static)
+endif()
 
 target_compile_definitions(lc1_engine PUBLIC
     GLM_FORCE_DEFAULT_ALIGNED_GENTYPES # Makes glm aligns with shader
@@ -96,7 +116,7 @@ if(MINGW)
 endif()
 
 # app: the game executable. Output name stays lc1 so the Makefile works.
-add_executable(lc1 app/main.cpp)
+add_executable(lc1 app/main.cpp app/pbr-showcase.cpp)
 target_link_libraries(lc1 PRIVATE lc1_engine)
 
 # A MinGW link pulls the compiler's own runtime in as DLLs -- libstdc++-6.dll,
@@ -131,13 +151,36 @@ if(BUILD_TESTING)
     add_executable(lc1_continent_tests tests/continent.cpp)
     target_link_libraries(lc1_continent_tests PRIVATE lc1_engine)
     target_compile_options(lc1_continent_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_executable(lc1_character_tests tests/character.cpp)
+    target_link_libraries(lc1_character_tests PRIVATE lc1_engine)
+    target_compile_options(lc1_character_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_executable(lc1_tangent_tests tests/tangent-space.cpp)
+    target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
+    target_compile_options(lc1_tangent_tests PRIVATE -Wall -Wextra -Wpedantic)
     if(MINGW)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
+        target_link_options(lc1_character_tests PRIVATE -static)
+        target_link_options(lc1_tangent_tests PRIVATE -static)
     endif()
     if(NOT CMAKE_CROSSCOMPILING)
+        # Explicit GPU integration target: needs a display/GPU and the Conan run env.
+        # Kept out of ordinary CPU-only CTest runs.
+        add_executable(lc1_temporal_shadow_tests EXCLUDE_FROM_ALL tests/temporal-shadows.cpp)
+        target_link_libraries(lc1_temporal_shadow_tests PRIVATE lc1_engine)
+        add_dependencies(lc1_temporal_shadow_tests shaders)
+        add_executable(lc1_shadow_path_tests EXCLUDE_FROM_ALL tests/shadow-paths.cpp)
+        target_link_libraries(lc1_shadow_path_tests PRIVATE lc1_engine)
+        target_compile_options(lc1_shadow_path_tests PRIVATE -Wall -Wextra -Wpedantic)
+        add_dependencies(lc1_shadow_path_tests shaders copy_assets)
+        add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp app/pbr-showcase.cpp)
+        target_link_libraries(lc1_pbr_tests PRIVATE lc1_engine)
+        target_compile_options(lc1_pbr_tests PRIVATE -Wall -Wextra -Wpedantic)
+        add_dependencies(lc1_pbr_tests shaders)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
         add_test(NAME continent COMMAND lc1_continent_tests)
+        add_test(NAME character COMMAND lc1_character_tests)
+        add_test(NAME tangent_space COMMAND lc1_tangent_tests)
     endif()
 endif()
 

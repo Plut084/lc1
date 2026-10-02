@@ -38,6 +38,9 @@ compiler.libcxx=libstdc++
 # Restated rather than inherited, so this profile is self-describing.
 *:shared=False
 spdlog/*:use_std_fmt=True
+# Only libktx is needed; KTX 4.4.2's CLI tools require C++17, while the
+# library supports the project's C++23 setting.
+ktx/*:tools=False
 # Not an option so much as the answer to "why is my machine unusable": with this on,
 # a Debug install also builds vulkan-validationlayers from source for Windows -- one
 # of the largest CMake projects there is, and pure cost here, because a cross-compiled

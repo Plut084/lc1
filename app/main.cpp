@@ -1,4 +1,5 @@
-#include "lc1/camera.hpp"
+#include "pbr-showcase.hpp"
+
 #include "lc1/game-clock.hpp"
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/continent.hpp"
@@ -6,7 +7,13 @@
 #include "lc1/game/player-controller.hpp"
 #include "lc1/image.hpp"
 #include "lc1/input.hpp"
-#include "lc1/lights/light.hpp"
+#include "lc1/model.hpp"
+#include "lc1/scene/camera.hpp"
+#include "lc1/scene/character.hpp"
+#include "lc1/scene/lights/directional-light.hpp"
+#include "lc1/scene/lights/light.hpp"
+#include "lc1/scene/lights/sphere-light.hpp"
+#include "lc1/scene/lights/spot-light.hpp"
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/device.hpp"
 #include "lc1/vk/frame_loop.hpp"
@@ -52,87 +59,39 @@ void interrupt_handler(int /*unused*/)
     interrupted = 1;
 }
 
-// The application's whole control scheme, as data. This is the only place a key meets an
-// action: rebinding, or giving one key a different meaning in another mode, is a row here
-// and touches no other file.
-//
-// One row per (context, action, key), so an action can have several rows -- W and Up both
-// mean MoveForward -- and one key can mean different things in different modes. Several
-// rows may share an action; the action is held if any of them is.
-//
-// InputContext::Ui has no rows on purpose and does not need any: an unbound context
-// resolves every action to false, which is exactly the gate for "a text field or ImGui
-// owns the keyboard now".
-constexpr std::array bindings{
-    // NOLINTBEGIN
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::W},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::Up},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::S},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::Down},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::A},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::Left},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::D},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::Right},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::Sprint, lc1::Key::LeftShift},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::ToggleCameraView, lc1::Key::M},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::ToggleCameraLock, lc1::Key::Y},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Space},
-    lc1::Binding{lc1::InputContext::Gameplay, lc1::Action::ToggleShadowPreview, lc1::Key::F3},
-    // NOLINTEND
-};
-
-// Mouse look and walking, from this frame's resolved actions.
-//
-// Reads actions, never keys: nothing below names W, so moving a control is an edit to
-// `bindings` and not to this function.
-void update_player(lc1::InputState const &input, lc1::InputRouter const &router,
-                                    bool cursor_captured, float delta_seconds,
-                                    lc1::Continent const &continent, lc1::PlayerController &player,
-                                    lc1::FpsCamera &camera)
+lc1::PlayerInput player_input(lc1::InputRouter const &router, glm::vec2 look_delta = {})
 {
-    if (router.active_context() != lc1::InputContext::Gameplay)
-        return;
-    if (cursor_captured) {
-        constexpr float look_sensitivity = 0.05F;
-        glm::vec2 const look = input.cursor_delta() * look_sensitivity;
-        camera.add_yaw(look.x);
-        camera.add_pitch(-look.y);
-    }
-    glm::vec3 direction{0.0F};
-    if (router.held(lc1::Action::MoveForward))
-        direction += camera.heading();
-    if (router.held(lc1::Action::MoveBackward))
-        direction -= camera.heading();
-    if (router.held(lc1::Action::MoveRight))
-        direction += camera.right();
-    if (router.held(lc1::Action::MoveLeft))
-        direction -= camera.right();
-    player.move(continent, {direction.x, direction.z}, delta_seconds,
-                router.held(lc1::Action::Sprint));
+    return {.movement = {static_cast<float>(router.held(lc1::Action::MoveRight)) -
+                             static_cast<float>(router.held(lc1::Action::MoveLeft)),
+                         static_cast<float>(router.held(lc1::Action::MoveForward)) -
+                             static_cast<float>(router.held(lc1::Action::MoveBackward))},
+            .look_delta = look_delta,
+            .running = router.held(lc1::Action::Sprint)};
+}
+
+// Called only in first-person mode. Mouse-look policy is independent of cursor capture.
+void update_player(lc1::Window const &window, lc1::InputRouter const &router, float delta_seconds,
+                   lc1::FirstPersonCharacterController const &controller,
+                   lc1::scene::Character &player, lc1::scene::FpsCamera &camera)
+{
+    if (window.focused() && router.active_context() == lc1::InputContext::Gameplay)
+        controller.update(delta_seconds, player_input(router, window.input().cursor_delta()),
+                          player);
     camera.set_position(player.eye_position());
+    camera.look_at(player.eye_position() + player.look_direction());
 }
 
 // One oblique view; the camera controller decides whether its center follows the player.
 void update_player2(lc1::Window const &window, lc1::InputRouter const &router, float delta_seconds,
-                    lc1::Continent const &continent, lc1::PlayerController &player,
-                    lc1::FpsCamera &camera, lc1::MapCameraController &camera_controller)
+                    lc1::Continent const &continent, lc1::scene::Character &player,
+                    lc1::ThirdPersonCharacterController const &controller,
+                    lc1::scene::FpsCamera &camera, lc1::MapCameraController &camera_controller)
 {
     auto const &input = window.input();
     bool const enabled = router.active_context() == lc1::InputContext::Gameplay && window.focused();
     camera_controller.apply(camera);
-    if (enabled) {
-        glm::vec3 direction{0.0F};
-        if (router.held(lc1::Action::MoveForward))
-            direction += camera.heading();
-        if (router.held(lc1::Action::MoveBackward))
-            direction -= camera.heading();
-        if (router.held(lc1::Action::MoveRight))
-            direction += camera.right();
-        if (router.held(lc1::Action::MoveLeft))
-            direction -= camera.right();
-        player.move(continent, {direction.x, direction.z}, delta_seconds,
-                    router.held(lc1::Action::Sprint));
-    }
+    if (enabled)
+        controller.update(delta_seconds, player_input(router), camera.heading(), player);
 
     camera_controller.update(
         camera, player.position(), continent.bounds(),
@@ -150,7 +109,7 @@ void update_player2(lc1::Window const &window, lc1::InputRouter const &router, f
 }
 
 // A visible, body-sized placeholder for the player now that the camera is above them.
-lc1::GpuMesh make_player_mesh(lc1::Device const &device)
+lc1::Model make_player_model()
 {
     std::vector<lc1::Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -158,25 +117,25 @@ lc1::GpuMesh make_player_mesh(lc1::Device const &device)
         // Separate vertices at hard edges so each box face has its own normal.
         std::array const points{
             glm::vec3{-radius, bottom, -radius}, glm::vec3{radius, bottom, -radius},
-            glm::vec3{radius, top, -radius}, glm::vec3{-radius, top, -radius},
-            glm::vec3{-radius, bottom, radius}, glm::vec3{radius, bottom, radius},
-            glm::vec3{radius, top, radius}, glm::vec3{-radius, top, radius}};
-        for (auto const face : std::array{
-                 std::array{4U, 5U, 6U, 7U}, std::array{1U, 0U, 3U, 2U},
-                 std::array{0U, 4U, 7U, 3U}, std::array{5U, 1U, 2U, 6U},
-                 std::array{3U, 7U, 6U, 2U}, std::array{0U, 1U, 5U, 4U}}) {
+            glm::vec3{radius, top, -radius},     glm::vec3{-radius, top, -radius},
+            glm::vec3{-radius, bottom, radius},  glm::vec3{radius, bottom, radius},
+            glm::vec3{radius, top, radius},      glm::vec3{-radius, top, radius}};
+        for (auto const face : std::array{std::array{4U, 5U, 6U, 7U}, std::array{1U, 0U, 3U, 2U},
+                                          std::array{0U, 4U, 7U, 3U}, std::array{5U, 1U, 2U, 6U},
+                                          std::array{3U, 7U, 6U, 2U}, std::array{0U, 1U, 5U, 4U}}) {
             auto const base = static_cast<std::uint32_t>(vertices.size());
-            auto const normal = glm::normalize(glm::cross(points[face[1]] - points[face[0]],
-                                                          points[face[2]] - points[face[0]]));
+            auto const normal = glm::normalize(
+                glm::cross(points[face[1]] - points[face[0]], points[face[2]] - points[face[0]]));
             for (auto const index : face)
-                vertices.push_back({points[index], {0.5F, 0.5F}, color, normal});
+                vertices.push_back({points[index], normal, color, {0.5F, 0.5F}});
             for (auto const index : {0U, 1U, 2U, 0U, 2U, 3U})
                 indices.push_back(base + index);
         }
     };
-    box(lc1::PlayerController::half_width, 0.0F, 1.2F, {0.06F, 0.25F, 0.8F});
-    box(0.22F, 1.2F, lc1::PlayerController::height, {0.95F, 0.65F, 0.15F});
-    return lc1::GpuMesh{device, std::span<lc1::Vertex const>{vertices}, indices};
+    constexpr lc1::scene::CharacterConfig config;
+    box(config.half_width, 0.0F, 1.2F, {0.06F, 0.25F, 0.8F});
+    box(0.22F, 1.2F, config.height, {0.95F, 0.65F, 0.15F});
+    return lc1::Model{std::move(vertices), std::move(indices)};
 }
 
 } // namespace
@@ -241,52 +200,83 @@ int main()
         // to use; first creation waits for a usable extent in the main loop.
         std::optional<lc1::Swapchain> swapchain;
 
-        // The renderer's pipeline enables sample shading, so it draws every
-        // sample of a pixel on its own; the sample count is the device's
-        // maximum.
-        auto const samples = device.max_sample_count();
+        // Keep 4x sample shading for material/BRDF evaluation. Shadow rays run
+        // separately in a single-sampled visibility pass.
+        auto const samples = std::min(device.max_sample_count(), vk::SampleCountFlagBits::e4);
         lc1::Renderer renderer{device, {surface_format.format}, samples};
+        lc1::OutputSettings output{.encoding =
+                                       surface_format.format == vk::Format::eR8G8B8A8Unorm ||
+                                               surface_format.format == vk::Format::eB8G8R8A8Unorm
+                                           ? lc1::OutputEncoding::Srgb
+                                           : lc1::OutputEncoding::Linear};
         char const *const configured_root = std::getenv("LC1_ASSET_ROOT");
         auto const asset_root = std::filesystem::path{configured_root ? configured_root : "assets"};
         lc1::GpuTexture const white{
             device, lc1::Image::load_from_file(asset_root / "textures/prototype-white.png")};
-        lc1::Continent const continent = lc1::Continent::make_prototype();
-        lc1::PlayerController player{continent};
+        auto const showcase_blocks = lc1::demo::PbrShowcase::spawn_blocks();
+        lc1::Continent const continent = lc1::Continent::make_prototype(showcase_blocks);
         lc1::ContinentView const continent_view{device, renderer, white, continent};
-        lc1::GpuMesh const player_mesh = make_player_mesh(device);
+        lc1::demo::PbrShowcase showcase{device, renderer, continent.spawn()};
+        lc1::GpuMesh const player_mesh = make_player_model().gen_mesh(device);
         lc1::Material const player_material = renderer.make_material(white);
+        lc1::scene::Character player{continent,
+                                     {.transform = {.position = continent.spawn()},
+                                      .mesh = &player_mesh,
+                                      .material = &player_material}};
+        lc1::FirstPersonCharacterController const first_person_controller{continent};
+        lc1::ThirdPersonCharacterController const third_person_controller{continent};
         auto const terrain_draws = continent_view.draw_items();
         std::vector<lc1::DrawItem> draws{terrain_draws.begin(), terrain_draws.end()};
-        draws.push_back({.mesh = &player_mesh,
-                         .material = &player_material,
-                         .model = glm::translate(glm::mat4{1.0F}, player.position())});
+        auto const showcase_offset = draws.size();
+        draws.insert(draws.end(), showcase.draws().begin(), showcase.draws().end());
+        draws.push_back(player.draw_item());
 
         // Capacity follows the generated chunks. GPU resources die before their owners.
         auto const object_capacity = static_cast<std::uint32_t>(draws.size());
         lc1::FrameLoop<lc1::FrameResources> frame_loop{
             device, [&] { return renderer.make_frame_resources(object_capacity); }};
         lc1::Stopwatch stopwatch;
-        lc1::FpsCamera camera;
+        lc1::scene::FpsCamera camera;
         camera.set_zfar(800.0F);
 
-        lc1::DirectionalLight sun{.base = {.color = glm::vec3{0.5F, 1.0F, 1.0F}, .intensity = 1},
-                                  .direction = glm::normalize(glm::vec3{-1.0F, -1.0F, -1.0F})};
-        lc1::PointLight lamp{.base = {.color = glm::vec3{1.0F, 0.5F, 0.5F}, .intensity = 32},
-                             .position = glm::vec3{0.0F, 4.0F, 0.0F},
-                             .range = 0};
-        std::vector<lc1::Light> lights{
+        lc1::scene::DirectionalLight sun{
+            .base = {.color = glm::vec3{1.0F, 0.95F, 0.9F}, .intensity = 0.3F},
+            .direction = glm::normalize(glm::vec3{-1.0F, -1.0F, -1.0F})};
+        lc1::scene::SphereLight lamp{
+            .base = {.color = glm::vec3{1.0F, 0.5F, 0.5F}, .intensity = 128},
+            .position = continent.spawn() + glm::vec3{3.0F, 10.0F, 0.0F},
+            .radius = 1.0F,
+            .shadow_sample_count = 2};
+        lc1::scene::SpotLight spotlight{
+            .base = {.color = glm::vec3{0.5F, 0.5F, 1.0F}, .intensity = 64},
+            .position = continent.spawn() + glm::vec3{-3.0F, 10.0F, 0.0F},
+            .direction = glm::normalize(glm::vec3{1.0F, -1.0F, 0.0F}),
+            .inner_angle = glm::radians(15.0F),
+            .outer_angle = glm::radians(30.0F)};
+        std::vector<lc1::scene::Light> lights{
             to_light(sun),
             to_light(lamp),
+            to_light(spotlight),
         };
+        // Keep the player's flashlight last; the update below follows the player.
+        lights.insert(lights.end() - 1, showcase.lights().begin(), showcase.lights().end());
+        std::vector<lc1::scene::Light> active_lights = lights;
+        constexpr std::array lighting_names{"全部",   "方向光", "点光",
+                                            "聚光灯", "球形光", "仅发光材质"};
+        std::size_t lighting_mode = 0;
+        bool showcase_animated = true;
+        float showcase_time = 0.0F;
 
         lc1::MapCameraController camera_controller{player.position()};
         bool oblique_view = true;
-        bool preview_shadow = false;
-        glm::vec3 first_person_forward{0.0F, 0.0F, -1.0F};
-        lc1::InputRouter router{bindings, lc1::InputContext::Gameplay};
-        update_player2(window, router, 0.0F, continent, player, camera, camera_controller);
+        glm::vec2 first_person_angles{0.0F};
+        lc1::InputRouter router{lc1::default_bindings(), lc1::InputContext::Gameplay};
+        update_player2(window, router, 0.0F, continent, player, third_person_controller, camera,
+                       camera_controller);
         spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
-                     "recenter, M: first-person/oblique view, F3: shadow map, Esc: quit");
+                     "recenter, M: first-person/oblique view, Esc: quit");
+        spdlog::info("[showcase] material exhibits beside the spawn road; F4: lighting, "
+                     "F5: pause motion, PageUp/PageDown: exposure");
         spdlog::info(
             "[world] {} regions, {} locations, {} roads, {} terrain chunks; fixed oblique view",
             continent.regions().size(), continent.locations().size(), continent.roads().size(),
@@ -300,10 +290,14 @@ int main()
             auto const *region = continent.region_at(position);
             auto const *place = continent.location_at(position);
             auto const *road = continent.road_at(position);
-            auto const title = std::format("lc1 | {} | {}", region->name,
-                                           place  ? place->name
-                                           : road ? road->name
-                                                  : "野外");
+            auto const local = player.position() - continent.spawn();
+            bool const in_showcase = std::abs(local.x) < 24 && std::abs(local.z) < 23;
+            auto const title = std::format("lc1 | {} | {} | 灯光: {} | 曝光: {:.2f}", region->name,
+                                           in_showcase ? "材质展示区"
+                                           : place     ? place->name
+                                           : road      ? road->name
+                                                       : "野外",
+                                           lighting_names[lighting_mode], output.exposure);
             if (title != current_title) {
                 window.set_title(title);
                 spdlog::info("[world] {}", title);
@@ -316,7 +310,8 @@ int main()
         std::function const record = [&](vk::raii::CommandBuffer const &command_buffer,
                                          lc1::FrameResources &resources,
                                          lc1::RenderTarget const &target) {
-            renderer.record(command_buffer, resources, target, camera, lights, draws, player.position(), preview_shadow);
+            renderer.record(command_buffer, resources, target, camera, active_lights, draws,
+                            output);
         };
 
         bool recreate_requested = false;
@@ -382,35 +377,61 @@ int main()
                 float const delta_seconds = stopwatch.tick();
                 // spdlog::info("[Main] fps: {}", stopwatch.fps());
 
-                if (window.focused() && router.pressed(lc1::Action::ToggleShadowPreview)) {
-                    preview_shadow = !preview_shadow;
-                    spdlog::info("[shadow] preview {}", preview_shadow ? "on" : "off");
+                if (window.focused()) {
+                    if (router.pressed(lc1::Action::CycleLighting))
+                        lighting_mode = (lighting_mode + 1) % lighting_names.size();
+                    if (router.pressed(lc1::Action::ToggleShowcaseMotion))
+                        showcase_animated = !showcase_animated;
+                    float const exposure_steps =
+                        static_cast<float>(router.pressed(lc1::Action::IncreaseExposure)) -
+                        static_cast<float>(router.pressed(lc1::Action::DecreaseExposure));
+                    output.exposure = std::clamp(output.exposure * std::exp2(exposure_steps * 0.5F),
+                                                 0.03125F, 16.0F);
                 }
+                if (showcase_animated)
+                    showcase_time += std::clamp(delta_seconds, 0.0F, 0.1F);
+                showcase.update(showcase_time);
+                std::copy(showcase.draws().begin(), showcase.draws().end(),
+                          draws.begin() + showcase_offset);
+
                 if (window.focused() && router.pressed(lc1::Action::ToggleCameraView)) {
                     if (!oblique_view)
-                        first_person_forward = camera.forward();
+                        first_person_angles = {player.body_yaw() + player.look_yaw(),
+                                               player.look_pitch()};
                     oblique_view = !oblique_view;
                     window.set_cursor_captured(!oblique_view);
                     if (oblique_view) {
+                        player.set_look_angles(0.0F, 0.0F);
                         // Preserve zoom and the Y lock state when returning to the player.
                         camera_controller.update(camera, player.position(), continent.bounds(),
                                                  {.recenter = true}, 0.0F);
                     }
                     else {
+                        player.set_body_yaw(first_person_angles.x);
+                        player.set_look_angles(0.0F, first_person_angles.y);
                         camera.set_position(player.eye_position());
-                        camera.look_at(player.eye_position() + first_person_forward);
+                        camera.look_at(player.eye_position() + player.look_direction());
                     }
                     spdlog::info("[camera] {}", oblique_view ? "update_player2: oblique"
-                                                            : "update_player: first-person");
+                                                             : "update_player: first-person");
                 }
                 if (oblique_view)
-                    update_player2(window, router, delta_seconds, continent, player, camera,
-                                   camera_controller);
-                else if (window.focused())
-                    update_player(window.input(), router, window.cursor_captured(), delta_seconds,
-                                  continent, player, camera);
+                    update_player2(window, router, delta_seconds, continent, player,
+                                   third_person_controller, camera, camera_controller);
+                else
+                    update_player(window, router, delta_seconds, first_person_controller, player,
+                                  camera);
+                // Hold the light above ground and outside the player mesh, on the aiming side.
+                lights.back().position = player.position() + glm::vec3{0.0F, 1.3F, 0.0F} +
+                                         player.heading() * 0.5F + player.right() * 0.5F;
+                lights.back().direction = player.heading();
+                active_lights.clear();
+                for (auto const &light : lights)
+                    if (lighting_mode == 0 ||
+                        (lighting_mode <= 4 && light.type == lighting_mode - 1))
+                        active_lights.push_back(light);
                 update_place();
-                draws.back().model = glm::translate(glm::mat4{1.0F}, player.position());
+                draws.back() = player.draw_item();
 
                 auto const result = frame_loop.draw_frame(*swapchain, record);
                 switch (result) {

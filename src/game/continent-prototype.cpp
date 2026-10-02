@@ -6,7 +6,7 @@
 
 namespace lc1 {
 
-Continent Continent::make_prototype()
+Continent Continent::make_prototype(std::span<ContinentBlock const> spawn_blocks)
 {
     constexpr RegionId plain{1}, forest{2}, mountain{3}, wasteland{4}, sea{5};
     constexpr LocationId city{1}, village{2}, fortress{3}, port{4}, ruins{5}, camp{6};
@@ -194,6 +194,9 @@ Continent Continent::make_prototype()
                   ContinentSurface::Foliage);
         }
     }
+    for (auto const &extra : spawn_blocks)
+        data.blocks.push_back(
+            {extra.min + data.spawn, extra.max + data.spawn, extra.surface, extra.solid});
     return Continent{std::move(data)};
 }
 

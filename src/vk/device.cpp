@@ -28,7 +28,8 @@ std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice co
 {
     auto const families = device.getQueueFamilyProperties();
     for (uint32_t i = 0; i < static_cast<uint32_t>(families.size()); ++i) {
-        if (!(families[i].queueFlags & vk::QueueFlagBits::eGraphics))
+        if (!(families[i].queueFlags & vk::QueueFlagBits::eGraphics) ||
+            !(families[i].queueFlags & vk::QueueFlagBits::eCompute))
             continue;
         if (device.getSurfaceSupportKHR(i, surface) == vk::False) {
             continue;
@@ -40,8 +41,10 @@ std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice co
 
 using FeatureChain =
     vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
-                       vk::PhysicalDeviceVulkan13Features,
-                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>;
+                       vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
+                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                       vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+                       vk::PhysicalDeviceRayQueryFeaturesKHR>;
 
 // One declaration of the enabled features, used for both selection and creation.
 FeatureChain required_features()
@@ -49,17 +52,24 @@ FeatureChain required_features()
     return FeatureChain{
         {.features = {.sampleRateShading = vk::True, .samplerAnisotropy = vk::True}},
         {.shaderDrawParameters = vk::True},
+        {.bufferDeviceAddress = vk::True},
         {.synchronization2 = vk::True, .dynamicRendering = vk::True},
         {.extendedDynamicState = vk::True},
+        {.accelerationStructure = vk::True},
+        {.rayQuery = vk::True},
     };
 }
 
 bool supports_required_features(vk::raii::PhysicalDevice const &physical_device,
                                 FeatureChain const &required)
 {
-    auto const available = physical_device.getFeatures2<
-        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
-        vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    auto const available =
+        physical_device
+            .getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
+                          vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
+                          vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                          vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+                          vk::PhysicalDeviceRayQueryFeaturesKHR>();
     auto const &have = available.get<vk::PhysicalDeviceFeatures2>().features;
     auto const &want = required.get<vk::PhysicalDeviceFeatures2>().features;
     auto const &have11 = available.get<vk::PhysicalDeviceVulkan11Features>();
@@ -69,7 +79,11 @@ bool supports_required_features(vk::raii::PhysicalDevice const &physical_device,
     auto const &have_dynamic = available.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     auto const &want_dynamic = required.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     // When adding a requested feature, add its support comparison here too.
-    return have.sampleRateShading >= want.sampleRateShading &&
+    return available.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
+           available.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>()
+               .accelerationStructure &&
+           available.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery &&
+           have.sampleRateShading >= want.sampleRateShading &&
            have.samplerAnisotropy >= want.samplerAnisotropy &&
            have11.shaderDrawParameters >= want11.shaderDrawParameters &&
            have13.synchronization2 >= want13.synchronization2 &&
@@ -151,7 +165,8 @@ PickedDevice pick_physical_device(vk::raii::Instance const &instance, vk::Surfac
             fail("LC1_DEVICE=\"{}\" matched no usable device", want);
         }
         fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
-             "all requested extensions/features and a graphics+present queue family)");
+             "ray query, acceleration structures, buffer device address, all requested features, "
+             "and a graphics+compute+present queue family)");
     }
     return best;
 }
@@ -163,9 +178,18 @@ Device::Device(Instance const &instance, Surface const &surface,
     : physical_{nullptr}, device_{nullptr}, alloc_{nullptr}, queue_{nullptr}
 {
     try {
+        std::vector<char const *> extensions{required_extensions.begin(),
+                                             required_extensions.end()};
+        for (auto const *extension :
+             {vk::KHRAccelerationStructureExtensionName, vk::KHRRayQueryExtensionName,
+              vk::KHRDeferredHostOperationsExtensionName})
+            if (std::ranges::none_of(extensions, [extension](auto const *existing) {
+                    return std::strcmp(existing, extension) == 0;
+                }))
+                extensions.push_back(extension);
         auto feature_chain = required_features();
-        auto picked = pick_physical_device(instance.raii(), *surface.raii(), required_extensions,
-                                           feature_chain);
+        auto picked =
+            pick_physical_device(instance.raii(), *surface.raii(), extensions, feature_chain);
         physical_ = std::move(picked.device);
         queue_family_ = picked.queue_family;
 
@@ -198,7 +222,7 @@ Device::Device(Instance const &instance, Surface const &surface,
         vk::DeviceCreateInfo info;
         info.setPNext(&feature_chain.get())
             .setQueueCreateInfos(queue_info)
-            .setPEnabledExtensionNames(required_extensions);
+            .setPEnabledExtensionNames(extensions);
         // We don't set validation layers, as not required (and not necessary).
 
         device_ = physical_.createDevice(info);
@@ -208,6 +232,7 @@ Device::Device(Instance const &instance, Surface const &surface,
         // included, which is what makes VMA work under VK_NO_PROTOTYPES.
         // vulkanApiVersion must be set, or VMA assumes 1.0.
         vma::AllocatorCreateInfo const alloc_info{
+            .flags = vma::AllocatorCreateFlagBits::eBufferDeviceAddress,
             .physicalDevice = *physical_,
             .vulkanApiVersion = vk::ApiVersion14,
         };

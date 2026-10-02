@@ -57,7 +57,7 @@ BUILD_DIR := build/$(PLATFORM)/$(BUILD_TYPE)
 WINE_PREFIX ?= $(CURDIR)/build/wine-prefix
 WINE_ENV    := WINEPREFIX=$(WINE_PREFIX) WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
 
-.PHONY: all deps configure build run clean \
+.PHONY: all deps configure build run run-pbr clean \
         build-debug run-debug install-debug-deps install-debug-deps-windows
 
 all: build
@@ -104,6 +104,9 @@ run: build
 	*) \
 		echo "run: unknown platform $(PLATFORM)"; exit 1 ;; \
 	esac
+
+# Compatibility alias: the showcase now lives in the main game scene.
+run-pbr: run
 
 clean:
 	rm -rf build/

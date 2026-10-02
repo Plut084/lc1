@@ -232,7 +232,10 @@ enum class Action : std::uint16_t {
     MoveRight,
     Sprint,
     ToggleCameraView,
-    ToggleShadowPreview,
+    CycleLighting,
+    ToggleShowcaseMotion,
+    IncreaseExposure,
+    DecreaseExposure,
     ToggleCameraLock,
     RecenterCamera,
     Count,
@@ -261,6 +264,42 @@ struct Binding {
     Key key;
 };
 
+// The application's whole control scheme, as data. This is the only place a key meets an
+// action: rebinding, or giving one key a different meaning in another mode, is a row here
+// and touches no other file.
+//
+// One row per (context, action, key), so an action can have several rows -- W and Up both
+// mean MoveForward -- and one key can mean different things in different modes. Several
+// rows may share an action; the action is held if any of them is.
+//
+// InputContext::Ui has no rows on purpose and does not need any: an unbound context
+// resolves every action to false, which is exactly the gate for "a text field or ImGui
+// owns the keyboard now".
+constexpr std::vector<Binding> default_bindings()
+{
+    std::vector<lc1::Binding> bindings{
+        // NOLINTBEGIN
+        {lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::W},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::Up},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::S},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::Down},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::A},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::Left},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::D},
+        {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::Right},
+        {lc1::InputContext::Gameplay, lc1::Action::Sprint, lc1::Key::LeftShift},
+        {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraView, lc1::Key::M},
+        {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraLock, lc1::Key::Y},
+        {lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Space},
+        {lc1::InputContext::Gameplay, lc1::Action::CycleLighting, lc1::Key::F4},
+        {lc1::InputContext::Gameplay, lc1::Action::ToggleShowcaseMotion, lc1::Key::F5},
+        {lc1::InputContext::Gameplay, lc1::Action::IncreaseExposure, lc1::Key::PageUp},
+        {lc1::InputContext::Gameplay, lc1::Action::DecreaseExposure, lc1::Key::PageDown},
+        // NOLINTEND
+    };
+    return bindings;
+}
+
 // Resolves device state into action state through the active context's bindings.
 //
 // Bindings are data. This class never knows that W means "forward"; it knows only what the
@@ -288,15 +327,17 @@ class InputRouter {
     // produce it.
     void update(InputState const &input);
 
-    // Action state, combined across every binding the active context gives the action:
-    //   held     -- at least one bound key is down
-    //   pressed  -- at least one bound key went down this frame. Reported even when the
-    //               action was already held through another binding, so a tap that begins
-    //               and ends inside one frame is never lost.
-    //   released -- no bound key is down and one came up this frame. This one is masked by
-    //               held: "released" means the action ended, not merely that some key bound
-    //               to it did. Otherwise letting go of one of two keys would tell a consumer
-    //               that the drag it started had finished while it was still running.
+    // Combine all keys bound to this action in the active context:
+    //   held     -- at least one key is currently down.
+    //   pressed  -- at least one key was pressed this frame.
+    //   released -- at least one key was released this frame, and all are now up.
+    //
+    // Example: if W and Up both trigger this action, pressing Up while holding W
+    // reports pressed. Releasing W while holding Up does not report released;
+    // releasing the last held key does.
+    //
+    // A quick press and release within one frame reports both pressed and released
+    // with held = false, provided no other bound key remains down.
     bool held(Action action) const { return flag(held_, action); }
     bool pressed(Action action) const { return flag(pressed_, action); }
     bool released(Action action) const { return flag(released_, action); }

@@ -1,6 +1,6 @@
 #include "lc1/game/map-camera-controller.hpp"
 
-#include "lc1/camera.hpp"
+#include "lc1/scene/camera.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,7 +39,7 @@ MapCameraController::MapCameraController(glm::vec3 player_position)
 {
 }
 
-void MapCameraController::apply(FpsCamera &camera) const
+void MapCameraController::apply(scene::FpsCamera &camera) const
 {
     // Frame the target at the requested span using distance, with a fixed lens and angle.
     float const distance = view_height_ / (2.0F * std::tan(glm::radians(fov_y) * 0.5F));
@@ -48,8 +48,9 @@ void MapCameraController::apply(FpsCamera &camera) const
     camera.set_fov_y(fov_y);
 }
 
-void MapCameraController::update(FpsCamera &camera, glm::vec3 player_position, GroundBounds bounds,
-                                 MapCameraInput const &input, float delta_seconds)
+void MapCameraController::update(scene::FpsCamera &camera, glm::vec3 player_position,
+                                 GroundBounds bounds, MapCameraInput const &input,
+                                 float delta_seconds)
 {
     if (input.enabled) {
         if (input.toggle_lock)

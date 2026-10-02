@@ -1,10 +1,11 @@
 #pragma once
 
-#include "lc1/lights/light-base.hpp"
+#include "lc1/scene/lights/light-base.hpp"
+#include "lc1/scene/lights/light.hpp"
 
 #include <glm/glm.hpp>
 
-namespace lc1 {
+namespace lc1::scene {
 
 // Scene data only; independent of GPU buffer layouts and Vulkan resources.
 struct DirectionalLight {
@@ -14,4 +15,12 @@ struct DirectionalLight {
     // Linear RGB tint, nonnegative; white preserves the intensity's photometric value.
 };
 
-} // namespace lc1
+inline Light to_light(DirectionalLight const &light)
+{
+    return {.type = 0,
+            .direction = light.direction,
+            .color = light.base.color,
+            .intensity = light.base.intensity};
+}
+
+} // namespace lc1::scene

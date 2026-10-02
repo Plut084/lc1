@@ -4,7 +4,9 @@
 
 namespace lc1 {
 
+namespace scene {
 class FpsCamera;
+} // namespace scene
 
 struct MapCameraInput {
     bool enabled = true;
@@ -21,9 +23,9 @@ class MapCameraController {
   public:
     explicit MapCameraController(glm::vec3 player_position);
 
-    void update(FpsCamera &camera, glm::vec3 player_position, GroundBounds bounds,
+    void update(scene::FpsCamera &camera, glm::vec3 player_position, GroundBounds bounds,
                 MapCameraInput const &input, float delta_seconds);
-    void apply(FpsCamera &camera) const;
+    void apply(scene::FpsCamera &camera) const;
 
     bool locked() const { return locked_; }
     glm::vec3 center() const { return center_; }

@@ -249,6 +249,11 @@ disagreement. The one thing it adds that is not about the compiler is
 standard here**, plus two project additions: `snake_case` variables, and no naming prefixes. The table
 below is what those resolve to in `include/` and `src/`, which already follows it.
 
+**Use the repository's [`.clang-format`](.clang-format) for code formatting.** Run
+`clang-format --style=file -i <changed .hpp/.cpp files>` on new or modified C++ files before
+finishing a change. The checked-in configuration is authoritative; do not substitute a built-in
+style or manually impose different formatting.
+
 | element | style | example |
 |---|---|---|
 | class / struct / enum / exception | `PascalCase` | `FrameLoop`, `SwapchainImage`, `FrameResult`, `Error` |
@@ -521,7 +526,7 @@ continent view's chunk draw count),
 and exceeding it fails explicitly. `Buffer::upload` copies and performs the necessary VMA flush;
 the caller's fence wait makes overwriting safe. Descriptors are written at resource creation.
 
-`RenderObject` holds CPU transform data and non-owning mesh/material pointers; `draw_item()` extracts
+`scene::Object` holds CPU transform data and non-owning mesh/material pointers; `draw_item()` extracts
 its model matrix. `Transform` defaults to zero translation/rotation and unit scale. The prototype draws
 the chunks produced by `ContinentView`, sharing one material. Frame capacity follows the generated
 draw count. `Vertex::color` defaults to white for existing textured meshes; procedural world geometry
@@ -529,6 +534,22 @@ uses per-vertex colors and a white texture. The renderer owns the pipeline,
 material pool and sampler. `RenderTarget` remains the shared non-owning output contract.
 `main()` creates the renderer before the frame loop and waits for the device on normal and exceptional
 loop exits before destroying any resources used by submitted draws.
+
+`scene::Character` owns its `Object`, whose transform is the sole world pose. Its origin is at
+the feet; ground characters remain upright and unscaled so collision dimensions agree with the
+world pose. Body yaw is right-handed about +Y (zero faces -Z); look yaw/pitch are relative to the
+body. `move` accepts horizontal world-space displacement in metres and resolves collision;
+`walk` converts a direction and bounded frame time into displacement. Neither changes body facing.
+The character borrows its mesh/material and owns no camera, window or input router. Player
+controllers borrow the continent and accept resolved `PlayerInput`; the application gates input
+using control mode, UI context and focus, independently of cursor capture.
+
+Import correction belongs to `Model`. Both OBJ loading and procedural construction accept a
+`scene::Transform` correction, baked once into CPU vertices before `gen_mesh` uploads them.
+Normals use the inverse transpose and baked reflections reverse triangle winding. Instances share
+the resulting GPU mesh; `Character` and `Object` never reapply the correction. This is the static
+model path, not skeletal animation. Future skeleton/animation import must use consistent coordinate
+conversion for joints and inverse bind matrices as well.
 
 **Resource ownership is scene-scoped and exclusive.** `ResourceManager::load<T>` stores resources
 in type-indexed, relative-ID-keyed maps of `std::unique_ptr<Resource>`. T must derive from Resource
@@ -565,7 +586,10 @@ the app cannot reach private headers.
 | `vk/device.*` | physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
 | `vk/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
 | `vk/frame_loop.hpp`, `vk/frame-loop-impl.hpp` | per-frame sync, templated per-slot resources, WSI state machine |
-| `vk/renderer.*` | the pipeline, material descriptor pool and sampler; records using caller-owned resources |
+| `vk/renderer.*` | main material rendering and orchestration; normal record uses ray-query shadows, a separate entry point renders the optional legacy depth-map diagnostic |
+| `vk/ray-query-shadows.*`, `vk/temporal-shadows.cpp` | ray-query visibility, TLAS updates, temporal history and spatial filtering |
+| `vk/shadow-map-preview.*` | lazy directional depth-map preview resources and explicit ShadowMapRegion coverage; no normal lighting |
+| `vk/render-data.hpp` | shared camera, light and object shader upload layouts |
 | `vk/frame-resources.hpp` | camera and per-draw UBOs/sets, pool and attachments; owned by each frame slot |
 | `vk/render-target.hpp` | the borrowed single-sampled output view and extent shared by recording and presentation |
 | `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
@@ -578,10 +602,14 @@ the app cannot reach private headers.
 | `vk/mesh.*`, `vk/vertex.*` | vertex + index buffers uploaded through staging; the vertex layout; `DrawItem` |
 | `vk/one-time-submit.hpp` | record, submit and wait for one-off setup work (uploads) |
 | `vk/common.*` | hpp configuration macros, `VK_CHECK`, `transition_image_layout`, `read_file`, string helpers |
-| `camera.hpp` | `FpsCamera`: yaw/pitch view with perspective projection |
+| `scene/camera.hpp` | `scene::FpsCamera`: yaw/pitch view with perspective projection |
+| `model.hpp` | CPU mesh data and model-level import correction, baked before upload |
+| `scene/transform.hpp`, `scene/object.hpp` | transforms and drawable instances borrowing mesh/material resources |
+| `scene/character.*` | character world pose, relative look, body configuration, eye position and ground collision movement |
+| `scene/lights/*.hpp` | `scene` light types and the unified GPU upload record |
 | `game/continent.*` | region IDs on terrain tiles, location footprints, road graph and spatial queries, map validation and swept ground movement |
 | `game/continent-prototype.cpp` | sample five-region, six-location world and connecting roads, with shared render/collision blocks |
-| `game/player-controller.*` | ground-level player position, speed, body dimensions and eye position |
+| `game/player-controller.*` | first-person and oblique-view player control, consuming resolved input and borrowing the world/character |
 | `game/map-camera-controller.*` | oblique camera center, follow lock, zoom, temporary recenter and bounded edge pan |
 | `game/continent-view.*` | static 64-metre chunk meshes and their shared material; all chunks currently resident |
 | `game-clock.*` | `Stopwatch`: frame delta, total time, fps |
@@ -688,7 +716,8 @@ has to be caught into one that cannot be written — `images_.clear()` frees its
 ## Validation discipline
 
 `ctest --test-dir build/linux-x86_64/Debug --output-on-failure` runs CPU tests for continent data,
-continuous collision, wall sliding, body clearance, boundaries, movement speed and city traversal.
+continuous collision, wall sliding, body clearance, boundaries, movement speed, city traversal,
+character pose/controller behavior and static model correction (including reflected winding).
 They create no window or Vulkan device. Runtime rendering still needs validation-layer smoke testing.
 
 Validation **and synchronization validation** run by default in debug builds. This is the safety net for
@@ -731,7 +760,10 @@ Match them up by the argument shapes, not by the spelling.
 Selection checks every extension passed to the Device constructor, not just `VK_KHR_swapchain`.
 `required_features()` builds the feature chain used both for selection and device creation:
 `sampleRateShading`, `samplerAnisotropy`, `shaderDrawParameters`, `synchronization2`,
-`dynamicRendering`, and `extendedDynamicState`. When adding an enabled feature, also add its
+`dynamicRendering`, `extendedDynamicState`, `bufferDeviceAddress`, `accelerationStructure`,
+and `rayQuery`. The device also requires `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`,
+and `VK_KHR_deferred_host_operations`, and the graphics/present family must support compute
+for acceleration structure builds. VMA enables its buffer-device-address allocator flag. When adding an enabled feature, also add its
 support comparison in `supports_required_features`; unsupported candidates must be rejected before
 ranking, so a usable lower-ranked GPU can still be selected. Surface presentation support is checked
 against the caller's Surface, which Device does not own or retain.
@@ -770,3 +802,102 @@ the pick on multi-GPU machines.
   code for compositors that do report `0x0`.
 - Expect stderr noise from the loader about `/usr/libvulkan_dzn.so` returning -9 on some runs. That is
   the D3D-on-Vulkan translation layer failing to load. **Not our bug.**
+
+
+## Ray-query shadows
+
+Lighting uses fragment ray queries against mesh-owned BLASes and one TLAS per frame slot.
+Draws default to opaque, two-sided shadow casters, including off-camera geometry; printed labels
+opt out through `DrawItem::casts_shadow` while remaining visible. Both shadow paths honor this flag.
+Instance transforms use Vulkan's row-major 3x4 layout; GLM matrices must be transposed when copied.
+Reuse each slot's TLAS when its instances are unchanged; rebuild after the slot fence otherwise.
+Build scratch and instance inputs also belong to that slot. The application calls only ordinary
+`record`, accepting camera, lights and draws with no preview flag or shadow center.
+The separate `Renderer::record_shadow_map_preview` diagnostic remains available to explicit callers
+such as GPU tests, which supply `ShadowMapRegion`; the application has no preview toggle.
+The legacy pass and per-slot map/descriptors are created lazily. It binds a separate set-0 layout
+with only bindings 2/3; the normal layout retains bindings 0/1/4-10. Bind sets explicitly across
+these incompatible pipeline layouts. Previewing runs no TLAS update, ray queries, temporal resolve
+or main-pass depth/MSAA allocation. The device/mesh ray-query requirements still apply.
+Normal rendering after a preview invalidates history before accumulating again.
+
+MSAA is capped at 4x with full sample shading for material/BRDF evaluation. A separate
+single-sampled raster pass traces shadows and stores 8-bit visibility for each of the ten lights
+in an RGBA32Uint image, alongside world position/normal in RGBA32Sfloat. A fullscreen temporal
+resolve reprojects history, rejects disocclusion/moving receivers and clamps against the current
+receiver neighborhood. A 5x5 spatial bilateral pass filters only nonzero-radius sphere lights,
+using surface identity, normals, tangent-plane distance and history-dependent visibility weights.
+It reuses the raw visibility image for output; never feed spatial blur back into temporal history.
+The MSAA pass fetches the spatial output by pixel coordinate, so ray-query
+work is not multiplied by the sample count. The ray and lit entries use early depth testing.
+Local lights use unbounded inverse-square attenuation; do not add a range/cutoff parameter.
+SphereLight uses a receiver-facing disk approximation with pixel/light/frame-seeded random samples,
+defaulting to one shadow ray per frame and up to 32 history frames; radius zero takes the point-light
+path. History belongs to the Renderer-owned `RayQueryShadows` and is shared across consecutive
+submissions: resizing it must wait for all GPU work, not just the current slot fence. Moving receivers reject history; this does
+not yet implement object motion vectors. The GPU-only lc1_temporal_shadow_tests target checks
+the actual temporal shader and is excluded from default CPU CTest. See `docs/ray-query-shadows.md`
+for the approximation, edge behavior and performance limitations.
+
+`lc1_shadow_path_tests` is another explicit GPU target (excluded from default CPU CTest). It checks
+fresh preview/normal slots, resource isolation, switching in both directions, resize, mirrored draws,
+and actual offscreen pixel readback with validation and synchronization validation enabled.
+
+## PBR direct lighting and HDR
+
+Normal rendering now uses metallic-roughness GGX/Smith/Schlick direct lighting. There is no fixed
+ambient term or IBL yet. `scene::PbrParameters` contains linear factors; CPU `PbrMaterial` references
+images, while `MaterialInfo` supplies already-uploaded GPU textures to `Renderer::make_material`.
+GPU `Material` owns an immutable 64-byte UBO and set 2 through `DescriptorSet`. Set 2 bindings are
+0 base color, 1 factors UBO, 2 metallic-roughness, 3 normal, 4 occlusion, 5 emissive. All texture
+descriptors are initialized; missing base/MR/emissive maps use white. Normal maps are linear and use UV0 MikkTSpace tangents; only AO remains deferred and rejects
+nonempty textures. Color/emissive are sRGB; MR is linear (G roughness, B metal).
+The old texture-only factory explicitly produces a nonmetal with roughness 0.8. At most 64 materials
+may be live; Renderer is immovable and must outlive materials, including their capacity counters.
+
+Each frame slot owns an RGBA16F HDR resolve image, optional HDR MSAA color, and a lazily allocated
+tone-map set. Sample count is capped at 4x and checked against the actual HDR/depth formats.
+Resolve happens in linear HDR before exposure/Reinhard tone mapping. sRGB attachments encode
+automatically; UNORM display output explicitly requests `OutputEncoding::Srgb`. The default writes
+linear values. The depth-preview diagnostic keeps an independent output path. See `docs/lighting.md` and `docs/pbr.md`.
+
+`app/main.cpp` adds a walkable PBR exhibit area on both sides of the spawn road. Its shared meshes,
+procedural textures, materials, labels, lights and animated transforms live in `app/pbr-showcase.*`.
+`Continent::make_prototype` optionally accepts spawn-relative blocks, used for both rendering and
+static collision; keep the central road open. Run with `make run`; `make run-pbr` is a compatibility
+alias for that same entry point. The separate demo executable has been removed at the user's request.
+Existing camera controls remain: wheel zoom, M views, Y unlock, Space recenter. Gameplay bindings add
+F4 cycling light types (including emission-only), F5 motion pause and PageUp/PageDown exposure.
+`lc1_pbr_tests` remains an explicit GPU target outside CPU CTest. It covers numerical BRDF, textures,
+HDR, output encoding, MSAA, resize, pool lifetime and the main scene's exhibit collision and rendering
+under validation and synchronization validation, saving `artifacts/pbr-showcase.ppm` and
+`artifacts/pbr-emission.ppm` relative to the build-tree working directory.
+
+### Tangent-space normal mapping
+
+`Vertex::tangent` stores object-space xyz and +/-1 bitangent handedness; zero means absent.
+Conan's `mikktspace/cci.20200325` generates tangents through `generate_tangents`, reindexing per-corner
+results to preserve mirrored UV seams. Invalid geometry/UVs fail without changing the input.
+`Model::generate_tangents()` processes its current CPU geometry before GPU upload. For maps baked
+against an existing basis, generate/provide tangents before nonuniform import correction; that
+correction transforms tangents with its linear matrix, orthogonalizes them and flips w on reflection.
+
+`MaterialData.flags.x` bit 0 enables normal mapping; absent maps and scale zero skip sampling.
+Mapped materials require a mesh with valid tangents. Vertex shading transforms T with the model
+matrix and N with its inverse transpose; fragment shading orthogonalizes T and reconstructs B
+using tangent.w and the model determinant's sign. Normal textures use +Y bitangents. Ray-query bias,
+history and filtering keep the unperturbed surface normal; direct light also respects that surface's
+front hemisphere. No tangent generation or extra shadow rays run per frame.
+
+`lc1_tangent_tests` belongs to CPU CTest. PBR GPU tests cover missing/flat maps, scale, mirrored UVs,
+nonuniform/reflected instances and a world-normal reference. The main exhibit includes three matching
+NORMAL OFF/x1/x2 panels and mapped transformed objects, using the same existing lights.
+
+The MinGW KTX 4.4.2 Conan package installs `libastcenc-avx2-static.a` separately but omits it from
+KTX::ktx's interface; CMake links that companion archive from the same Conan package on MINGW.
+TinyGLTF filename APIs take UTF-8 strings, so convert filesystem paths explicitly on Windows too.
+
+Normal-map diagnostics use a dedicated wave pattern. Regular transformed exhibits use subtle fine
+normal detail, not the strong diagnostic map. Printed label draws set `casts_shadow = false` to avoid
+duplicate glyph shadows. The flag is also available on `scene::Object`; caster membership changes
+invalidate temporal history, and the diagnostic depth pass skips non-casters just like the TLAS builder.

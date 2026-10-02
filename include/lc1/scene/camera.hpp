@@ -4,7 +4,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace lc1 {
+namespace lc1::scene {
 
 class FpsCamera {
   public:
@@ -111,4 +111,4 @@ class FpsCamera {
     glm::vec3 position_{};
 };
 
-} // namespace lc1
+} // namespace lc1::scene

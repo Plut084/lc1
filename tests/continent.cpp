@@ -1,7 +1,7 @@
 #include "lc1/game/continent.hpp"
-#include "lc1/camera.hpp"
 #include "lc1/game/map-camera-controller.hpp"
-#include "lc1/game/player-controller.hpp"
+#include "lc1/scene/character.hpp"
+#include "lc1/scene/camera.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -101,26 +101,26 @@ void collision_and_sliding()
 void player_and_city()
 {
     lc1::Continent const flat{flat_world()};
-    lc1::PlayerController straight{flat};
-    lc1::PlayerController diagonal{flat};
-    straight.move(flat, {1, 0}, 0.1F, false);
-    diagonal.move(flat, {1, 1}, 0.1F, false);
+    lc1::scene::Character straight{flat};
+    lc1::scene::Character diagonal{flat};
+    straight.walk(flat, {1, 0, 0}, 0.1F, false);
+    diagonal.walk(flat, {1, 0, 1}, 0.1F, false);
     check(near(glm::length(straight.position()), glm::length(diagonal.position())),
           "diagonal movement must not be faster");
     check(near(straight.position().y, 0) && near(straight.eye_position().y, 1.65F),
           "feet and camera remain at ground level");
-    lc1::PlayerController resumed{flat};
-    resumed.move(flat, {1, 0}, 10.0F, false);
+    lc1::scene::Character resumed{flat};
+    resumed.walk(flat, {1, 0, 0}, 10.0F, false);
     check(near(resumed.position().x, 0.45F), "long stalls do not teleport the player");
 
     lc1::Continent const city = lc1::Continent::make_prototype();
-    lc1::PlayerController player{city};
+    lc1::scene::Character player{city};
     for (int frame = 0; frame < 600; ++frame)
-        player.move(city, {0, -1}, 1.0F / 60.0F, false);
+        player.walk(city, {0, 0, -1}, 1.0F / 60.0F, false);
     check(player.position().z < -10.0F, "WASD walk crosses the actual city gate");
     check(near(player.eye_position().y, 1.65F), "entering city does not change camera height");
     for (int frame = 0; frame < 600; ++frame)
-        player.move(city, {0, 1}, 1.0F / 60.0F, false);
+        player.walk(city, {0, 0, 1}, 1.0F / 60.0F, false);
     check(near(player.position().z, city.spawn().z), "the gate also allows exiting the city");
     auto const wall = city.move({40, 0, 32}, {0, -100}, 0.3F, 1.8F);
     check(near(wall.z, 0.3F), "city wall blocks movement beside the gate");
@@ -128,15 +128,15 @@ void player_and_city()
     std::mt19937 random{29};
     std::uniform_real_distribution<float> direction{-1.0F, 1.0F};
     for (int step = 0; step < 4000; ++step) {
-        player.move(city, {direction(random), direction(random)}, 0.1F, true);
-        check(city.can_stand(player.position(), player.half_width, player.height),
+        player.walk(city, {direction(random), 0, direction(random)}, 0.1F, true);
+        check(city.can_stand(player.position(), player.config().half_width, player.config().height),
               "movement must preserve the nonpenetration invariant");
     }
 }
 
 void camera_projection()
 {
-    lc1::FpsCamera camera;
+    lc1::scene::FpsCamera camera;
     camera.set_position({0, 0, 10});
     camera.look_at({0, 0, 0});
     camera.set_zfar(200.0F);
@@ -158,7 +158,7 @@ void perspective_camera_zoom()
 {
     lc1::GroundBounds const bounds{{-100, -100}, {100, 100}};
     glm::vec3 const player{0, 0, 0};
-    lc1::FpsCamera camera;
+    lc1::scene::FpsCamera camera;
     camera.set_zfar(800.0F);
     lc1::MapCameraController controller{player};
     controller.apply(camera);
@@ -201,7 +201,7 @@ void camera_lock_and_edge_pan()
 {
     lc1::GroundBounds const bounds{{-100, -100}, {100, 100}};
     glm::vec3 player{0, 0, 0};
-    lc1::FpsCamera camera;
+    lc1::scene::FpsCamera camera;
     lc1::MapCameraController controller{player};
     auto same = [](glm::vec3 a, glm::vec3 b) { return glm::length(a - b) < 0.001F; };
     lc1::MapCameraInput edge{

@@ -5,25 +5,34 @@
 namespace lc1 {
 
 class Continent;
+namespace scene {
+class Character;
+}
 
-// One ground-level controller for countryside and cities. Camera placement is
-// derived from feet position, so looking up cannot turn walking into flight.
-class PlayerController {
+// Resolved gameplay input. The application supplies zero input when UI/focus gates it.
+struct PlayerInput {
+    glm::vec2 movement{};   // x: right, y: forward.
+    glm::vec2 look_delta{}; // Cursor motion, supplied only while mouse look is enabled.
+    bool running = false;
+};
+
+class FirstPersonCharacterController {
   public:
-    static constexpr float half_width = 0.3F;
-    static constexpr float height = 1.8F;
-    static constexpr float eye_height = 1.65F;
-    static constexpr float walk_speed = 4.5F;
-    static constexpr float run_speed = 9.0F;
-
-    explicit PlayerController(Continent const &continent);
-    void move(Continent const &continent, glm::vec2 direction, float delta_seconds, bool running);
-
-    glm::vec3 position() const { return position_; }
-    glm::vec3 eye_position() const { return position_ + glm::vec3{0.0F, eye_height, 0.0F}; }
+    explicit FirstPersonCharacterController(Continent const &continent) : continent_(continent) {}
+    void update(float delta_seconds, PlayerInput const &input, scene::Character &character) const;
 
   private:
-    glm::vec3 position_;
+    Continent const &continent_; // Borrowed; the world outlives this controller.
+};
+
+class ThirdPersonCharacterController {
+  public:
+    explicit ThirdPersonCharacterController(Continent const &continent) : continent_(continent) {}
+    void update(float delta_seconds, PlayerInput const &input, glm::vec3 view_heading,
+                scene::Character &character) const;
+
+  private:
+    Continent const &continent_; // Borrowed; the world outlives this controller.
 };
 
 } // namespace lc1

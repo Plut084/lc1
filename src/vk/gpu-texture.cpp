@@ -18,22 +18,47 @@ constexpr std::uint32_t max_supported_mip_levels(vk::Extent2D extent)
            static_cast<std::uint32_t>(std::floor(std::log2(std::max(extent.width, extent.height))));
 }
 
+GpuImage make_texture_image(Device const &device, vk::Extent2D extent,
+                            std::span<std::uint8_t const> pixels, TextureColorSpace color_space)
+{
+    auto const limit = device.raii_physical().getProperties().limits.maxImageDimension2D;
+    if (extent.width == 0 || extent.height == 0 || extent.width > limit || extent.height > limit ||
+        pixels.size() != std::uint64_t{extent.width} * extent.height * 4)
+        fail("texture requires valid dimensions and tightly packed RGBA8 pixels");
+    auto const format = color_space == TextureColorSpace::Srgb ? vk::Format::eR8G8B8A8Srgb
+                                                               : vk::Format::eR8G8B8A8Unorm;
+    constexpr auto required = vk::FormatFeatureFlagBits::eSampledImage |
+                              vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+    if ((device.raii_physical().getFormatProperties(format).optimalTilingFeatures & required) !=
+        required)
+        fail("texture format {} does not support filtered sampling", vk::to_string(format));
+    return {device,
+            format,
+            extent,
+            max_supported_mip_levels(extent),
+            vk::SampleCountFlagBits::e1,
+            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
+                vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor};
+}
+
 } // namespace
 
-GpuTexture::GpuTexture(Device const &device, Image const &pixels)
-    : image_(device, vk::Format::eR8G8B8A8Srgb,
-             {.width = pixels.extent.x, .height = pixels.extent.y},
-             max_supported_mip_levels({.width = pixels.extent.x, .height = pixels.extent.y}),
-             vk::SampleCountFlagBits::e1,
-             vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
-                 vk::ImageUsageFlagBits::eSampled,
-             vk::ImageAspectFlagBits::eColor)
+GpuTexture::GpuTexture(Device const &device, Image const &pixels, TextureColorSpace color_space)
+    : GpuTexture(device, {.width = pixels.extent.x, .height = pixels.extent.y}, pixels.bytes(),
+                 color_space)
+{
+}
+
+GpuTexture::GpuTexture(Device const &device, vk::Extent2D extent,
+                       std::span<std::uint8_t const> pixels, TextureColorSpace color_space)
+    : image_(make_texture_image(device, extent, pixels, color_space)), color_space_(color_space)
 {
     // Only needed until the copy has finished; one_time_submit waits for that,
     // so it can die at the end of this constructor.
-    Buffer staging{device, pixels.bytes().size_bytes(), vk::BufferUsageFlagBits::eTransferSrc,
+    Buffer staging{device, pixels.size_bytes(), vk::BufferUsageFlagBits::eTransferSrc,
                    vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
-    staging.upload(std::as_bytes(pixels.bytes()));
+    staging.upload(std::as_bytes(pixels));
 
     vk::Image const image = *image_.raii();
     one_time_submit(device, [&](vk::raii::CommandBuffer const &command_buffer) {
@@ -54,7 +79,7 @@ GpuTexture::GpuTexture(Device const &device, Image const &pixels)
                                  .baseArrayLayer = 0,
                                  .layerCount = 1},
             .imageOffset = {.x = 0, .y = 0, .z = 0},
-            .imageExtent = {.width = pixels.extent.x, .height = pixels.extent.y, .depth = 1},
+            .imageExtent = {.width = extent.width, .height = extent.height, .depth = 1},
         };
         vk::CopyBufferToImageInfo2 copy{
             .srcBuffer = *staging.raii(),
@@ -65,14 +90,8 @@ GpuTexture::GpuTexture(Device const &device, Image const &pixels)
         command_buffer.copyBufferToImage2(copy);
 
         image_.generate_mipmaps(command_buffer);
-        // As in GpuMesh: the fence wait in one_time_submit only tells the CPU the
-        // copy is done. This barrier is what makes the copy visible to the
-        // fragment shader's sampling in the frame loop's later submits.
-        // image_.transition_layout(
-        //     command_buffer, vk::ImageLayout::eTransferDstOptimal,
-        //     vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eCopy,
-        //     vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader,
-        //     vk::AccessFlagBits2::eShaderSampledRead);
+        // generate_mipmaps also transitions every mip to shader-read layout and
+        // makes transfer writes visible to subsequent fragment shader reads.
     });
 }
 

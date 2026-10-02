@@ -1,20 +1,20 @@
-// Unified upload record; matches lc1::Light in four 16-byte rows (64-byte stride).
+// Unified upload record; matches lc1::scene::Light in four 16-byte rows (64-byte stride).
 // Currently stored in ConstantBuffer<LightsData>, using Slang's SPIR-V uniform
 // buffer layout. Recheck member offsets and array stride if compiler/layout changes.
 struct Light {
     float3 position;
-    uint type; // 0 = directional, 1 = point, 2 = spot
+    uint type; // 0 = directional, 1 = point, 2 = spot, 3 = sphere
     // Unit world-space propagation direction: directional rays / spot cone axis.
     // The vector towards a directional source is therefore -direction.
     float3 direction;
-    float range;
+    float radius; // Sphere emitter size; does not truncate illumination.
     float3 color;
     float intensity;
     // Half-angles from direction, in radians: x = inner, y = outer.
     // Require 0 <= inner <= outer < pi/2; equal angles give a hard edge.
     float2 spot_angles;
-    uint padding0;
-    uint padding1;
+    uint shadow_sample_count;
+    uint padding;
 };
 
 // Evaluated contribution for one shading point. Distance and angular weights
@@ -35,25 +35,17 @@ float3 light_strength(Light light)
     return max(light.color, float3(0)) * max(light.intensity, 0.0);
 }
 
-float distance_attenuation(float distance_squared, float range)
+float distance_attenuation(float distance_squared)
 {
-    // Smooth finite support avoids a discontinuity when crossing the cutoff.
-    // range <= 0 means unbounded inverse-square falloff.
-    float window = 1.0;
-    if (range > 0.0) {
-        float ratio_squared = distance_squared / (range * range);
-        window = saturate(1.0 - ratio_squared * ratio_squared);
-        window *= window;
-    }
-    // Defensive for direct callers; sample_light already rejects this singularity.
-    return window / max(distance_squared, 1e-8);
+    // Unbounded inverse-square falloff. sample_light rejects the singularity.
+    return 1.0 / max(distance_squared, 1e-8);
 }
 
 // Shared evaluation path: choose the incident vector, then apply distance and
 // angular weights where applicable. Types without a weight use its identity, 1.
 LightSample sample_light(Light light, float3 position)
 {
-    if (light.type > 2)
+    if (light.type > 3)
         return empty_light_sample();
 
     bool directional = light.type == 0;
@@ -67,7 +59,7 @@ LightSample sample_light(Light light, float3 position)
 
     float attenuation = 1.0;
     if (!directional)
-        attenuation = distance_attenuation(length_squared, light.range);
+        attenuation = distance_attenuation(length_squared);
 
     if (light.type == 2) {
         float axis_length_squared = dot(light.direction, light.direction);

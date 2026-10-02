@@ -25,10 +25,10 @@ struct Geometry {
         auto const first = static_cast<std::uint32_t>(vertices.size());
         auto const normal = glm::normalize(glm::cross(u, v));
         point -= origin;
-        vertices.push_back({point, {0.0F, 0.0F}, color, normal});
-        vertices.push_back({point + u, {1.0F, 0.0F}, color, normal});
-        vertices.push_back({point + u + v, {1.0F, 1.0F}, color, normal});
-        vertices.push_back({point + v, {0.0F, 1.0F}, color, normal});
+        vertices.push_back({point, normal, color, {0.0F, 0.0F}});
+        vertices.push_back({point + u, normal, color, {1.0F, 0.0F}});
+        vertices.push_back({point + u + v, normal, color, {1.0F, 1.0F}});
+        vertices.push_back({point + v, normal, color, {0.0F, 1.0F}});
         for (std::uint32_t offset : {0U, 1U, 2U, 0U, 2U, 3U})
             indices.push_back(first + offset);
     }
@@ -74,9 +74,9 @@ struct Geometry {
         auto const first = static_cast<std::uint32_t>(vertices.size());
         // A 1.5 cm visual lift avoids coplanar depth fighting; walking remains at y=0.
         for (auto const point : points)
-            vertices.push_back({glm::vec3{point.x, 0.015F, point.y} - origin,
-                                {0.5F, 0.5F},
-                                {0.48F, 0.35F, 0.20F}});
+            vertices.push_back({.position = glm::vec3{point.x, 0.015F, point.y} - origin,
+                                .color = {0.48F, 0.35F, 0.20F},
+                                .uv = {0.5F, 0.5F}});
         for (std::uint32_t i = 1; i + 1 < points.size(); ++i) {
             indices.push_back(first);
             indices.push_back(first + i);

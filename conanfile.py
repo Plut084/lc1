@@ -32,6 +32,9 @@ class Lc1Recipe(ConanFile):
         self.requires("spdlog/1.17.0")
         self.requires("stb/cci.20240531")
         self.requires("tinyobjloader/2.0.0-rc10")
+        self.requires("tinygltf/2.9.7")
+        self.requires("ktx/4.4.2")
+        self.requires("mikktspace/cci.20200325")
 
         # Validation layers are a debug-only dependency: nothing needs them in a
         # Release build, and building them from source is expensive.
@@ -58,7 +61,9 @@ class Lc1Recipe(ConanFile):
         # Xcode), so the tree would be build/<platform>/<build_type> with one and
         # build/<platform> with the other, the build type living only inside the CMake
         # cache. Pinning the folder here gives the requested shape for every generator.
-        build_folder = os.path.join("build", build_platform(self), str(self.settings.build_type))
+        build_folder = os.path.join(
+            "build", build_platform(self), str(self.settings.build_type)
+        )
         self.folders.source = "."
         self.folders.build = build_folder
         self.folders.generators = os.path.join(build_folder, "generators")

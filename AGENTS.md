@@ -140,8 +140,8 @@ The second is that a MinGW link pulls the compiler's own runtime in as **DLLs** 
 `libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`. Those exist on the machine that
 compiled the exe and nowhere it is meant to run, so `CMakeLists.txt` passes `-static` to `lc1` for
 `MINGW`, and `objdump -p` on the result lists only `KERNEL32`/`USER32`/`GDI32`/`SHELL32`/`msvcrt`.
-Nothing else in the link is affected: conan already builds every dependency static
-(`*:shared=False`), and the Vulkan loader is `dlopen`ed rather than linked. The flag is in CMake
+Nothing else in the link is affected: the Conan dependency graph already uses static libraries
+on Windows, and the Vulkan loader is `dlopen`ed rather than linked. The flag is in CMake
 rather than in `profiles/mingw64`'s `tools.build:exelinkflags` deliberately —
 `CMAKE_EXE_LINKER_FLAGS_INIT` is read only on a tree's **first** configure, so a profile-only change
 would silently do nothing to an existing tree, and the exe would look fine until it was copied
@@ -163,8 +163,8 @@ safety net on every wine run is how it stops being one.
 
 Four parts of this are easy to get wrong:
 
-- **`-pr:h profiles/linux` is required.** The default profile is missing options the graph needs, and
-  omitting it fails with a confusing `xorg/system` error about missing X11 `-devel` packages.
+- **Use `-pr:h profiles/linux` for the supported Linux toolchain.** Project dependency defaults live
+  in `conanfile.py`; this profile does not inherit unrelated options from the user's `default`.
 - **`-s build_type=Debug` is required on every install.** The profiles default to `Release`, and Conan
   only writes presets for build types it actually generated.
 - **The preset name carries the platform: `linux-x86_64-debug`, not `conan-debug`.** One
@@ -210,19 +210,20 @@ redundant and are not:
 - **Validation layers come from conan, Debug only.** They are a dev tool; Release does not need them,
   and building them from source is expensive. Version skew against the system loader is harmless.
   `profiles/mingw64` turns them off even for Debug, through the `with_validation_layers` option in
-  `conanfile.py`: a cross-compiled binary cannot be run on the machine building it, so the layers would
-  be a from-source build of one of the largest CMake projects there is — 30+ minutes with all cores
-  saturated — for something nothing here executes. This is the single biggest lever on how long a
-  first-time `--build=missing` for a new platform takes.
+  `conanfile.py`, to avoid an expensive from-source cross build. Wine can run the application, but
+  the local prefix has no validation layers by default. Override the option when provisioning layers
+  for a Windows Debug environment; native Debug builds include them by default.
 
-## The profile is load-bearing
+## Project dependency defaults and toolchain profiles
 
-`profiles/linux` is not boilerplate. **A profile-level option outranks anything a recipe — or a
-consumer conanfile's `configure()` — sets for its own dependencies.** Putting these in `conanfile.py`
-silently does nothing and the graph fails to resolve. Conan says as much: *"It is recommended to
-define options values in profiles, not in recipes."*
+**Project-owned dependency options belong in `conanfile.py`'s `default_options`.** This includes
+static linkage of the project's libraries, spdlog's `std::format` backend, library-only KTX, and
+Linux's native-Wayland configuration. Explicit profile or CLI options can override these defaults;
+that precedence does not make profiles the only place dependency options can be defined.
 
-The profile currently encodes **native Wayland only, no X11**:
+Static libraries are named individually rather than using `*:shared=False` in the recipe: Conan's
+propagation of that broad pattern through dependency recipes can override the shared-library
+exceptions required by GLFW. The Linux defaults are **native Wayland only, no X11**:
 
 | option | why |
 |---|---|
@@ -230,18 +231,21 @@ The profile currently encodes **native Wayland only, no X11**:
 | `glfw/*:with_x11=False`, `xkbcommon/*:with_x11=False` | drops `xorg/system`, which demands ~15 X11 `-devel` RPMs |
 | `vulkan-validationlayers/*:with_wsi_xcb/xlib=False` | same — the layers pull `xorg/system` too |
 
-**Trade-off:** the resulting binary will not run on an X11 session. To restore X11 support, delete the
-four `with_x11`/`with_wsi_*` lines and install the X11 dev packages (manually, or via
+**Trade-off:** the resulting binary will not run on an X11 session. To restore X11 support, override
+the four `with_x11`/`with_wsi_*` defaults to `True` and install the X11 dev packages (manually, or via
 `-c tools.system.package_manager:mode=install`). conan cannot vendor X11 headers — they *are* the
 system integration layer — so this is the one place "all dependencies from conan" has a real limit.
 
-`profiles/mingw64` is the Windows sibling the earlier version of this section said would be needed. It
-drops the four Wayland/X11 lines outright — Windows glfw uses Win32 — and replaces clang with a
-target-triple-prefixed MinGW-w64 gcc, including `rc`, which CMake passes `.rc` files through. It does
-not `include(default)`: the default profile describes the Linux machine compiling, this one describes
-the Windows binaries it produces, and conan's cross-compilation handling is driven by exactly that
-disagreement. The one thing it adds that is not about the compiler is
-`lc1/*:with_validation_layers=False` — see the dependency-rules section.
+`profiles/linux` describes Linux x86_64 with clang 22, C++23 and Ninja, plus the system locale path
+used at runtime. It does not `include(default)`: user-level options such as `*:shared=False` would
+otherwise override the recipe's Wayland/XKB shared-library defaults. A custom host profile can select
+another toolchain without copying the project's dependency options.
+
+`profiles/mingw64` describes Windows x86_64 with target-triple-prefixed MinGW-w64 gcc, including `rc`,
+which CMake passes `.rc` files through. Dependency recipes remove Linux-only options on Windows,
+where GLFW uses Win32. Its only option is the environment-specific
+`lc1/*:with_validation_layers=False` opt-out described above. The build profile remains `default`,
+describing the machine compiling the native build tools; it is separate from either host profile.
 
 ## Coding conventions
 

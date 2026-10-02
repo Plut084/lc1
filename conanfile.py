@@ -23,7 +23,32 @@ class Lc1Recipe(ConanFile):
     # that the attribute form cannot express.
 
     options = {"with_validation_layers": [True, False]}
-    default_options = {"with_validation_layers": True}
+    # Project dependency defaults belong here; profiles describe the toolchain
+    # and environment. Explicit profile/CLI options can still override these.
+    default_options = {
+        "with_validation_layers": True,
+        # Name our static libraries explicitly: a propagated "*:shared" default
+        # can override transitive dependencies' shared-library exceptions.
+        "glfw/*:shared": False,
+        "glm/*:shared": False,
+        "ktx/*:shared": False,
+        "mikktspace/*:shared": False,
+        "spdlog/*:shared": False,
+        "tinyobjloader/*:shared": False,
+        "spdlog/*:use_std_fmt": True,
+        # Only libktx is used, not the CLI tools.
+        "ktx/*:tools": False,
+        # GLFW dlopens these libraries, so they must remain shared.
+        "wayland/*:shared": True,
+        "xkbcommon/*:shared": True,
+        # Native Wayland only: avoid X11's system development dependencies.
+        # The dependency recipes remove inapplicable options on Windows.
+        "glfw/*:with_wayland": True,
+        "glfw/*:with_x11": False,
+        "xkbcommon/*:with_x11": False,
+        "vulkan-validationlayers/*:with_wsi_xcb": False,
+        "vulkan-validationlayers/*:with_wsi_xlib": False,
+    }
 
     def requirements(self):
         self.requires("vulkan-headers/1.4.350.0")
@@ -45,12 +70,11 @@ class Lc1Recipe(ConanFile):
         # VK_LAYER_PATH via runenv_info, so Debug runs must source the generated
         # conanrun.sh (see AGENTS.md).
         #
-        # The option is not a preference, it is a build-cost switch, and profiles set
-        # it: profiles/mingw64 turns it off because a cross-compiled Windows binary
-        # cannot be run on the machine building it, so there the layers would be a
-        # from-source build of one of the largest CMake projects there is -- 30+
-        # minutes and gigabytes of RAM -- for something nothing in this repo executes.
-        # A Debug build on the target itself (or on Linux) keeps them.
+        # profiles/mingw64 opts out to avoid an expensive cross build of the layers.
+        # Wine can run the resulting application, but its prefix has no layers by
+        # default; use LC1_NO_VALIDATION=1 there, or explicitly enable this option
+        # and install the layers for the target environment. Native Debug builds
+        # keep them by default.
         if self.settings.build_type == "Debug" and self.options.with_validation_layers:
             self.requires("vulkan-validationlayers/1.4.350.0")
 
@@ -87,13 +111,6 @@ class Lc1Recipe(ConanFile):
         toolchain.generate()
 
 
-# Dependency OPTIONS are deliberately not set here. They live in profiles/linux.
-#
-# A conanfile's configure() loses to a profile-level option, and the default
-# profile sets "*:shared=False" -- so setting wayland/xkbcommon to shared here
-# silently had no effect and the graph failed to resolve. Conan says as much:
-# "It is recommended to define options values in profiles, not in recipes."
-#
 # Deliberately NOT a dependency: vulkan-loader.
 #
 # The system loader is dlopened exactly once, by lc1::VulkanLoader

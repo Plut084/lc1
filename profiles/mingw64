@@ -16,12 +16,9 @@
 # name -- so a fresh clone had a `-windows` target that no other machine could run.
 # A profile is part of the build story, so it is committed with it.
 #
-# Relative to profiles/linux, two things differ and one is missing:
-#   - compiler is gcc (MinGW-w64), not clang, and the compiler executables are
-#     prefixed with the target triple so conan never picks up the host gcc.
-#   - there are no wayland/xkbcommon/with_x11 options. Those exist only because
-#     Linux glfw dlopens its windowing system; Windows glfw uses the Win32 API.
-#     This is the sibling profile AGENTS.md said Windows would need.
+# The compiler is gcc (MinGW-w64), with target-triple-prefixed executables so
+# conan never picks up the host gcc. Project dependency defaults, including
+# static linkage and platform windowing options, live in conanfile.py.
 #
 # The Vulkan loader is NOT a dependency here either -- see the bottom of conanfile.py.
 # On Windows vulkan-1.dll is the system loader, dlopened by vk::raii::Context.
@@ -35,17 +32,9 @@ compiler.cppstd=23
 compiler.libcxx=libstdc++
 
 [options]
-# Restated rather than inherited, so this profile is self-describing.
-*:shared=False
-spdlog/*:use_std_fmt=True
-# Only libktx is needed; KTX 4.4.2's CLI tools require C++17, while the
-# library supports the project's C++23 setting.
-ktx/*:tools=False
-# Not an option so much as the answer to "why is my machine unusable": with this on,
-# a Debug install also builds vulkan-validationlayers from source for Windows -- one
-# of the largest CMake projects there is, and pure cost here, because a cross-compiled
-# binary cannot be run on this machine to use the layers. Turn it back on for a Debug
-# build that actually runs (see the option's comment in conanfile.py).
+# Environment-specific opt-out: avoid cross-compiling the large validation-layer
+# package. Wine runs the application with LC1_NO_VALIDATION=1; override this option
+# when provisioning validation layers for a Windows Debug environment.
 lc1/*:with_validation_layers=False
 
 [conf]

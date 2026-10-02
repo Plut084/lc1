@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# CMake warns for `FetchContent` and ask for this.
+set(DOWNLOAD_EXTRACT_TIMESTAMP ON)
+
 # clangd reads a compilation database, and .clangd points at this tree's; without this
 # the file is only produced when someone remembers to pass -DCMAKE_EXPORT_COMPILE_COMMANDS,
 # which is exactly the kind of thing that silently rots. Every build tree gets its own.
@@ -122,7 +125,7 @@ target_link_libraries(lc1 PRIVATE lc1_engine)
 # A MinGW link pulls the compiler's own runtime in as DLLs -- libstdc++-6.dll,
 # libgcc_s_seh-1.dll and libwinpthread-1.dll -- which are present on the machine that
 # compiled it and absent everywhere the exe is actually meant to run. Nothing else in
-# the link is affected: conan builds every dependency static already (*:shared=False),
+# the link is affected: the Conan dependency graph already uses static libraries here,
 # and the Vulkan loader is dlopen'd at runtime rather than linked. -static covers all
 # three at once (-static-libgcc/-static-libstdc++ alone would leave winpthread).
 #

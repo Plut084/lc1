@@ -1,4 +1,6 @@
 #pragma once
+#include <chrono>
+#include <cstdio>
 
 #include "lc1/vk/common.hpp"
 #include "lc1/vk/device.hpp"
@@ -152,6 +154,8 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
     if (!record) {
         fail("frame recording callback is empty");
     }
+    using ProbeClock = std::chrono::steady_clock;
+    auto const probe_start = ProbeClock::now();
     Frame &frame = frames_[frame_index_];
     auto const &device = device_->raii();
     auto const &queue = device_->raii_queue();
@@ -172,6 +176,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
 
         // On a non-success result the driver left the index unwritten, so
         // .value must not be read before .result has been checked.
+        auto const probe_fence = ProbeClock::now();
         auto const acquired =
             swapchain.raii().acquireNextImage(acquire_timeout_ns, *frame.image_available, nullptr);
         auto const acquire_result = acquired.result;
@@ -191,6 +196,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
             fail("vkAcquireNextImageKHR failed: {}", result_string(acquire_result));
         }
         auto const image_index = acquired.value;
+        auto const probe_acquire = ProbeClock::now();
 
         // VK_SUBOPTIMAL_KHR means an image WAS acquired and
         // frame.image_available IS signaled. Render and present it normally
@@ -290,7 +296,20 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
             .setSwapchains(swapchain_handle)
             .setImageIndices(image_index);
 
+        auto const probe_submit = ProbeClock::now();
         vk::Result const presented = queue.presentKHR(present);
+        auto const probe_present = ProbeClock::now();
+        static unsigned probe_count = 0;
+        static double probe_sums[4]{};
+        probe_sums[0] += std::chrono::duration<double, std::milli>(probe_fence - probe_start).count();
+        probe_sums[1] += std::chrono::duration<double, std::milli>(probe_acquire - probe_fence).count();
+        probe_sums[2] += std::chrono::duration<double, std::milli>(probe_submit - probe_acquire).count();
+        probe_sums[3] += std::chrono::duration<double, std::milli>(probe_present - probe_submit).count();
+        if (++probe_count == 120) {
+            std::fprintf(stderr, "PROBE fence %.2f acquire %.2f record+submit %.2f present %.2f ms\n", probe_sums[0]/120, probe_sums[1]/120, probe_sums[2]/120, probe_sums[3]/120);
+            probe_count = 0;
+            for (auto &value : probe_sums) value = 0;
+        }
         if (presented == vk::Result::eErrorOutOfDateKHR ||
             presented == vk::Result::eSuboptimalKHR) {
             return FrameResult::RecreateRequested;

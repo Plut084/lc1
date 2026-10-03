@@ -60,6 +60,7 @@ find_package(tinyobjloader CONFIG REQUIRED)
 find_package(TinyGLTF CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -122,7 +123,9 @@ target_link_libraries(lc1_engine PUBLIC
     TinyGLTF::TinyGLTF
     KTX::ktx
 )
-target_link_libraries(lc1_engine PRIVATE mikktspace::mikktspace)
+target_link_libraries(lc1_engine PRIVATE
+    mikktspace::mikktspace
+)
 
 # Conan's MinGW KTX package installs its ASTC encoder as a separate archive,
 # but KTX::ktx omits it from the link interface. Its package lib directory is
@@ -160,6 +163,7 @@ add_executable(lc1
     app/pbr-showcase.cpp
 )
 target_link_libraries(lc1 PRIVATE lc1_engine)
+add_imgui_backends(TARGET lc1 BACKENDS vulkan glfw DEPS glfw)
 
 # A MinGW link pulls the compiler's own runtime in as DLLs -- libstdc++-6.dll,
 # libgcc_s_seh-1.dll and libwinpthread-1.dll -- which are present on the machine that

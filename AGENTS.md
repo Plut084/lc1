@@ -211,7 +211,12 @@ Four parts of this are easy to get wrong:
   CMake refuses to read a file whose includes define the same name twice
   (`CMake Error: Duplicate preset`). The default prefix is `conan` for every install, so `conanfile.py`
   sets `CMakeToolchain.presets_prefix` to the platform — it is also why `generate()` instantiates the
-  generators by hand instead of using the `generators = ...` attribute.
+  generators by hand instead of using the `generators = ...` attribute. `layout()` also sets
+  `folders.build_folder_vars = ["settings.build_type"]`, so configure, build and test presets all
+  include the build type even with Visual Studio or Ninja Multi-Config. Without it, Conan gives
+  every separate multi-config tree the same `<platform>-default` configure preset. After updating
+  the recipe, rerun `conan install` for every existing build type included by `CMakeUserPresets.json`
+  to replace the old generated names.
 - **Run `make run`, not `./build/linux-x86_64/Debug/lc1`.** It does two things the bare binary lacks:
   - It sources the conan run env. Debug builds take the validation layers from conan, and the loader
     finds them only via `VK_LAYER_PATH`, which that env exports. Without it, startup fails with a

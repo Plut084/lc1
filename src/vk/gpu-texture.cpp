@@ -5,6 +5,8 @@
 #include "lc1/vk/device.hpp"
 #include "lc1/vk/one-time-submit.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -14,7 +16,7 @@ namespace {
 
 constexpr std::uint32_t max_supported_mip_levels(vk::Extent2D extent)
 {
-    return 1 + static_cast<std::uint32_t>(std::bit_width(std::max(extent.width, extent.height)));
+    return static_cast<std::uint32_t>(std::bit_width(std::max(extent.width, extent.height)));
 }
 
 GpuImage make_texture_image(Device const &device, vk::Extent2D extent,

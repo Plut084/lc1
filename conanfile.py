@@ -60,6 +60,7 @@ class Lc1Recipe(ConanFile):
         self.requires("tinygltf/2.9.7")
         self.requires("ktx/4.4.2")
         self.requires("mikktspace/cci.20200325")
+        self.requires("imgui/1.92.9b")
 
         # Validation layers are a debug-only dependency: nothing needs them in a
         # Release build, and building them from source is expensive.
@@ -91,6 +92,10 @@ class Lc1Recipe(ConanFile):
         self.folders.source = "."
         self.folders.build = build_folder
         self.folders.generators = os.path.join(build_folder, "generators")
+        # Presets must reflect our per-build-type trees even with multi-config
+        # generators. Otherwise both VS trees get the same "<platform>-default"
+        # configure preset. Conan uses this for configure, build and test names.
+        self.folders.build_folder_vars = ["settings.build_type"]
         self.cpp.source.includedirs = ["include"]
         self.cpp.build.libdirs = ["."]
         self.cpp.build.bindirs = ["."]
@@ -105,8 +110,9 @@ class Lc1Recipe(ConanFile):
         #   CMake Error: Duplicate preset: "conan-debug"
         # The default prefix is "conan" for every install, so Debug under
         # build/linux-x86_64/ and Debug under build/windows-x86_64/ would collide the
-        # moment both build trees exist. Prefixing with the platform makes them
-        # linux-x86_64-debug and windows-x86_64-debug instead.
+        # moment both build trees exist. The platform prefix and build_folder_vars
+        # from layout() give linux-x86_64-debug and windows-x86_64-debug with both
+        # single-config and multi-config generators.
         toolchain.presets_prefix = build_platform(self)
         toolchain.generate()
 

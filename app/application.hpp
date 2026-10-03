@@ -10,6 +10,7 @@
 #include "lc1/vk/surface.hpp"
 #include "lc1/window.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -29,12 +30,14 @@ class Application {
     Application &operator=(Application const &) = delete;
     Application(Application &&) = delete;
     Application &operator=(Application &&) = delete;
+    ~Application();
 
     // Drains the GPU on both normal and exceptional exits, before any member dies.
     void run(std::function<bool()> const &stop_requested);
 
   private:
     bool prepare_swapchain();
+    void init_imgui_vulkan(std::uint32_t min_image_count);
     void run_loop(std::function<bool()> const &stop_requested);
 
     // Declaration order is the lifetime contract: the loader dies last, Window
@@ -51,6 +54,7 @@ class Application {
     FrameLoop<FrameResources> frame_loop_;
     InputRouter router_{default_bindings(), InputContext::Gameplay};
     bool recreate_requested_ = false;
+    std::uint32_t imgui_image_count_ = 0;
 };
 
 } // namespace lc1::app

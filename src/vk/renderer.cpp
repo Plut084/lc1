@@ -129,9 +129,9 @@ FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) con
         .maxSets = object_capacity + 3,
     };
     pool_info.setPoolSizes(pool_sizes);
-    auto descriptor_pool = device_.raii().createDescriptorPool(pool_info);
+    auto frame_descriptor_pool = device_.raii().createDescriptorPool(pool_info);
 
-    DescriptorSet globals{device_, descriptor_pool, pipeline_.frame_set_layout(),
+    DescriptorSet globals{device_, frame_descriptor_pool, pipeline_.frame_set_layout(),
                           Pipeline::frame_bindings};
     globals.add_uniform(0, sizeof(CameraData));
     globals.add_uniform(1, sizeof(LightsData));
@@ -139,11 +139,11 @@ FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) con
     std::vector<DescriptorSet> objects;
     objects.reserve(object_capacity);
     for (std::uint32_t i = 0; i < object_capacity; ++i) {
-        objects.emplace_back(device_, descriptor_pool, pipeline_.object_set_layout(),
+        objects.emplace_back(device_, frame_descriptor_pool, pipeline_.object_set_layout(),
                              Pipeline::object_bindings);
         objects.back().add_uniform(0, sizeof(ObjectData));
     }
-    return FrameResources{std::move(descriptor_pool), std::move(globals), std::move(objects)};
+    return FrameResources{std::move(frame_descriptor_pool), std::move(globals), std::move(objects)};
 }
 
 GpuMaterial Renderer::make_material(GpuTexture const &texture)

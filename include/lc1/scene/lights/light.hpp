@@ -1,11 +1,5 @@
 #pragma once
 
-// #include "lc1/scene/lights/directional-light.hpp"
-// #include "lc1/scene/lights/point-light.hpp"
-// #include "lc1/scene/lights/sphere-light.hpp"
-// #include "lc1/scene/lights/spot-light.hpp"
-
-#define GLM_CONFIG_ALIGNED_GENTYPES
 #include <glm/glm.hpp>
 
 #include <cstddef>

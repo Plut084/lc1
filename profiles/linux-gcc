@@ -1,0 +1,23 @@
+# Native Linux x86_64 with GCC 16 and C++23.
+# Conan 2.33.0 includes GCC 16 in its default compiler settings.
+
+[settings]
+arch=x86_64
+os=Linux
+build_type=Release
+compiler=gcc
+compiler.version=16
+compiler.cstd=11
+compiler.cppstd=23
+compiler.libcxx=libstdc++11
+
+[conf]
+tools.build:compiler_executables={"c": "gcc", "cpp": "g++"}
+tools.cmake.cmaketoolchain:generator=Ninja
+
+[buildenv]
+CC=gcc
+CXX=g++
+
+[runenv]
+XLOCALEDIR=/usr/share/X11/locale

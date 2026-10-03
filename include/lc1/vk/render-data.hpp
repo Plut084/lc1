@@ -9,7 +9,7 @@
 namespace lc1 {
 
 // Matches MaterialData in shaders/shader.slang; CPU image pointers never cross here.
-struct alignas(16) MaterialData {
+struct MaterialData {
     glm::vec4 base_color_factor;
     glm::vec4 emissive_factor;
     glm::vec4 surface; // Metallic, perceptual roughness, normal scale, occlusion strength.

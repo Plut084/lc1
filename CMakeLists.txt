@@ -132,7 +132,6 @@ if(MINGW)
 endif()
 
 target_compile_definitions(lc1_engine PUBLIC
-    GLM_FORCE_DEFAULT_ALIGNED_GENTYPES # Makes glm aligns with shader
     GLM_FORCE_DEPTH_ZERO_TO_ONE # Force depth from glm in range of [0, 1], which
                                 # is required by Vulkan.
     GLM_ENABLE_EXPERIMENTAL # Introduces glm::gtx

@@ -87,6 +87,31 @@ std::optional<Contact> sweep(glm::vec2 position, glm::vec2 delta, GroundBounds o
     return Contact{enter, normal};
 }
 
+template <typename Visit>
+void visit_terrain_obstacles(ContinentData const &data, std::span<std::uint8_t const> blocked,
+                             GroundBounds query, Visit visit)
+{
+    auto const columns = data.tiles.front().size();
+    auto const rows = data.tiles.size();
+    glm::vec2 const grid_max{static_cast<float>(columns - 1), static_cast<float>(rows - 1)};
+    // Include neighbouring cells: subtraction at a large world origin can round a
+    // grazing body onto a grid edge. The exact overlap/sweep still rejects misses.
+    auto const first = glm::clamp(glm::floor((query.min - data.origin) / data.tile_size) - 1.0F,
+                                  glm::vec2{0.0F}, grid_max);
+    auto const last = glm::clamp(glm::floor((query.max - data.origin) / data.tile_size) + 1.0F,
+                                 glm::vec2{0.0F}, grid_max);
+    for (auto z = static_cast<std::size_t>(first.y); z <= static_cast<std::size_t>(last.y); ++z) {
+        for (auto x = static_cast<std::size_t>(first.x); x <= static_cast<std::size_t>(last.x);
+             ++x) {
+            if (!blocked[z * columns + x])
+                continue;
+            auto const min = data.origin + glm::vec2{static_cast<float>(x), static_cast<float>(z)} *
+                                               data.tile_size;
+            visit(GroundBounds{min, min + data.tile_size});
+        }
+    }
+}
+
 } // namespace
 
 float Road::length() const
@@ -139,16 +164,10 @@ Continent::Continent(ContinentData data) : data_(std::move(data))
     if (!valid(bounds()) || !finite(data_.spawn) ||
         !ground_height({data_.spawn.x, data_.spawn.z}) || data_.spawn.y != 0.0F)
         fail("invalid continent bounds or spawn");
-    for (std::size_t z = 0; z < rows(); ++z) {
-        for (std::size_t x = 0; x < columns(); ++x) {
-            if (!region(data_.tiles[z][x].region)->walkable()) {
-                glm::vec2 const min =
-                    data_.origin +
-                    glm::vec2{static_cast<float>(x), static_cast<float>(z)} * tile_size();
-                terrain_obstacles_.push_back({min, min + tile_size()});
-            }
-        }
-    }
+    blocked_tiles_.reserve(rows() * columns());
+    for (auto const &row : data_.tiles)
+        for (auto const &tile : row)
+            blocked_tiles_.push_back(!region(tile.region)->walkable());
     for (auto const &patch : data_.patches) {
         if (!valid(patch.bounds))
             fail("invalid continent ground patch");
@@ -288,10 +307,13 @@ bool Continent::can_stand(glm::vec3 feet, float half_width, float height) const
     if (glm::any(glm::lessThan(position - half_width, area.min)) ||
         glm::any(glm::greaterThan(position + half_width, area.max)))
         return false;
-    for (auto const &obstacle : terrain_obstacles_) {
-        if (overlaps(position, half_width, obstacle))
-            return false;
-    }
+    bool blocked = false;
+    visit_terrain_obstacles(data_, blocked_tiles_, {position - half_width, position + half_width},
+                            [&](GroundBounds obstacle) {
+                                blocked = blocked || overlaps(position, half_width, obstacle);
+                            });
+    if (blocked)
+        return false;
     for (auto const &block : data_.blocks) {
         if (block.solid && block.max.y > feet.y && block.min.y < feet.y + height &&
             overlaps(position, half_width,
@@ -328,8 +350,10 @@ glm::vec3 Continent::move(glm::vec3 feet, glm::vec2 displacement, float half_wid
             if (hit && hit->time < contact.time)
                 contact = *hit;
         };
-        for (auto const &obstacle : terrain_obstacles_)
-            consider(obstacle);
+        visit_terrain_obstacles(data_, blocked_tiles_,
+                                {glm::min(position, position + remaining) - half_width,
+                                 glm::max(position, position + remaining) + half_width},
+                                consider);
         for (auto const &block : data_.blocks) {
             if (block.solid && block.max.y > feet.y && block.min.y < feet.y + height)
                 consider({{block.min.x, block.min.z}, {block.max.x, block.max.z}});

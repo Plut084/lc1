@@ -66,7 +66,7 @@ Model make_player_model()
 GameSession::GameSession(Window &window, Device const &device, Renderer &renderer,
                          std::filesystem::path const &asset_root, OutputSettings output)
     : white_{device, Image::load_from_file(asset_root / "textures/prototype-white.png")},
-      continent_{Continent::make_prototype(demo::PbrShowcase::spawn_blocks())},
+      continent_{Continent::make_present(demo::PbrShowcase::spawn_blocks())},
       continent_view_{device, renderer, white_, continent_},
       showcase_{device, renderer, continent_.spawn()},
       player_mesh_{make_player_model().gen_mesh(device)},

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.30)
 project(lc1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -12,6 +12,39 @@ set(DOWNLOAD_EXTRACT_TIMESTAMP ON)
 # the file is only produced when someone remembers to pass -DCMAKE_EXPORT_COMPILE_COMMANDS,
 # which is exactly the kind of thing that silently rots. Every build tree gets its own.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+include(CheckCXXCompilerFlag)
+include(CheckLinkerFlag)
+
+# clang-cl reports compiler ID Clang but accepts the MSVC command-line dialect.
+# Probe the chosen flags rather than assuming every compiler in a family supports them.
+if(MSVC OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(lc1_warning_candidates /W4)
+else()
+    set(lc1_warning_candidates -Wall -Wextra -Wpedantic)
+endif()
+set(lc1_warning_options)
+foreach(flag IN LISTS lc1_warning_candidates)
+    string(MAKE_C_IDENTIFIER "${flag}" flag_id)
+    check_cxx_compiler_flag("${flag}" lc1_supports_${flag_id})
+    if(lc1_supports_${flag_id})
+        list(APPEND lc1_warning_options "${flag}")
+    endif()
+endforeach()
+
+function(lc1_enable_warnings target)
+    target_compile_options(${target} PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:${lc1_warning_options}>")
+endfunction()
+
+# Static MinGW runtimes are required for standalone Windows executables.
+# Fail during configuration if the selected linker cannot provide them.
+if(MINGW)
+    check_linker_flag(CXX "-static" lc1_supports_static_link)
+    if(NOT lc1_supports_static_link)
+        message(FATAL_ERROR "The MinGW target requires a linker supporting -static")
+    endif()
+endif()
 
 add_subdirectory(third-party)
 
@@ -40,6 +73,8 @@ add_library(lc1_engine STATIC
     src/tangent-space.cpp
     src/game/continent.cpp
     src/game/continent-prototype.cpp
+    src/game/continent-present.cpp
+    src/game/continent-layout.cpp
     src/game/player-controller.cpp
     src/game/map-camera-controller.cpp
     src/game/continent-view.cpp
@@ -156,19 +191,19 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(lc1_world_map_tests tests/world-map.cpp)
     target_link_libraries(lc1_world_map_tests PRIVATE lc1_engine)
-    target_compile_options(lc1_world_map_tests PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(lc1_world_map_tests)
     add_executable(lc1_continent_tests tests/continent.cpp)
     target_link_libraries(lc1_continent_tests PRIVATE lc1_engine)
-    target_compile_options(lc1_continent_tests PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(lc1_continent_tests)
     add_executable(lc1_character_tests tests/character.cpp)
     target_link_libraries(lc1_character_tests PRIVATE lc1_engine)
-    target_compile_options(lc1_character_tests PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(lc1_character_tests)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
-    target_compile_options(lc1_tangent_tests PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(lc1_tangent_tests)
     add_executable(lc1_player_view_tests tests/player-view.cpp app/player-view.cpp)
     target_link_libraries(lc1_player_view_tests PRIVATE lc1_engine)
-    target_compile_options(lc1_player_view_tests PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(lc1_player_view_tests)
     if(MINGW)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
@@ -181,14 +216,15 @@ if(BUILD_TESTING)
         # Kept out of ordinary CPU-only CTest runs.
         add_executable(lc1_temporal_shadow_tests EXCLUDE_FROM_ALL tests/temporal-shadows.cpp)
         target_link_libraries(lc1_temporal_shadow_tests PRIVATE lc1_engine)
+        lc1_enable_warnings(lc1_temporal_shadow_tests)
         add_dependencies(lc1_temporal_shadow_tests shaders)
         add_executable(lc1_shadow_path_tests EXCLUDE_FROM_ALL tests/shadow-paths.cpp)
         target_link_libraries(lc1_shadow_path_tests PRIVATE lc1_engine)
-        target_compile_options(lc1_shadow_path_tests PRIVATE -Wall -Wextra -Wpedantic)
+        lc1_enable_warnings(lc1_shadow_path_tests)
         add_dependencies(lc1_shadow_path_tests shaders copy_assets)
         add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp app/pbr-showcase.cpp)
         target_link_libraries(lc1_pbr_tests PRIVATE lc1_engine)
-        target_compile_options(lc1_pbr_tests PRIVATE -Wall -Wextra -Wpedantic)
+        lc1_enable_warnings(lc1_pbr_tests)
         add_dependencies(lc1_pbr_tests shaders)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
         add_test(NAME continent COMMAND lc1_continent_tests)
@@ -198,11 +234,7 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# -Wno-missing-field-initializers: Vulkan's universal idiom is
-# `VkFoo foo{VK_STRUCTURE_TYPE_FOO};`, which zero-initializes the remaining
-# members by aggregate-init rules. That is correct, and clang warns about it
-# anyway, thousands of times.
+# Apply the same checked warning policy to the library and the application.
 foreach(target lc1_engine lc1)
-    target_compile_options(${target}
-        PRIVATE -Wall -Wextra -Wpedantic)
+    lc1_enable_warnings(${target})
 endforeach()

@@ -13,7 +13,9 @@ class Device;
 class Renderer;
 class GpuTexture;
 
-// Static GPU snapshot, divided into 64-metre chunks. All chunks are resident for now.
+// Static GPU snapshot, divided into 16 x 16 tile chunks (256 m at the current scale).
+// Ground follows tile/patch edges rather than subdividing the whole world every 4 m.
+// All chunks are resident for this first outline; streaming is not implemented yet.
 // Device, Renderer and GpuTexture must outlive it.
 class ContinentView {
   public:

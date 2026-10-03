@@ -1,7 +1,7 @@
 #include "lc1/game/continent.hpp"
 #include "lc1/game/map-camera-controller.hpp"
-#include "lc1/scene/character.hpp"
 #include "lc1/scene/camera.hpp"
+#include "lc1/scene/character.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -96,6 +96,54 @@ void collision_and_sliding()
           "player passes below an overhead lintel");
     check(near(lintel.move({0, 0, 2}, {0, -6}, 0.3F, 2.5F).z, -0.7F),
           "a taller body collides with the same lintel");
+}
+
+void terrain_collision_candidates()
+{
+    auto grid_data = flat_world();
+    grid_data.origin = {-512, -384};
+    grid_data.tiles = std::vector(48, std::vector<lc1::TileData>(64));
+    auto reference_data = grid_data;
+    // The reference uses the original all-blocks sweep, so it cannot accidentally
+    // share a bug in the new terrain candidate selection.
+    for (int z = 0; z < 48; ++z) {
+        for (int x = 0; x < 64; ++x) {
+            if ((x * 7 + z * 11) % 13 != 0 || (x == 32 && z == 24))
+                continue;
+            grid_data.tiles[z][x].region = lc1::RegionId{2};
+            auto const corner = grid_data.origin + glm::vec2{x, z} * 16.0F;
+            reference_data.blocks.push_back(
+                {{corner.x, 0, corner.y}, {corner.x + 16, 8, corner.y + 16}});
+        }
+    }
+    lc1::Continent const grid{std::move(grid_data)};
+    lc1::Continent const reference{std::move(reference_data)};
+    std::mt19937 random{41};
+    std::uniform_real_distribution<float> x_position{-512, 512};
+    std::uniform_real_distribution<float> z_position{-384, 384};
+    std::uniform_real_distribution<float> travel{-1200, 1200};
+    int sweeps = 0;
+    for (int trial = 0; trial < 1600; ++trial) {
+        glm::vec3 const start{x_position(random), 0, z_position(random)};
+        float const half_width = trial % 3 == 0 ? 8.0F : 0.3F;
+        bool const valid = reference.can_stand(start, half_width, 1.8F);
+        check(grid.can_stand(start, half_width, 1.8F) == valid,
+              "nearby tile selection agrees with full body overlap tests");
+        if (!valid)
+            continue;
+        glm::vec2 const delta{trial % 5 == 0 ? 0.0F : travel(random), travel(random)};
+        auto const expected = reference.move(start, delta, half_width, 1.8F);
+        auto const actual = grid.move(start, delta, half_width, 1.8F);
+        if (glm::distance(expected, actual) >= 0.001F)
+            std::cerr << "trial " << trial << " start " << start.x << ',' << start.z << " delta "
+                      << delta.x << ',' << delta.y << " half " << half_width << " expected "
+                      << expected.x << ',' << expected.z << " actual " << actual.x << ','
+                      << actual.z << '\n';
+        check(glm::distance(expected, actual) < 0.001F,
+              "local terrain candidates preserve long, diagonal and sliding sweeps");
+        ++sweeps;
+    }
+    check(sweeps > 500, "exercise enough valid terrain sweeps");
 }
 
 void player_and_city()
@@ -284,6 +332,7 @@ int main()
     try {
         grid_and_terrain();
         collision_and_sliding();
+        terrain_collision_candidates();
         player_and_city();
         camera_projection();
         perspective_camera_zoom();

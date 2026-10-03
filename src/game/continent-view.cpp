@@ -129,14 +129,12 @@ glm::vec3 terrain_color(RegionType type)
 
 void ground(Geometry &geometry, Continent const &continent, GroundBounds chunk)
 {
-    // Include roads and tile edges in the tessellation. Everything stays at y=0,
+    // Include patch and tile edges in the tessellation. Everything stays at y=0,
     // so the rendered floor and controller agree without overlapping floor surfaces.
     std::array<std::vector<float>, 2> edges;
     for (int axis = 0; axis < 2; ++axis) {
         auto &values = edges[axis];
         values = {chunk.min[axis], chunk.max[axis]};
-        for (float value = chunk.min[axis]; value < chunk.max[axis]; value += 4.0F)
-            values.push_back(value);
         auto add = [&](float value) {
             if (value > chunk.min[axis] && value < chunk.max[axis])
                 values.push_back(value);
@@ -145,6 +143,9 @@ void ground(Geometry &geometry, Continent const &continent, GroundBounds chunk)
              value += continent.tile_size())
             add(value);
         for (auto const &patch : continent.patches()) {
+            if (glm::any(glm::lessThanEqual(patch.bounds.max, chunk.min)) ||
+                glm::any(glm::greaterThanEqual(patch.bounds.min, chunk.max)))
+                continue;
             add(patch.bounds.min[axis]);
             add(patch.bounds.max[axis]);
         }
@@ -162,8 +163,8 @@ void ground(Geometry &geometry, Continent const &continent, GroundBounds chunk)
                     glm::all(glm::lessThan(center, patch.bounds.max)))
                     color = color_of(patch.surface);
             }
-            int const checker = static_cast<int>(std::floor(center.x / 4.0F)) +
-                                static_cast<int>(std::floor(center.y / 4.0F));
+            int const checker = static_cast<int>(std::floor(center.x / continent.tile_size())) +
+                                static_cast<int>(std::floor(center.y / continent.tile_size()));
             color *= checker % 2 == 0 ? 1.0F : 0.94F;
             geometry.quad({min.x, 0.0F, max.y}, {max.x - min.x, 0, 0}, {0, 0, min.y - max.y},
                           color);
@@ -203,7 +204,9 @@ ContinentView::ContinentView(Device const &device, Renderer &renderer, GpuTextur
                              Continent const &continent)
     : material_(renderer.make_material(texture))
 {
-    constexpr float chunk_size = 64.0F;
+    // 16 x 16 tiles per mesh keeps the full first continent at 384 draws, without
+    // creating per-object UBOs/BLASes for thousands of tiny chunks. All are resident.
+    float const chunk_size = continent.tile_size() * 16.0F;
     auto const bounds = continent.bounds();
     std::vector<glm::vec3> origins;
     for (float z = bounds.min.y; z < bounds.max.y; z += chunk_size) {

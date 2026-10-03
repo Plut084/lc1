@@ -99,6 +99,8 @@ class Continent {
     // Optional application scenery, relative to spawn. Blocks participate in
     // both the continent's visible geometry and its static collision.
     static Continent make_prototype(std::span<ContinentBlock const> spawn_blocks = {});
+    // The playable continent follows continent-present.svg, the source of the PNG.
+    static Continent make_present(std::span<ContinentBlock const> spawn_blocks = {});
 
     GroundBounds bounds() const;
     float tile_size() const { return data_.tile_size; }
@@ -131,8 +133,8 @@ class Continent {
 
   private:
     ContinentData data_;
-    // Derived from impassable tiles once, used by the same sweep as building footprints.
-    std::vector<GroundBounds> terrain_obstacles_;
+    // Cached passability in row-major order. Collision visits only the swept tile range.
+    std::vector<std::uint8_t> blocked_tiles_;
 };
 
 } // namespace lc1

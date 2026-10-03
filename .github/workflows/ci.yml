@@ -67,7 +67,9 @@ jobs:
           echo /opt/slang/bin >> "$GITHUB_PATH"
       - name: Install dependencies
         run: |
-          conan install . -pr:h profiles/${{ matrix.profile }} -pr:b profiles/${{ matrix.build-profile }} --build=missing -s:h build_type=Debug -s:b build_type=Release -c:a tools.build:jobs=2
+          # The disposable container runs as root. Let recipes install required
+          # system development packages for both host and build dependencies.
+          conan install . -pr:h profiles/${{ matrix.profile }} -pr:b profiles/${{ matrix.build-profile }} --build=missing -s:h build_type=Debug -s:b build_type=Release -c:a tools.build:jobs=2 -c:a tools.system.package_manager:mode=install
       - name: Configure and build
         run: |
           # Assets are not tracked; only compilation is checked in CI.

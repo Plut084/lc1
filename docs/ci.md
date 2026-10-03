@@ -18,6 +18,10 @@ host 和 build profile 都显式指定：项目构建为 Debug，构建工具为
 原生构建的两种上下文使用同一份 profile，MinGW 交叉编译的 build profile 使用
 `profiles/linux-gcc`，保证构建工具运行于 Linux。并行度限制同时应用于两种上下文。
 
+Fedora 临时容器以 root 运行，Conan 安装命令为两种上下文设置
+`tools.system.package_manager:mode=install`，允许依赖配方通过 dnf 安装
+`xkeyboard-config-devel` 等系统开发包。这项设置仅用于 CI，不修改本地 profile。
+
 Conan 固定为 2.33.0，其默认设置表支持 GCC 16，解决此前 2.27.0 不识别该版本的问题。
 Slang 使用完整的 2026.18.3 官方发行包。Conan 包缓存按平台、工具链和依赖配置隔离，
 每组构建使用独立 runner 和构建目录，不共享 CMake 缓存。

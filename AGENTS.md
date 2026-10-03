@@ -2,6 +2,41 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Engineering judgment and evidence
+
+- **Investigate before concluding.** Read the relevant implementation, configuration and full
+  diagnostic before explaining a failure or changing behavior. Distinguish verified facts from
+  hypotheses. A compiler accepting or rejecting code is evidence about that toolchain, not by itself
+  proof of what the C++ standard requires. For disputed language rules, check the applicable standard
+  version and implementation support; use an authoritative reference or a focused reproducer as needed.
+- **Choose an implementation that matches the problem.** Check for an appropriate standard-library
+  facility before copying a formula or adding custom machinery. For example, mip-level counts for
+  positive integer dimensions are an integer bit-width problem: prefer `std::bit_width` over
+  floating-point `floor(log2(...))`. Check preconditions, boundary values and return types rather than
+  assuming a replacement is equivalent for every input.
+- **Fix the cause, not just the diagnostic.** Do not remove `constexpr`, disable a compiler job or
+  weaken a check merely to make an error disappear. First establish whether the cause is the algorithm,
+  language version, standard-library support, compiler implementation or build configuration. Preserve
+  the intended contract when a portable implementation is available; explain any necessary workaround.
+- **Verify defaults before adding overrides.** Resource limits, compiler choices and dependency
+  options must have a reason in the environment where they apply. Do not copy a local-machine limit
+  into CI without evidence. Check the tool's default behavior first; retain existing project-specific
+  constraints where their documented rationale applies. CI dependencies should match the work performed:
+  CPU tests do not require installing Vulkan validation layers, while GPU validation jobs do.
+- **Validate the claimed scope.** For build changes, check supported toolchains and clean-environment
+  assumptions such as compiler recognition, system packages, generated presets and runtime environments.
+  Use proportionate checks. Workflow linting, profile parsing, compilation, CPU tests and GPU execution
+  establish different things: report what actually ran, and identify platforms or paths still unverified.
+  Do not present local success as proof that remote CI or another compiler passed.
+- **Keep attribution and corrections factual.** Inspect the diff and available history before claiming
+  who introduced or changed code. Preserve unrelated user edits. When challenged, reconsider the evidence
+  rather than automatically agreeing; correct an unsupported claim explicitly. Do not invent an action,
+  intention or cause to make an apology sound complete.
+- **Follow through on findings.** Within the authorized scope, implement and verify necessary fixes
+  instead of stopping at an offer or explanation. For an audit, state its boundaries, cite concrete
+  findings, and distinguish fixed issues from unresolved ones. Never imply the whole project was audited
+  when only selected files or one subsystem were checked.
+
 ## Project status
 
 A **Vulkan 1.4 renderer skeleton** exists (`include/`, `src/`, `app/`): window, swapchain, resize

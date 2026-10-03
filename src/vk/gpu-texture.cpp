@@ -14,8 +14,7 @@ namespace {
 
 constexpr std::uint32_t max_supported_mip_levels(vk::Extent2D extent)
 {
-    return 1 +
-           static_cast<std::uint32_t>(std::floor(std::log2(std::max(extent.width, extent.height))));
+    return 1 + static_cast<std::uint32_t>(std::bit_width(std::max(extent.width, extent.height)));
 }
 
 GpuImage make_texture_image(Device const &device, vk::Extent2D extent,

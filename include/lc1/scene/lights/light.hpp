@@ -17,7 +17,7 @@ namespace lc1::scene {
 // Unified GPU upload record. Matches Light in shaders/lights.slang in 16-byte rows
 // within ConstantBuffer<LightsData>; recheck shader offsets/stride if layout changes.
 struct Light {
-    alignas(0) glm::vec3 position{0.0F};
+    glm::vec3 position{0.0F};
     std::uint32_t type = 0; // 0 = directional, 1 = point, 2 = spot, 3 = sphere
     // Unit world-space propagation direction: directional rays / spot cone axis.
     // Callers must normalize before upload; to_light preserves the scene direction.

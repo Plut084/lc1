@@ -1,4 +1,4 @@
-name: Build
+name: Build and test
 
 on:
   push:
@@ -30,14 +30,17 @@ jobs:
             profile: linux
             build-profile: linux
             preset: linux-x86_64-debug
+            testing: 'ON'
           - name: Linux / GCC 16
             profile: linux-gcc
             build-profile: linux-gcc
             preset: linux-x86_64-debug
+            testing: 'ON'
           - name: Windows / MinGW GCC 16
             profile: mingw64
             build-profile: linux-gcc
             preset: windows-x86_64-debug
+            testing: 'OFF'
     timeout-minutes: 90
     defaults:
       run:
@@ -69,13 +72,27 @@ jobs:
         run: |
           # The disposable container runs as root. Let recipes install required
           # system development packages for both host and build dependencies.
-          conan install . -pr:h profiles/${{ matrix.profile }} -pr:b profiles/${{ matrix.build-profile }} --build=missing -s:h build_type=Debug -s:b build_type=Release -c:a tools.build:jobs=2 -c:a tools.system.package_manager:mode=install
+          conan install . -pr:h profiles/${{ matrix.profile }} -pr:b profiles/${{ matrix.build-profile }} --build=missing -s:h build_type=Debug -s:b build_type=Release -o:h "lc1/*:with_validation_layers=False" -c:a tools.system.package_manager:mode=install
       - name: Configure and build
         run: |
-          # Assets are not tracked; only compilation is checked in CI.
+          # Assets are not tracked; CPU tests use procedural fixtures.
           mkdir -p assets
-          cmake --preset ${{ matrix.preset }} -DBUILD_TESTING=OFF
-          cmake --build --preset ${{ matrix.preset }} --parallel 2
+          cmake --preset ${{ matrix.preset }} -DBUILD_TESTING=${{ matrix.testing }}
+          cmake --build --preset ${{ matrix.preset }}
+      - name: Run CPU tests
+        if: matrix.testing == 'ON'
+        run: |
+          source build/linux-x86_64/Debug/generators/conanrun.sh
+          ctest --test-dir build/linux-x86_64/Debug --output-on-failure --no-tests=error --timeout 120 --output-junit test-results.xml
+      - name: Upload test results
+        if: always() && matrix.testing == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.profile }}
+          path: |
+            build/linux-x86_64/Debug/test-results.xml
+            build/linux-x86_64/Debug/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
 
   windows:
     name: Windows / MSVC / Debug
@@ -106,12 +123,27 @@ jobs:
       - name: Install dependencies
         shell: cmd
         run: |
-          conan install . -pr:h profiles/windows -pr:b profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release -c:a tools.build:jobs=2
+          conan install . -pr:h profiles/windows -pr:b profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release -o:h "lc1/*:with_validation_layers=False"
       - name: Configure and build
         shell: cmd
         run: |
-          rem Assets are not tracked; only compilation is checked in CI.
+          rem Assets are not tracked; CPU tests use procedural fixtures.
           if not exist assets mkdir assets
-          cmake --preset windows-x86_64-debug -DBUILD_TESTING=OFF
+          cmake --preset windows-x86_64-debug -DBUILD_TESTING=ON
           if errorlevel 1 exit /b 1
-          cmake --build --preset windows-x86_64-debug --parallel 2
+          cmake --build --preset windows-x86_64-debug
+      - name: Run CPU tests
+        shell: cmd
+        run: |
+          call build\windows-x86_64\Debug\generators\conanrun.bat
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build/windows-x86_64/Debug --output-on-failure --no-tests=error --timeout 120 --output-junit test-results.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows-msvc
+          path: |
+            build/windows-x86_64/Debug/test-results.xml
+            build/windows-x86_64/Debug/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

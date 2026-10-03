@@ -163,7 +163,8 @@ add_executable(lc1
     app/pbr-showcase.cpp
 )
 target_link_libraries(lc1 PRIVATE lc1_engine)
-add_imgui_backends(TARGET lc1 BACKENDS vulkan glfw DEPS glfw)
+add_imgui_backends(TARGET lc1 BACKENDS vulkan glfw DEPS
+    vulkan-headers::vulkan-headers glfw)
 
 # A MinGW link pulls the compiler's own runtime in as DLLs -- libstdc++-6.dll,
 # libgcc_s_seh-1.dll and libwinpthread-1.dll -- which are present on the machine that

@@ -62,12 +62,22 @@ jobs:
         with:
           path: ${{ env.CONAN_HOME }}/p
           key: conan-2.33-fedora44-${{ matrix.profile }}-debug-${{ hashFiles('conanfile.py', 'profiles/*') }}
+          restore-keys: |
+            conan-2.33-fedora44-${{ matrix.profile }}-debug-
+      - name: Cache Slang
+        id: slang-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/slang
+          key: slang-linux-x86_64-glibc2.28-${{ env.SLANG_VERSION }}
       - name: Install Slang
+        if: steps.slang-cache.outputs.cache-hit != 'true'
         run: |
           curl --fail --location --retry 3 "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64-glibc-2.28.tar.gz" -o /tmp/slang.tar.gz
           mkdir -p /opt/slang
           tar -xzf /tmp/slang.tar.gz -C /opt/slang
-          echo /opt/slang/bin >> "$GITHUB_PATH"
+      - name: Add Slang to PATH
+        run: echo /opt/slang/bin >> "$GITHUB_PATH"
       - name: Install dependencies
         run: |
           # The disposable container runs as root. Let recipes install required
@@ -113,13 +123,23 @@ jobs:
         with:
           path: ${{ env.CONAN_HOME }}/p
           key: conan-2.33-windows2022-msvc194-debug-${{ hashFiles('conanfile.py', 'profiles/windows') }}
+          restore-keys: |
+            conan-2.33-windows2022-msvc194-debug-
+      - name: Cache Slang
+        id: slang-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/slang
+          key: slang-windows-x86_64-${{ env.SLANG_VERSION }}
       - name: Install Slang
+        if: steps.slang-cache.outputs.cache-hit != 'true'
         run: |
           $archive = "$env:RUNNER_TEMP/slang.zip"
           $destination = "$env:RUNNER_TEMP/slang"
           Invoke-WebRequest "https://github.com/shader-slang/slang/releases/download/v$env:SLANG_VERSION/slang-$env:SLANG_VERSION-windows-x86_64.zip" -OutFile $archive
           Expand-Archive $archive -DestinationPath $destination
-          "$destination/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Add Slang to PATH
+        run: '"$env:RUNNER_TEMP/slang/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
       - name: Install dependencies
         shell: cmd
         run: |

@@ -24,9 +24,6 @@ void interrupt_handler(int /*unused*/)
 
 int main()
 {
-    // Validation aborts on errors. Preserve startup logs even when stdout is piped.
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
-
     try {
         spdlog::set_pattern("[%^%l%$] %v");
         std::signal(SIGINT, interrupt_handler);

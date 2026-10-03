@@ -32,8 +32,8 @@ lc1::ContinentData flat_world()
             .spawn = {0.0F, 0.0F, 0.0F},
             .patches = {},
             .blocks = {},
-            .regions = {{lc1::RegionId{1}, "平原", lc1::RegionType::Plain},
-                        {lc1::RegionId{2}, "海域", lc1::RegionType::Sea}},
+            .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain},
+                        {lc1::RegionId{2}, "Sea", lc1::RegionType::Sea}},
             .locations = {},
             .roads = {}};
 }

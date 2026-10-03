@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# CMake warns for `FetchContent` and ask for this.
+# CMake warns for `FetchContent` and asks for this.
 set(DOWNLOAD_EXTRACT_TIMESTAMP ON)
 
 # clangd reads a compilation database, and .clangd points at this tree's; without this
@@ -33,8 +33,7 @@ foreach(flag IN LISTS lc1_warning_candidates)
 endforeach()
 
 function(lc1_enable_warnings target)
-    target_compile_options(${target} PRIVATE
-        "$<$<COMPILE_LANGUAGE:CXX>:${lc1_warning_options}>")
+    target_compile_options(${target} PRIVATE ${lc1_warning_options})
 endfunction()
 
 # Static MinGW runtimes are required for standalone Windows executables.

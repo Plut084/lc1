@@ -21,18 +21,18 @@ Continent Continent::make_present(std::span<ContinentBlock const> spawn_blocks)
         .spawn = {0.0F, 0.0F, 32.0F},
         .patches = {},
         .blocks = {},
-        .regions = {{plain, "大陆与群岛", RegionType::Plain}, {sea, "外海", RegionType::Sea}},
+        .regions = {{plain, "Mainland and Islands", RegionType::Plain}, {sea, "Open Sea", RegionType::Sea}},
         .locations =
-            {{city, "长风城", LocationType::City, plain, {{-160, -384}, {160, 0}}, {0, 0}},
-             {village, "南田村", LocationType::Village, plain, {{-64, 80}, {64, 160}}, {0, 112}},
+            {{city, "Longwind City", LocationType::City, plain, {{-160, -384}, {160, 0}}, {0, 0}},
+             {village, "Southfield Village", LocationType::Village, plain, {{-64, 80}, {64, 160}}, {0, 112}},
              {shore,
-              "南湾海岸",
+              "South Bay Coast",
               LocationType::Wilderness,
               plain,
               {{-24, 224}, {24, 256}},
               {0, 240}}},
-        .roads = {{RoadId{1}, "城南大道", city, village, 8, {{0, 0}, {0, 112}}},
-                  {RoadId{6}, "南湾小径", village, shore, 4, {{0, 112}, {0, 240}}}},
+        .roads = {{RoadId{1}, "City South Road", city, village, 8, {{0, 0}, {0, 112}}},
+                  {RoadId{6}, "South Bay Trail", village, shore, 4, {{0, 112}, {0, 240}}}},
     };
     for (auto const &run : continent_land::runs)
         for (auto column = run[1]; column < run[2]; ++column)

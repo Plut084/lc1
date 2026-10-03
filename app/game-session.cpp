@@ -19,7 +19,7 @@
 namespace lc1::app {
 namespace {
 
-constexpr std::array lighting_names{"全部", "方向光", "点光", "聚光灯", "球形光", "仅发光材质"};
+constexpr std::array lighting_names{"All", "Directional", "Point", "Spot", "Sphere", "Emission Only"};
 
 PlayerInput player_input(InputRouter const &router, glm::vec2 look_delta)
 {
@@ -174,11 +174,11 @@ void GameSession::update_title(Window &window)
     auto const *road = continent_.road_at(position);
     auto const local = player_.position() - continent_.spawn();
     bool const in_showcase = std::abs(local.x) < 24 && std::abs(local.z) < 23;
-    auto const title = std::format("lc1 | {} | {} | 灯光: {} | 曝光: {:.2f}", region->name,
-                                   in_showcase ? "材质展示区"
+    auto const title = std::format("lc1 | {} | {} | Lighting: {} | Exposure: {:.2f}", region->name,
+                                   in_showcase ? "Material Showcase"
                                    : place     ? place->name
                                    : road      ? road->name
-                                               : "野外",
+                                               : "Wilderness",
                                    lighting_names[lighting_mode_], output_.exposure);
     if (title != current_title_) {
         window.set_title(title);

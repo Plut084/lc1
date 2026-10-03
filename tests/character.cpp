@@ -48,7 +48,7 @@ lc1::Continent make_world()
         .spawn = {1.0F, 0.0F, 2.0F},
         .patches = {},
         .blocks = {{{5, 0, -10}, {5.1F, 4, 10}}},
-        .regions = {{lc1::RegionId{1}, "平原", lc1::RegionType::Plain}},
+        .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain}},
         .locations = {},
         .roads = {},
     }};

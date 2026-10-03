@@ -11,7 +11,11 @@ validation + synchronization validation on and **zero output**. It is being buil
 along the official tutorial (https://docs.vulkan.org/tutorial/latest/). A first continent walking
 prototype now exists: tiled terrain, a full-scale blockout city, one ground-level player controller,
 and static collision. The world now has named regions (all five terrain types), six location types
-and a validated, walkable road network; see `docs/world-map.md`. Progression, combat, NPC pathfinding and persistent city simulation are not
+and a validated, walkable road network; see `docs/world-map.md`. The default game now uses
+`Continent::make_present()`: a 6144 x 4096 metre land/sea outline from `continent-present.svg`,
+with the starter city, village and south-bay shore. The all-biome, six-location `make_prototype()`
+remains a test fixture. See `docs/continent-outline.md` for export and scale conventions.
+Progression, combat, NPC pathfinding and persistent city simulation are not
 implemented yet.
 
 `docs/` holds the design draft and stays in Chinese; keep new design docs in Chinese too.
@@ -248,6 +252,9 @@ where GLFW uses Win32. Its only option is the environment-specific
 describing the machine compiling the native build tools; it is separate from either host profile.
 
 ## Coding conventions
+
+**Use English throughout code**, including comments, docstrings, diagnostic messages,
+UI strings, fixture data and map-generation scripts. Design documents in `docs/` remain Chinese.
 
 **The [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines) are the
 standard here**, plus two project additions: `snake_case` variables, and no naming prefixes. The table

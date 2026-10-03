@@ -11,11 +11,11 @@
 namespace lc1 {
 
 enum class RegionType : std::uint8_t {
-    Plain,     // 平原
-    Forest,    // 森林
-    Mountain,  // 山地
-    Wasteland, // 荒原
-    Sea,       // 海域
+    Plain,     
+    Forest,    
+    Mountain,  
+    Wasteland, 
+    Sea,       
 };
 
 // Stable identities, independent of vector order. Zero is reserved for an invalid ID.
@@ -88,7 +88,7 @@ struct ContinentData {
     glm::vec3 spawn;
     std::vector<GroundPatch> patches;
     std::vector<ContinentBlock> blocks;
-    std::vector<Region> regions = {{RegionId{1}, "平原", RegionType::Plain}};
+    std::vector<Region> regions = {{RegionId{1}, "Plain", RegionType::Plain}};
     std::vector<Location> locations;
     std::vector<Road> roads;
 };

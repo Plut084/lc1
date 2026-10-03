@@ -67,11 +67,11 @@ class FpsCamera {
             return false;
         glm::vec3 direction = diff / len;
 
-        // 防止浮点误差让 direction.y 略超 ±1，asin 返回 NaN
+        // Clamp rounding errors outside [-1, 1] to keep asin from returning NaN.
         float y = glm::clamp(direction.y, -1.0F, 1.0F);
         pitch_ = glm::clamp(glm::degrees(std::asin(y)), -89.0F, 89.0F);
 
-        // 水平分量接近零时，yaw 退化，保持原值
+        // Preserve yaw when the horizontal direction is too small to define it.
         float horizontal_sq = direction.x * direction.x + direction.z * direction.z;
         if (horizontal_sq > 1e-12F)
             yaw_ = glm::degrees(std::atan2(direction.z, direction.x));

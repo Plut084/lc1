@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""博宇大陆 · 现今势力图 generator.
+"""Boyu Continent: present-day faction map generator.
 
 Writes continent-present.svg next to this file. Render a PNG with:
     magick -density 96 continent-present.svg continent-present.png
@@ -271,7 +271,7 @@ RIVERS = [
             (1516, 1390)], 3.0),
 ]
 DRY_RIVER = [(610, 560), (560, 630), (500, 700), (440, 760), (380, 800), (300, 832)]
-LAKES = [("星湖", 1716, 776, 38, 25, 0.2), ("冰湖", 1420, 232, 30, 14, -0.1)]
+LAKES = [("Star Lake", 1716, 776, 38, 25, 0.2), ("Ice Lake", 1420, 232, 30, 14, -0.1)]
 
 
 def build(rng):

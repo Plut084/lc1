@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""从现世地图 SVG 的 landshape 导出游戏用海陆格子，仅依赖 Python 标准库。
+"""Export land cells from the present-day map's SVG landshape using the standard library.
 
-保留主大陆和所有岛屿，按格子中心采样；忽略描边、势力线、河流和湖泊。
-默认生成已提交的 C++ 数据。--check 检查数据是否过期，--preview 输出核对用 SVG。
+Sample mainland and island polygons at cell centres; ignore strokes, borders, rivers and lakes.
+By default, update the checked-in C++ data. Use --check to detect stale data and --preview
+for an SVG overlay of the sampled cells and source coastline.
 """
 
 import argparse
@@ -23,19 +24,19 @@ def read_outline():
     root = ET.parse(SOURCE).getroot()
     extent = tuple(map(float, root.attrib["viewBox"].split()))
     if extent != (0, 0, 2400, 1600):
-        raise ValueError("地图坐标范围已改变，请重新确认比例尺")
+        raise ValueError("Map coordinates have changed; review the world scale")
     shape = next(e for e in root.iter() if e.get("id") == "landshape")
-    # 此生成器只接受项目的绝对 M/L/Z 路径，避免静默误读曲线或相对坐标。
+    # Accept only absolute M/L/Z paths; reject curves and relative coordinates explicitly.
     path = shape.attrib["d"]
     number = r"-?\d+(?:\.\d+)?"
     pair = rf"({number})\s+({number})"
     polygons = []
     for part in path.split("Z")[:-1]:
         if not re.fullmatch(rf"\s*M{pair}(?:\s+L{pair})+\s*", part):
-            raise ValueError("landshape 必须由闭合的绝对 M/L/Z 多边形组成")
+            raise ValueError("landshape must contain closed polygons using absolute M/L/Z commands")
         polygons.append([(float(x), float(y)) for x, y in re.findall(pair, part)])
     if not polygons or path.split("Z")[-1].strip():
-        raise ValueError("landshape 为空或未闭合")
+        raise ValueError("landshape is empty or contains an unclosed polygon")
     return polygons
 
 
@@ -50,7 +51,7 @@ def rasterize(polygons):
                     crossings.append(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]))
             crossings.sort()
             if len(crossings) % 2:
-                raise ValueError("轮廓扫描线交点数不为偶数")
+                raise ValueError("An outline scanline has an odd number of intersections")
             for left, right in zip(crossings[::2], crossings[1::2]):
                 start = max(0, math.ceil(left * COLUMNS / 2400 - 0.5))
                 end = min(COLUMNS, math.ceil(right * COLUMNS / 2400 - 0.5))
@@ -108,7 +109,7 @@ def preview(runs, destination):
         f'width="{(end - start) * 6.25}" height="6.25"/>'
         for row, start, end in runs
     )
-    # 游戏的原点为 (-3200,-2688)，一米对应 1/2.56 个 SVG 单位。
+    # The world origin is (-3200, -2688); one metre spans 1/2.56 SVG units.
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2400 1600">'
@@ -137,13 +138,13 @@ def main():
     content = header(runs)
     if args.check:
         if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != content:
-            raise SystemExit("大陆数据已过期：请运行 python3 docs/map/export_continent.py")
+            raise SystemExit("Continent data is stale: run python3 docs/map/export_continent.py")
     else:
         OUTPUT.write_text(content, encoding="utf-8")
     if args.preview:
         preview(runs, args.preview)
-    print(f"{len(polygons)} 个轮廓，{sum(map(sum, grid))} 个陆地格，{len(runs)} 段；"
-          f"{'数据一致' if args.check else '已导出'}")
+    print(f"{len(polygons)} outlines, {sum(map(sum, grid))} land cells, {len(runs)} runs; "
+          f"{'data is up to date' if args.check else 'exported'}")
 
 
 if __name__ == "__main__":

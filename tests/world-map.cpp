@@ -28,22 +28,22 @@ lc1::ContinentData connected_world()
             .spawn = {0, 0, -24},
             .patches = {},
             .blocks = {},
-            .regions = {{lc1::RegionId{1}, "平原", lc1::RegionType::Plain},
-                        {lc1::RegionId{9}, "海域", lc1::RegionType::Sea}},
+            .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain},
+                        {lc1::RegionId{9}, "Sea", lc1::RegionType::Sea}},
             .locations = {{lc1::LocationId{10},
-                           "村庄",
+                           "Village",
                            lc1::LocationType::Village,
                            lc1::RegionId{1},
                            {{-28, 0}, {-16, 12}},
                            {-20, 4}},
                           {lc1::LocationId{20},
-                           "遗迹",
+                           "Ruins",
                            lc1::LocationType::Ruins,
                            lc1::RegionId{1},
                            {{16, 0}, {28, 12}},
                            {20, 4}}},
             .roads = {{lc1::RoadId{7},
-                       "道路",
+                       "Road",
                        lc1::LocationId{10},
                        lc1::LocationId{20},
                        4,
@@ -72,7 +72,7 @@ void identity_and_queries()
     std::ranges::reverse(data.locations);
     lc1::Continent const world{std::move(data)};
     check(world.region_at({0, 0})->id == lc1::RegionId{1}, "tile identity survives region reorder");
-    check(world.location(lc1::LocationId{10})->name == "村庄",
+    check(world.location(lc1::LocationId{10})->name == "Village",
           "location IDs are not array indices");
     check(world.road(lc1::RoadId{7})->to == lc1::LocationId{20}, "road endpoints retain identity");
     check(!world.region(lc1::RegionId{99}) && !world.location(lc1::LocationId{99}) &&
@@ -92,7 +92,7 @@ void identity_and_queries()
 
     data = connected_world();
     data.locations.push_back({lc1::LocationId{30},
-                              "村中营地",
+                              "Village Camp",
                               lc1::LocationType::Wilderness,
                               lc1::RegionId{1},
                               {{-24, 2}, {-18, 8}},

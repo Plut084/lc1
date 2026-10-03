@@ -1,0 +1,15 @@
+# Native Windows x86_64 with Visual Studio 2022 (MSVC 19.4x).
+# Activate the x64 developer environment before configuring with Ninja.
+# This is separate from profiles/mingw64, which cross-compiles from Linux.
+
+[settings]
+arch=x86_64
+os=Windows
+compiler=msvc
+compiler.version=194
+compiler.cppstd=23
+compiler.runtime=dynamic
+build_type=Debug
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja

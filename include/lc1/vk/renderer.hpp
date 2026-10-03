@@ -56,8 +56,8 @@ class Renderer {
     // Here rather than in Material because only the renderer has the pool, the
     // sampler, and the pipeline whose layout the set must match. Throws once
     // max_materials sets are live.
-    Material make_material(GpuTexture const &texture);
-    Material make_material(MaterialInfo const &info);
+    GpuMaterial make_material(GpuTexture const &texture);
+    GpuMaterial make_material(MaterialInfo const &info);
     vk::SampleCountFlagBits sample_count() const { return samples_; }
 
     // Creates one set of drawing resources with its own descriptor pool. The

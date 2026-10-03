@@ -77,7 +77,7 @@ occlusion 仍待 IBL 接入，非空贴图目前明确报未支持。
 
 ## 主场景展示区与验证
 
-`make run` 进入游戏后，出生点道路两侧就是 PBR 展示区，直接由 `app/main.cpp` 装配。
+`make run` 进入游戏后，出生点道路两侧就是 PBR 展示区，直接由 `app/game-session.cpp` 装配。
 旧的 `make run-pbr` 是同一入口的兼容别名；不再单独构建展示程序。
 展台与背板使用相同的 `ContinentBlock` 数据绘制并参与碰撞，中间保留 11 米通道。
 

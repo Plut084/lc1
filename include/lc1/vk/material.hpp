@@ -30,9 +30,9 @@ struct MaterialInfo {
 // Immutable GPU material: owns set 2 and its parameter UBO through DescriptorSet.
 // Shared across frame slots. Build through Renderer::make_material; Renderer,
 // borrowed textures and samplers must outlive it. Wait for GPU use before teardown.
-class Material {
+class GpuMaterial {
     friend class Renderer;
-    Material(DescriptorSet descriptor_set, std::uint32_t &live_materials, bool uses_normal_map)
+    GpuMaterial(DescriptorSet descriptor_set, std::uint32_t &live_materials, bool uses_normal_map)
         : descriptor_set_(std::move(descriptor_set)), live_materials_(&live_materials),
           uses_normal_map_(uses_normal_map)
     {
@@ -40,16 +40,16 @@ class Material {
     }
 
   public:
-    Material(Material const &) = delete;
-    Material &operator=(Material const &) = delete;
-    Material(Material &&other) noexcept
+    GpuMaterial(GpuMaterial const &) = delete;
+    GpuMaterial &operator=(GpuMaterial const &) = delete;
+    GpuMaterial(GpuMaterial &&other) noexcept
         : descriptor_set_(std::move(other.descriptor_set_)),
           live_materials_(std::exchange(other.live_materials_, nullptr)),
           uses_normal_map_(other.uses_normal_map_)
     {
     }
-    Material &operator=(Material &&) = delete;
-    ~Material()
+    GpuMaterial &operator=(GpuMaterial &&) = delete;
+    ~GpuMaterial()
     {
         if (live_materials_)
             --*live_materials_;

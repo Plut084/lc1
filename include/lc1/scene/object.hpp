@@ -9,7 +9,7 @@ namespace lc1::scene {
 struct Object {
     Transform transform;
     GpuMesh const *mesh = nullptr;
-    Material const *material = nullptr;
+    GpuMaterial const *material = nullptr;
     bool casts_shadow = true;
 
     DrawItem draw_item() const

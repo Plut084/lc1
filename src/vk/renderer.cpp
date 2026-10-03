@@ -146,14 +146,14 @@ FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) con
     return FrameResources{std::move(descriptor_pool), std::move(globals), std::move(objects)};
 }
 
-Material Renderer::make_material(GpuTexture const &texture)
+GpuMaterial Renderer::make_material(GpuTexture const &texture)
 {
     return make_material(
         MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
                      .base_color = {.texture = &texture}});
 }
 
-Material Renderer::make_material(MaterialInfo const &info)
+GpuMaterial Renderer::make_material(MaterialInfo const &info)
 {
     if (live_materials_ >= max_materials)
         fail("material capacity exhausted ({} live materials)", max_materials);
@@ -196,7 +196,7 @@ Material Renderer::make_material(MaterialInfo const &info)
                                         .imageView = *texture->image().view(),
                                         .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal});
         }
-        return Material{std::move(set), live_materials_, info.normal.texture != nullptr};
+        return GpuMaterial{std::move(set), live_materials_, info.normal.texture != nullptr};
     }
     catch (vk::SystemError const &error) {
         fail("material creation failed: {}", error.what());

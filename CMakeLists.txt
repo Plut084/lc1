@@ -119,7 +119,13 @@ if(MINGW)
 endif()
 
 # app: the game executable. Output name stays lc1 so the Makefile works.
-add_executable(lc1 app/main.cpp app/pbr-showcase.cpp)
+add_executable(lc1
+    app/main.cpp
+    app/application.cpp
+    app/game-session.cpp
+    app/player-view.cpp
+    app/pbr-showcase.cpp
+)
 target_link_libraries(lc1 PRIVATE lc1_engine)
 
 # A MinGW link pulls the compiler's own runtime in as DLLs -- libstdc++-6.dll,
@@ -160,11 +166,15 @@ if(BUILD_TESTING)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     target_compile_options(lc1_tangent_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_executable(lc1_player_view_tests tests/player-view.cpp app/player-view.cpp)
+    target_link_libraries(lc1_player_view_tests PRIVATE lc1_engine)
+    target_compile_options(lc1_player_view_tests PRIVATE -Wall -Wextra -Wpedantic)
     if(MINGW)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
         target_link_options(lc1_character_tests PRIVATE -static)
         target_link_options(lc1_tangent_tests PRIVATE -static)
+        target_link_options(lc1_player_view_tests PRIVATE -static)
     endif()
     if(NOT CMAKE_CROSSCOMPILING)
         # Explicit GPU integration target: needs a display/GPU and the Conan run env.
@@ -184,6 +194,7 @@ if(BUILD_TESTING)
         add_test(NAME continent COMMAND lc1_continent_tests)
         add_test(NAME character COMMAND lc1_character_tests)
         add_test(NAME tangent_space COMMAND lc1_tangent_tests)
+        add_test(NAME player_view COMMAND lc1_player_view_tests)
     endif()
 endif()
 

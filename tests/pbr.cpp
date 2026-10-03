@@ -260,7 +260,7 @@ void material_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
     info.parameters.roughness_factor = 1;
     rejects([&] { render_material(info, {}, {.exposure = 0}); },
             "invalid exposure must be rejected");
-    std::vector<lc1::Material> materials;
+    std::vector<lc1::GpuMaterial> materials;
     for (std::uint32_t i = 0; i < lc1::Renderer::max_materials; ++i)
         materials.push_back(renderer.make_material(info));
     rejects([&] { renderer.make_material(info); }, "material pool limit must be explicit");

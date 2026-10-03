@@ -129,8 +129,8 @@ std::vector<ContinentBlock> PbrShowcase::spawn_blocks()
     return blocks;
 }
 
-Material const &PbrShowcase::material(Renderer &renderer, glm::vec3 color, float metallic,
-                                      float roughness, glm::vec3 emission)
+GpuMaterial const &PbrShowcase::material(Renderer &renderer, glm::vec3 color, float metallic,
+                                         float roughness, glm::vec3 emission)
 {
     MaterialInfo info;
     info.parameters = {.base_color_factor = glm::vec4{color, 1},
@@ -141,7 +141,7 @@ Material const &PbrShowcase::material(Renderer &renderer, glm::vec3 color, float
     return materials_.back();
 }
 
-std::size_t PbrShowcase::place(GpuMesh const &mesh, Material const &material, glm::vec3 position,
+std::size_t PbrShowcase::place(GpuMesh const &mesh, GpuMaterial const &material, glm::vec3 position,
                                glm::vec3 scale, float yaw)
 {
     auto transform = glm::translate(glm::mat4{1}, position + origin_);

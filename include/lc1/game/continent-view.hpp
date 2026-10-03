@@ -1,7 +1,7 @@
 #pragma once
 
-#include "lc1/vk/material.hpp"
 #include "lc1/vk/gpu-mesh.hpp"
+#include "lc1/vk/material.hpp"
 
 #include <span>
 #include <vector>
@@ -27,7 +27,7 @@ class ContinentView {
     std::span<DrawItem const> draw_items() const { return draws_; }
 
   private:
-    Material material_;
+    GpuMaterial material_;
     std::vector<GpuMesh> meshes_;
     // Borrow the completed meshes_ array and material_; neither moves after construction.
     std::vector<DrawItem> draws_;

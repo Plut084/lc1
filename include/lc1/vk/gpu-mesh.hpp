@@ -17,7 +17,7 @@
 namespace lc1 {
 
 class Device;
-class Material;
+class GpuMaterial;
 
 // Something drawable: vertex data on the GPU plus how many vertices to draw.
 // A resource, loaded once and shared -- a hundred soldiers are a hundred
@@ -133,7 +133,7 @@ inline GpuMesh::GpuMesh(Device const &device, std::span<Vertex const> vertices,
 // GpuMesh and the Material must outlive the frame that draws them.
 struct DrawItem {
     GpuMesh const *mesh = nullptr;
-    Material const *material = nullptr;
+    GpuMaterial const *material = nullptr;
     glm::mat4 model{1.0F};
     // Printed labels still render, but need not behave like raised shadow casters.
     bool casts_shadow = true;

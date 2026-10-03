@@ -35,10 +35,10 @@ load-bearing design axis, not just vocabulary:
   WASD movement. Cities occupy large, traversable spaces with walls, gates, streets and buildings,
   at the same spatial scale as the character and countryside. This replaces the earlier world-map /
   top-down RTS-map split (user decision, 2026-09-29). The current requested view is fixed oblique,
-  like Don't Starve / Red Alert: `update_player2` follows the player using a perspective projection
+  like Don't Starve / Red Alert: `app::PlayerView` follows the player using a perspective projection
   (user decision, 2026-09-30), a visible cursor and wheel zoom. The vertical FOV is fixed at 45 degrees;
   zoom moves the camera along its viewing direction. This is the default view inside and outside cities.
-  M toggles between `update_player2` and first-person `update_player`, sharing player position and
+  M toggles between oblique and first-person modes in `app::PlayerView`, sharing player position and
   collision. First-person captures the cursor; returning releases it and recenters while preserving
   zoom and the Y lock state.
   Y toggles following the player; while unlocked, edge pan moves the camera independently and
@@ -354,13 +354,24 @@ order's measured binding frequency.
 
 ## Architecture
 
+`app/main.cpp` owns process setup (logging, signals, environment variables) and the final exception
+boundary. `app::Application` owns the window/Vulkan lifetime, input routing, swapchain recreation and
+frame scheduling. `app::GameSession` owns the continent and its GPU resources, player, PBR exhibits,
+lighting/exposure and location title. `app::PlayerView` owns camera modes and remembered first-person
+angles; it takes resolved input and has no Window dependency. The application applies cursor capture
+before reading mouse deltas. These are application modules, not a second rendering abstraction.
+
+`Application` and `GameSession` are immovable because their members borrow other members. Scene
+resources precede their draws/controllers, and the frame loop follows the entire game session so its
+resources die first. `Application::run` drains the GPU before returning or propagating a loop exception.
+
 Init order is load-bearing — device *selection* needs the surface, and each stage must be up before the
 next is constructed:
 
 ```
 VulkanLoader(dlopen) -> Window(glfwInit + GLFWwindow) -> Instance(loader)
   -> Surface(instance, window) -> Device(instance, surface)
-  -> Renderer -> FrameLoop<FrameResources>
+  -> Renderer -> GameSession -> FrameLoop<FrameResources>
   -> Swapchain (created lazily when the framebuffer has a usable extent)
 ```
 
@@ -371,7 +382,7 @@ without terminating GLFW. The one order the types do *not* enforce is `VulkanLoa
 GLFW reads the loader it is handed only in `glfwInit`, so the other order silently makes GLFW dlopen
 `libvulkan.so.1` itself.
 
-**`VulkanLoader` is declared first in `main()`'s scope and `Window` second, so they are destroyed
+**`Application` declares `VulkanLoader` first and `Window` second, so they are destroyed
 last**, in reverse. `VulkanLoader` must be the very last: `~vk::raii::Context` `dlclose`s the library
 every function pointer points into, GLFW's included. `Window` must follow every Vulkan object. On
 Wayland that ordering is load-bearing rather than tidy: `glfwCreateWindowSurface` builds the
@@ -458,10 +469,10 @@ failed".
 `destroy()`.
 Construction happens in the constructor, and a constructor that fails throws, so **an object that
 exists is one that works** — there is no valid-but-uninitialized state for a later call to trip over.
-Destruction is the destructor, running at the closing brace of the block in `main()` that declares them,
-in reverse declaration order. Member declaration order inside those classes is therefore load-bearing:
+Destruction follows reverse member declaration order when `Application` leaves scope in `main()`.
+Member declaration order inside these classes is therefore load-bearing:
 `Device` declares its allocator after its logical device so the allocator dies first. `Surface`
-is declared before `Device` in `main()` and outlives the swapchain. `Instance` declares
+is declared before `Device` in `Application` and outlives the swapchain. `Instance` declares
 `messenger_` after `handle_` so the *messenger* dies first, and `Swapchain` declares `images_` after
 `handle_` so the image views and semaphores — which reference the swapchain's images — die before the
 swapchain itself.
@@ -478,7 +489,7 @@ guard needs no "is it armed" flag.
 
 `FrameLoop` holds a non-owning, non-null `Device const*` initialized from its constructor reference;
 `Swapchain` holds `Device const&`. The raii handles they own call back through that device to be destroyed, and a destroyed `Device` has already cleared its dispatcher — so outliving the
-device is a null call, not a stale value. `main()`'s declaration order is what guarantees it.
+device is a null call, not a stale value. `Application`'s member declaration order is what guarantees it.
 
 `Swapchain::recreate` has to repeat that last ordering **by hand** (`images_.clear()` then
 `handle_.clear()`), because a rebuild is not a destruction and the member declaration order only helps
@@ -492,7 +503,7 @@ way to spell "borrowed", so the type stays `vk::Image` and the comment in the st
 
 **`Swapchain` holds `Device const&`.** The raii handles it owns call back through that device to be
 destroyed, and a destroyed `Device` has already cleared its dispatcher — so a `Swapchain` that outlives
-its `Device` is a null call, not a stale value. `main()`'s declaration order is what guarantees it, and
+its `Device` is a null call, not a stale value. `Application`'s member declaration order is what guarantees it, and
 it is the same contract the raw handle copies used to carry, only now enforced sharply.
 
 **`Surface` owns presentation integration; `Device` only borrows it during construction.**
@@ -500,7 +511,7 @@ it is the same contract the raw handle copies used to carry, only now enforced s
 `Instance` and `Window` must outlive `Surface`. `Swapchain` holds a non-owning `Surface const*`
 for creation and recreation; Surface must outlive the swapchain. `Device` stores neither Surface
 nor Window and includes no GLFW header. Its constructor only needs the surface to select a queue
-family that supports presentation. Framebuffer size is queried by `main()` and passed to Swapchain
+family that supports presentation. Framebuffer size is queried by `Application::prepare_swapchain` and passed to Swapchain
 as an explicit extent; Swapchain does not depend on Window.
 
 This is not cosmetic. `vk::raii` operation methods dereference their dispatcher unguarded —
@@ -511,12 +522,12 @@ table. Only `clear()` and the destructor check for null. Not having that state a
 guarding against it.
 
 `Device::wait_idle()` stays explicit because `~vk::raii::Device` destroys the device **without** waiting
-for it. `main()` waits on both normal and exceptional exits from the drawing loop, while the frame
+for it. `Application::run` waits on both normal and exceptional exits from the drawing loop, while the frame
 resources, materials and meshes are still alive. RAII destruction alone does not make pending GPU
 access safe. A validation error that `abort()`s never unwinds at all.
 
 **Frame scheduling owns per-slot drawing resources through a template parameter.**
-`FrameLoop<FrameResources>` constructs one resource set per slot using a factory supplied by `main()`.
+`FrameLoop<FrameResources>` constructs one resource set per slot using a factory supplied by `Application`.
 The factory calls `Renderer::make_frame_resources(object_capacity)` and is not retained. After waiting
 for its slot's fence, the loop passes that slot's resources by mutable reference to the synchronous
 recording callback. It does not interpret the resource contents or depend on `Renderer`.
@@ -536,7 +547,7 @@ the chunks produced by `ContinentView`, sharing one material. Frame capacity fol
 draw count. `Vertex::color` defaults to white for existing textured meshes; procedural world geometry
 uses per-vertex colors and a white texture. The renderer owns the pipeline,
 material pool and sampler. `RenderTarget` remains the shared non-owning output contract.
-`main()` creates the renderer before the frame loop and waits for the device on normal and exceptional
+`Application` creates the renderer before the frame loop and waits for the device on normal and exceptional
 loop exits before destroying any resources used by submitted draws.
 
 `scene::Character` owns its `Object`, whose transform is the sole world pose. Its origin is at
@@ -575,7 +586,7 @@ manager destruction. Device must outlive the manager. Material owners must keep 
 Renderer alive until those materials are destroyed. Cache access is render-thread-only.
 
 Layout: **library** `lc1_engine` = public headers in `include/lc1/` + sources and private headers
-(e.g. `vk/checks.hpp`) in `src/`; **app** `lc1` = `app/main.cpp`, linking `lc1_engine`. Include
+(e.g. `vk/checks.hpp`) in `src/`; **app** `lc1` = the sources in `app/`, linking `lc1_engine`. Include
 public headers as `"lc1/..."` everywhere; `src/` is only on the library's private include path, so
 the app cannot reach private headers.
 
@@ -637,7 +648,7 @@ and never "is W down":
 - **`InputState`** — which switches are down, which went down or came up this frame, cursor
   position/delta/scroll. No meaning, no game rules. Window owns it because Window owns the callbacks.
 - **`Binding`** — a row of data: in this context, this `Key` means this `Action`. The table lives in
-  `app/main.cpp`; nothing else maps a key to a meaning, so a rebind is a row edit.
+  `src/input.cpp` (`default_bindings`); a rebind is a row edit.
 - **`InputRouter`** — resolves the active context's rows into `held`/`pressed`/`released` per action.
 
 Five things are load-bearing:
@@ -686,7 +697,7 @@ framebuffer size: multiply by `glfwGetWindowContentScale` at the point where a c
 or a world ray. Mouse *motion* (camera look) needs no conversion and is why the demo works without it;
 picking will, and that is the one place to add it.
 
-**`Window` interprets no key at all.** ESC-to-close moved to `main()` when input arrived: a hardcoded
+**`Window` interprets no key at all.** `Application::run_loop` handles ESC-to-close: a hardcoded
 ESC-to-close makes ESC unusable as the pause/back key every strategy game needs, and "this key closes
 the window" is application policy, not a property of a window.
 
@@ -721,7 +732,8 @@ has to be caught into one that cannot be written — `images_.clear()` frees its
 
 `ctest --test-dir build/linux-x86_64/Debug --output-on-failure` runs CPU tests for continent data,
 continuous collision, wall sliding, body clearance, boundaries, movement speed, city traversal,
-character pose/controller behavior and static model correction (including reflected winding).
+character pose/controller behavior, view switching, zoom/lock preservation, focus gating and
+static model correction (including reflected winding).
 They create no window or Vulkan device. Runtime rendering still needs validation-layer smoke testing.
 
 Validation **and synchronization validation** run by default in debug builds. This is the safety net for
@@ -865,7 +877,7 @@ Resolve happens in linear HDR before exposure/Reinhard tone mapping. sRGB attach
 automatically; UNORM display output explicitly requests `OutputEncoding::Srgb`. The default writes
 linear values. The depth-preview diagnostic keeps an independent output path. See `docs/lighting.md` and `docs/pbr.md`.
 
-`app/main.cpp` adds a walkable PBR exhibit area on both sides of the spawn road. Its shared meshes,
+`app/game-session.cpp` adds a walkable PBR exhibit area on both sides of the spawn road. Its shared meshes,
 procedural textures, materials, labels, lights and animated transforms live in `app/pbr-showcase.*`.
 `Continent::make_prototype` optionally accepts spawn-relative blocks, used for both rendering and
 static collision; keep the central road open. Run with `make run`; `make run-pbr` is a compatibility

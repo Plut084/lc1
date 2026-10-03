@@ -22,9 +22,9 @@ class PbrShowcase {
 
   private:
     enum class TexturePattern { Checks, MetallicRoughness, Emission, Floor, Normal, FineNormal };
-    Material const &material(Renderer &renderer, glm::vec3 color, float metallic, float roughness,
-                             glm::vec3 emission = {});
-    std::size_t place(GpuMesh const &mesh, Material const &material, glm::vec3 position,
+    GpuMaterial const &material(Renderer &renderer, glm::vec3 color, float metallic,
+                                float roughness, glm::vec3 emission = {});
+    std::size_t place(GpuMesh const &mesh, GpuMaterial const &material, glm::vec3 position,
                       glm::vec3 scale = glm::vec3{1}, float yaw = 0.0F);
     GpuTexture const &texture(Device const &device, TexturePattern pattern,
                               TextureColorSpace color_space);
@@ -36,7 +36,7 @@ class PbrShowcase {
     std::optional<GpuMesh> labels_;
     // Textures are declared before materials, which borrow them.
     std::vector<std::unique_ptr<GpuTexture>> textures_;
-    std::deque<Material> materials_;
+    std::deque<GpuMaterial> materials_;
     std::vector<DrawItem> draws_;
     std::vector<scene::Light> lights_;
     std::size_t rotating_draw_ = 0;

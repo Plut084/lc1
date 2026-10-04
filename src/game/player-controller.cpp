@@ -1,7 +1,7 @@
 #include "lc1/game/player-controller.hpp"
 
 #include "lc1/error.hpp"
-#include "lc1/scene/character.hpp"
+#include "lc1/game/character.hpp"
 
 #include <cmath>
 
@@ -19,7 +19,7 @@ void validate_input(float delta_seconds, PlayerInput const &input)
 } // namespace
 
 void FirstPersonCharacterController::update(float delta_seconds, PlayerInput const &input,
-                                            scene::Character &character) const
+                                            Character &character) const
 {
     validate_input(delta_seconds, input);
     constexpr float look_sensitivity = 0.05F;
@@ -33,8 +33,7 @@ void FirstPersonCharacterController::update(float delta_seconds, PlayerInput con
 }
 
 void ThirdPersonCharacterController::update(float delta_seconds, PlayerInput const &input,
-                                            glm::vec3 view_heading,
-                                            scene::Character &character) const
+                                            glm::vec3 view_heading, Character &character) const
 {
     validate_input(delta_seconds, input);
     if (!std::isfinite(view_heading.x) || !std::isfinite(view_heading.y) ||

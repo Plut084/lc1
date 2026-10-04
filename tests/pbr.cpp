@@ -1,4 +1,4 @@
-#include "../app/pbr-showcase.hpp"
+#include "lc1/game/debug/pbr-showcase.hpp"
 
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/map-camera-controller.hpp"

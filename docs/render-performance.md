@@ -60,7 +60,7 @@ Release 明显降低 CPU 录制成本，GPU 耗时基本相同，不能单靠换
 
 ## 对应代码
 
-- `app/game-session.cpp` 把展区五盏灯插入原三盏灯，默认模式为“全部”。
+- `src/game/game-session.cpp` 把展区五盏灯插入原三盏灯，默认模式为“全部”。
 - `shaders/shader.slang::visibilityMain` 对每盏有贡献的灯计算阴影；
   `shaders/ray_shadows.slang::shadow_visibility` 对球形光执行多条射线。
 - `src/vk/ray-query-shadows.cpp::record` 每帧执行可见度、时间累积、空间滤波。

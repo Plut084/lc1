@@ -1,10 +1,10 @@
-#include "player-view.hpp"
+#include "lc1/game/player-view.hpp"
 
-#include "lc1/scene/character.hpp"
+#include "lc1/game/character.hpp"
 
 #include <spdlog/spdlog.h>
 
-namespace lc1::app {
+namespace lc1 {
 
 PlayerView::PlayerView(Continent const &continent, glm::vec3 player_position)
     : continent_{continent}, first_person_controller_{continent},
@@ -14,13 +14,13 @@ PlayerView::PlayerView(Continent const &continent, glm::vec3 player_position)
     map_camera_.apply(camera_);
 }
 
-void PlayerView::follow_first_person(scene::Character const &player)
+void PlayerView::follow_first_person(Character const &player)
 {
     camera_.set_position(player.eye_position());
     camera_.look_at(player.eye_position() + player.look_direction());
 }
 
-void PlayerView::toggle(scene::Character &player)
+void PlayerView::toggle(Character &player)
 {
     if (!oblique_)
         first_person_angles_ = {player.body_yaw() + player.look_yaw(), player.look_pitch()};
@@ -40,7 +40,7 @@ void PlayerView::toggle(scene::Character &player)
                  oblique_ ? "update_player2: oblique" : "update_player: first-person");
 }
 
-void PlayerView::update(scene::Character &player, PlayerInput const &input,
+void PlayerView::update(Character &player, PlayerInput const &input,
                         MapCameraInput const &camera_input, float delta_seconds)
 {
     if (!oblique_) {
@@ -59,4 +59,4 @@ void PlayerView::update(scene::Character &player, PlayerInput const &input,
         spdlog::info("[camera] {}", map_camera_.locked() ? "locked to player" : "free camera");
 }
 
-} // namespace lc1::app
+} // namespace lc1

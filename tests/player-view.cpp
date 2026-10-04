@@ -1,6 +1,6 @@
-#include "../app/player-view.hpp"
+#include "lc1/game/player-view.hpp"
 
-#include "lc1/scene/character.hpp"
+#include "lc1/game/character.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -44,8 +44,8 @@ lc1::Continent make_world()
 void shared_position_and_remembered_look()
 {
     auto const world = make_world();
-    lc1::scene::Character player{world};
-    lc1::app::PlayerView view{world, player.position()};
+    lc1::Character player{world};
+    lc1::PlayerView view{world, player.position()};
     check(view.oblique(), "a session starts in the oblique view");
     check(view.camera().position().y > player.eye_position().y,
           "oblique camera is above the player");
@@ -85,8 +85,8 @@ void shared_position_and_remembered_look()
 void zoom_and_unlock_survive_switching()
 {
     auto const world = make_world();
-    lc1::scene::Character player{world};
-    lc1::app::PlayerView view{world, player.position()};
+    lc1::Character player{world};
+    lc1::PlayerView view{world, player.position()};
     auto const initial_camera = view.camera().position();
     view.update(player, {}, {.toggle_lock = true, .scroll = 2.0F}, 0.1F);
     auto const zoomed_camera = view.camera().position();
@@ -121,8 +121,8 @@ void zoom_and_unlock_survive_switching()
 void disabled_input_preserves_pose()
 {
     auto const world = make_world();
-    lc1::scene::Character player{world};
-    lc1::app::PlayerView view{world, player.position()};
+    lc1::Character player{world};
+    lc1::PlayerView view{world, player.position()};
     for (int mode = 0; mode < 2; ++mode) {
         auto const position = player.position();
         auto const direction = player.look_direction();

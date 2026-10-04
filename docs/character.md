@@ -1,7 +1,11 @@
 # Character：角色状态、模型与控制
 
 当前实现是站立、沿地面移动的静态角色实例。主角、士兵和 NPC 都可以使用
-`scene::Character`；由玩家还是 AI 控制，不改变角色自身的类型。
+`lc1::Character`；由玩家还是 AI 控制，不改变角色自身的类型。
+
+角色属于游戏层，声明在 `include/lc1/game/character.hpp`，实现在 `src/game/character.cpp`，
+与 `Continent` 和角色控制器一样使用 `lc1` 命名空间。角色组合 `scene::Object` 表达外观，
+场景层不负责角色的出生、行走或碰撞规则。
 
 ## 数据归属
 
@@ -34,7 +38,7 @@ auto const model = lc1::Model::load_from_file(
 auto const mesh = model.gen_mesh(device);
 auto const material = renderer.make_material(texture);
 
-lc1::scene::Character character{
+lc1::Character character{
     continent,
     {.transform = {.position = continent.spawn()},
      .mesh = &mesh,

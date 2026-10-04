@@ -74,10 +74,10 @@ load-bearing design axis, not just vocabulary:
   WASD movement. Cities occupy large, traversable spaces with walls, gates, streets and buildings,
   at the same spatial scale as the character and countryside. This replaces the earlier world-map /
   top-down RTS-map split (user decision, 2026-09-29). The current requested view is fixed oblique,
-  like Don't Starve / Red Alert: `app::PlayerView` follows the player using a perspective projection
+  like Don't Starve / Red Alert: `lc1::PlayerView` follows the player using a perspective projection
   (user decision, 2026-09-30), a visible cursor and wheel zoom. The vertical FOV is fixed at 45 degrees;
   zoom moves the camera along its viewing direction. This is the default view inside and outside cities.
-  M toggles between oblique and first-person modes in `app::PlayerView`, sharing player position and
+  M toggles between oblique and first-person modes in `lc1::PlayerView`, sharing player position and
   collision. First-person captures the cursor; returning releases it and recenters while preserving
   zoom and the Y lock state.
   Y toggles following the player; while unlocked, edge pan moves the camera independently and
@@ -403,10 +403,12 @@ order's measured binding frequency.
 
 `app/main.cpp` owns process setup (logging, signals, environment variables) and the final exception
 boundary. `app::Application` owns the window/Vulkan lifetime, input routing, swapchain recreation and
-frame scheduling. `app::GameSession` owns the continent and its GPU resources, player, PBR exhibits,
-lighting/exposure and location title. `app::PlayerView` owns camera modes and remembered first-person
-angles; it takes resolved input and has no Window dependency. The application applies cursor capture
-before reading mouse deltas. These are application modules, not a second rendering abstraction.
+frame scheduling, cursor capture and window titles. `lc1::GameSession` in `game/` owns the continent
+and its GPU resources, player, PBR exhibits, lighting/exposure and location information.
+`lc1::PlayerView` owns camera modes and remembered first-person angles. Both consume resolved game
+input and have no Window or InputRouter dependency. The application translates input into `GameInput`,
+applies cursor capture after a view toggle and before reading mouse deltas, and formats window titles
+from `GameLocation`. The game composes engine facilities; it is not a second rendering abstraction.
 
 `Application` and `GameSession` are immovable because their members borrow other members. Scene
 resources precede their draws/controllers, and the frame loop follows the entire game session so its
@@ -597,9 +599,9 @@ material pool and sampler. `RenderTarget` remains the shared non-owning output c
 `Application` creates the renderer before the frame loop and waits for the device on normal and exceptional
 loop exits before destroying any resources used by submitted draws.
 
-`scene::Character` owns its `Object`, whose transform is the sole world pose. Its origin is at
-the feet; ground characters remain upright and unscaled so collision dimensions agree with the
-world pose. Body yaw is right-handed about +Y (zero faces -Z); look yaw/pitch are relative to the
+`lc1::Character` in `game/character.*` owns its `scene::Object`, whose transform is the sole world
+pose. Its origin is at the feet; ground characters remain upright and unscaled so collision
+dimensions agree with the world pose. Body yaw is right-handed about +Y (zero faces -Z); look yaw/pitch are relative to the
 body. `move` accepts horizontal world-space displacement in metres and resolves collision;
 `walk` converts a direction and bounded frame time into displacement. Neither changes body facing.
 The character borrows its mesh/material and owns no camera, window or input router. Player
@@ -632,10 +634,14 @@ eviction or reference counting: stop using borrowed pointers and wait for GPU co
 manager destruction. Device must outlive the manager. Material owners must keep their textures and
 Renderer alive until those materials are destroyed. Cache access is render-thread-only.
 
-Layout: **library** `lc1_engine` = public headers in `include/lc1/` + sources and private headers
-(e.g. `vk/checks.hpp`) in `src/`; **app** `lc1` = the sources in `app/`, linking `lc1_engine`. Include
-public headers as `"lc1/..."` everywhere; `src/` is only on the library's private include path, so
-the app cannot reach private headers.
+Layout: **engine** `lc1_engine` = platform, resources, scene and Vulkan modules;
+**game** `lc1_game` = `include/lc1/game/` + `src/game/`, linking `lc1_engine` publicly;
+**app** `lc1` = `app/main.cpp` and `app/application.*`, linking `lc1_game`.
+The engine does not link to the game. Public headers remain under `include/lc1/` and use
+`"lc1/..."` includes. `src/` is private to the engine; game code and the app use its public API.
+Game CPU tests link `lc1_game`; rendering-only tests link `lc1_engine`. The PBR integration test
+links `lc1_game` to reuse the showcase instead of recompiling application sources.
+See `docs/code-layout.md` for the directory and interface boundaries.
 
 | module | owns |
 |---|---|
@@ -667,8 +673,12 @@ the app cannot reach private headers.
 | `scene/camera.hpp` | `scene::FpsCamera`: yaw/pitch view with perspective projection |
 | `model.hpp` | CPU mesh data and model-level import correction, baked before upload |
 | `scene/transform.hpp`, `scene/object.hpp` | transforms and drawable instances borrowing mesh/material resources |
-| `scene/character.*` | character world pose, relative look, body configuration, eye position and ground collision movement |
 | `scene/lights/*.hpp` | `scene` light types and the unified GPU upload record |
+| `game/character.*` | character world pose, relative look, body configuration, eye position and ground collision movement |
+| `game/game-session.*` | world resources and game state; consumes GameInput, exposes draws, camera and location status |
+| `game/player-view.*` | first-person/oblique view switching, remembered look and camera following |
+| `game/party.hpp` | draft party ownership and non-owning faction/leader references |
+| `game/debug/pbr-showcase.*` | the in-world PBR exhibits shared with GPU integration tests |
 | `game/continent.*` | region IDs on terrain tiles, location footprints, road graph and spatial queries, map validation and swept ground movement |
 | `game/continent-prototype.cpp` | sample five-region, six-location world and connecting roads, with shared render/collision blocks |
 | `game/player-controller.*` | first-person and oblique-view player control, consuming resolved input and borrowing the world/character |
@@ -924,8 +934,8 @@ Resolve happens in linear HDR before exposure/Reinhard tone mapping. sRGB attach
 automatically; UNORM display output explicitly requests `OutputEncoding::Srgb`. The default writes
 linear values. The depth-preview diagnostic keeps an independent output path. See `docs/lighting.md` and `docs/pbr.md`.
 
-`app/game-session.cpp` adds a walkable PBR exhibit area on both sides of the spawn road. Its shared meshes,
-procedural textures, materials, labels, lights and animated transforms live in `app/pbr-showcase.*`.
+`src/game/game-session.cpp` adds a walkable PBR exhibit area on both sides of the spawn road. Its shared meshes,
+procedural textures, materials, labels, lights and animated transforms live in `game/debug/pbr-showcase.*`.
 `Continent::make_prototype` optionally accepts spawn-relative blocks, used for both rendering and
 static collision; keep the central road open. Run with `make run`; `make run-pbr` is a compatibility
 alias for that same entry point. The separate demo executable has been removed at the user's request.

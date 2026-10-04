@@ -1,6 +1,6 @@
 #pragma once
 
-#include "game-session.hpp"
+#include "lc1/game/game-session.hpp"
 
 #include "lc1/input.hpp"
 #include "lc1/vk/device.hpp"
@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
 
 namespace lc1::app {
 
@@ -38,6 +39,8 @@ class Application {
   private:
     bool prepare_swapchain();
     void init_imgui_vulkan(std::uint32_t min_image_count);
+    void update_game(float delta_seconds);
+    void update_title();
     void run_loop(std::function<bool()> const &stop_requested);
 
     // Declaration order is the lifetime contract: the loader dies last, Window
@@ -53,6 +56,7 @@ class Application {
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
     InputRouter router_{default_bindings(), InputContext::Gameplay};
+    std::string current_title_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;
 };

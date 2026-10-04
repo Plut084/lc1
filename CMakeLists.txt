@@ -15,6 +15,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CheckCXXCompilerFlag)
 include(CheckLinkerFlag)
+include(CheckCXXSourceCompiles)
 
 # clang-cl reports compiler ID Clang but accepts the MSVC command-line dialect.
 # Probe the chosen flags rather than assuming every compiler in a family supports them.
@@ -35,6 +36,35 @@ endforeach()
 function(lc1_enable_warnings target)
     target_compile_options(${target} PRIVATE ${lc1_warning_options})
 endfunction()
+
+# AddressSanitizer, off by default: it costs real runtime and memory, which is the wrong
+# default for an ordinary build. Probed rather than assumed -- the MinGW cross compiler
+# here has no sanitizer runtime installed at all, so a clear configure-time failure beats
+# an unexplained link error.
+#
+# check_cxx_source_compiles, not check_cxx_compiler_flag: the warning flags above only
+# need the compile line, while -fsanitize=address must reach the link line too, and
+# check_cxx_compiler_flag passes its flag to the compile line alone. Against clang that
+# check fails on its own missing link flag -- "undefined reference to __asan_init" --
+# reporting no sanitizer support for a compiler that has it.
+option(lc1_enable_asan "Build with AddressSanitizer" OFF)
+if(lc1_enable_asan)
+    set(CMAKE_REQUIRED_FLAGS -fsanitize=address)
+    check_cxx_source_compiles("int main() { return 0; }" lc1_supports_asan)
+    unset(CMAKE_REQUIRED_FLAGS)
+    if(NOT lc1_supports_asan)
+        message(FATAL_ERROR
+            "lc1_enable_asan is ON, but ${CMAKE_CXX_COMPILER} cannot compile and link with -fsanitize=address")
+    endif()
+    # Global options rather than a per-target function like lc1_enable_warnings: ASan
+    # instruments every object that ends up in the executable, the imgui backends and
+    # each test target included, so a target list kept here would rot the next time a
+    # target is added. The compile option instruments; the link option is what pulls the
+    # runtime in, and without it the instrumented objects fail to link. Frame pointers
+    # keep ASan's stack traces readable above -O0, where the compiler drops them.
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
 
 # Static MinGW runtimes are required for standalone Windows executables.
 # Fail during configuration if the selected linker cannot provide them.
@@ -71,14 +101,6 @@ add_library(lc1_engine STATIC
     src/window.cpp
     src/input.cpp
     src/tangent-space.cpp
-    src/game/continent.cpp
-    src/game/continent-prototype.cpp
-    src/game/continent-present.cpp
-    src/game/continent-layout.cpp
-    src/game/player-controller.cpp
-    src/game/map-camera-controller.cpp
-    src/game/continent-view.cpp
-    src/scene/character.cpp
     src/resource-manager.cpp
     src/vk/common.cpp
     src/vk/loader.cpp
@@ -154,15 +176,29 @@ if(MINGW)
     target_link_libraries(lc1_engine INTERFACE stdc++exp)
 endif()
 
+# Game rules, world resources and camera behavior depend on the engine.
+# The engine does not link back to the game or application.
+add_library(lc1_game STATIC
+    src/game/continent.cpp
+    src/game/continent-prototype.cpp
+    src/game/continent-present.cpp
+    src/game/continent-layout.cpp
+    src/game/character.cpp
+    src/game/player-controller.cpp
+    src/game/map-camera-controller.cpp
+    src/game/continent-view.cpp
+    src/game/game-session.cpp
+    src/game/player-view.cpp
+    src/game/debug/pbr-showcase.cpp
+)
+target_link_libraries(lc1_game PUBLIC lc1_engine)
+
 # app: the game executable. Output name stays lc1 so the Makefile works.
 add_executable(lc1
     app/main.cpp
     app/application.cpp
-    app/game-session.cpp
-    app/player-view.cpp
-    app/pbr-showcase.cpp
 )
-target_link_libraries(lc1 PRIVATE lc1_engine)
+target_link_libraries(lc1 PRIVATE lc1_game)
 add_imgui_backends(TARGET lc1 BACKENDS vulkan glfw DEPS
     vulkan-headers::vulkan-headers glfw)
 
@@ -193,19 +229,19 @@ add_dependencies(lc1 shaders copy_assets)
 include(CTest)
 if(BUILD_TESTING)
     add_executable(lc1_world_map_tests tests/world-map.cpp)
-    target_link_libraries(lc1_world_map_tests PRIVATE lc1_engine)
+    target_link_libraries(lc1_world_map_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_world_map_tests)
     add_executable(lc1_continent_tests tests/continent.cpp)
-    target_link_libraries(lc1_continent_tests PRIVATE lc1_engine)
+    target_link_libraries(lc1_continent_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_continent_tests)
     add_executable(lc1_character_tests tests/character.cpp)
-    target_link_libraries(lc1_character_tests PRIVATE lc1_engine)
+    target_link_libraries(lc1_character_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_character_tests)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_tangent_tests)
-    add_executable(lc1_player_view_tests tests/player-view.cpp app/player-view.cpp)
-    target_link_libraries(lc1_player_view_tests PRIVATE lc1_engine)
+    add_executable(lc1_player_view_tests tests/player-view.cpp)
+    target_link_libraries(lc1_player_view_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_player_view_tests)
     if(MINGW)
         target_link_options(lc1_world_map_tests PRIVATE -static)
@@ -225,8 +261,8 @@ if(BUILD_TESTING)
         target_link_libraries(lc1_shadow_path_tests PRIVATE lc1_engine)
         lc1_enable_warnings(lc1_shadow_path_tests)
         add_dependencies(lc1_shadow_path_tests shaders copy_assets)
-        add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp app/pbr-showcase.cpp)
-        target_link_libraries(lc1_pbr_tests PRIVATE lc1_engine)
+        add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp)
+        target_link_libraries(lc1_pbr_tests PRIVATE lc1_game)
         lc1_enable_warnings(lc1_pbr_tests)
         add_dependencies(lc1_pbr_tests shaders)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
@@ -237,7 +273,7 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# Apply the same checked warning policy to the library and the application.
-foreach(target lc1_engine lc1)
+# Apply the same checked warning policy to both libraries and the application.
+foreach(target lc1_engine lc1_game lc1)
     lc1_enable_warnings(${target})
 endforeach()

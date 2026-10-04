@@ -119,9 +119,10 @@ vector 扩容会让这个指针失效。预留容量只能延后问题，不能�
 
 ## 7. 层次边界：Character、资源加载协议和输入默认绑定
 
-`scene::Character` 现在借用 `Continent` 做游戏碰撞，并包含行走/奔跑参数。如果 `scene`
-以后专指渲染场景，它应该迁到 game 层；本次保留现有路径和命名，先完成已在使用的接口。
-如果 `scene` 本来就表示整个游戏世界，也可以保留，但应把这层含义写清楚。
+`lc1::Character` 借用 `Continent` 做游戏碰撞，并包含行走/奔跑参数。该边界问题已修正：
+声明和实现已迁到 `game/character.*`，不再属于 `scene` 命名空间；外观仍组合 `scene::Object`。
+游戏代码已拆入 `lc1_game`，由应用链接；`lc1_game` 依赖 `lc1_engine`，引擎不反向链接游戏库。
+`GameSession`、`PlayerView` 和调试展示也已迁入游戏层，窗口操作保留在应用层。
 
 `ResourceManager::load<T>` 要求所有资源派生自 `Resource`，并提供接收 `Device` 的静态加载
 函数；实际的 `Model/Image/GpuMesh` 等没有形成这套统一协议，仍存在专用网格缓存。

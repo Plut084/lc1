@@ -1,4 +1,4 @@
-#include "lc1/scene/character.hpp"
+#include "lc1/game/character.hpp"
 #include "lc1/game/continent.hpp"
 #include "lc1/game/player-controller.hpp"
 #include "lc1/model.hpp"
@@ -57,7 +57,7 @@ lc1::Continent make_world()
 void pose_and_movement()
 {
     auto const world = make_world();
-    lc1::scene::Character character{world};
+    lc1::Character character{world};
     check(near(character.position(), world.spawn()), "default character uses world spawn");
     check(near(character.body_heading(), {0, 0, -1}) &&
               near(character.look_direction(), {0, 0, -1}),
@@ -83,7 +83,7 @@ void pose_and_movement()
     check(near(character.eye_position(), character.position() + glm::vec3{0, 1.65F, 0}),
           "eye height stays relative to the resolved feet position");
 
-    lc1::scene::Character walker{world};
+    lc1::Character walker{world};
     walker.set_look_angles(0, 89);
     walker.walk(world, walker.look_direction(), 0.1F, false);
     check(near(walker.position(),
@@ -92,7 +92,7 @@ void pose_and_movement()
     walker.walk(world, {0, 0, -1}, 0.1F, true);
     check(near(walker.position().y, 0), "running cannot make the ground character fly");
 
-    lc1::scene::Character configured{
+    lc1::Character configured{
         world, {.transform = {.position = {0, 0, 0}}}, {.eye_height = 1.2F, .walk_speed = 2.0F}};
     configured.walk(world, {0, 0, -0.5F}, 0.1F, false);
     check(near(configured.position(), {0, 0, -0.1F}) && near(configured.eye_position().y, 1.2F),
@@ -105,11 +105,11 @@ void pose_and_movement()
             "non-finite look input is rejected");
     check(near(character.position(), before), "invalid input leaves position unchanged");
     rejects([&] { (void)character.draw_item(); }, "headless simulation cannot emit a null draw");
-    rejects([&] { lc1::scene::Character blocked{world, {.transform = {.position = {5, 0, 0}}}}; },
+    rejects([&] { lc1::Character blocked{world, {.transform = {.position = {5, 0, 0}}}}; },
             "obstructed character spawn is rejected");
-    rejects([&] { lc1::scene::Character scaled{world, {.transform = {.scale = {2, 2, 2}}}}; },
+    rejects([&] { lc1::Character scaled{world, {.transform = {.scale = {2, 2, 2}}}}; },
             "visual unit correction cannot silently scale a collision body");
-    rejects([&] { lc1::scene::Character invalid{world, {}, {.height = 0}}; },
+    rejects([&] { lc1::Character invalid{world, {}, {.height = 0}}; },
             "invalid body configuration is rejected");
 }
 
@@ -118,7 +118,7 @@ void player_controllers()
     auto const world = make_world();
     lc1::FirstPersonCharacterController const first_person{world};
     lc1::ThirdPersonCharacterController const third_person{world};
-    lc1::scene::Character character{world};
+    lc1::Character character{world};
     first_person.update(0.1F, {.movement = {0, 1}, .look_delta = {1800, -1200}}, character);
     check(near(character.position(), world.spawn() + glm::vec3{0.45F, 0, 0}),
           "first-person movement follows mouse yaw but stays horizontal at high pitch");

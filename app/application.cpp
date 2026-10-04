@@ -8,8 +8,11 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <array>
+#include <format>
 
 namespace lc1::app {
 namespace {
@@ -65,11 +68,17 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      game_{window_, device_, renderer_, config.asset_root,
-            output_settings(surface_format_.format)},
+      game_{device_, renderer_, config.asset_root, output_settings(surface_format_.format)},
       frame_loop_{device_,
                   [this] { return renderer_.make_frame_resources(game_.object_capacity()); }}
 {
+    window_.set_cursor_captured(game_.first_person());
+    spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
+                 "recenter, M: first-person/oblique view, Esc: quit");
+    spdlog::info("[showcase] material exhibits beside the spawn road; F4: lighting, "
+                 "F5: pause motion, PageUp/PageDown: exposure");
+    update_title();
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
@@ -174,6 +183,59 @@ bool Application::prepare_swapchain()
     return true;
 }
 
+void Application::update_game(float delta_seconds)
+{
+    if (window_.focused() && router_.pressed(Action::ToggleCameraView)) {
+        game_.toggle_camera_view();
+        // Changing capture resets the baseline; read cursor deltas only afterwards.
+        window_.set_cursor_captured(game_.first_person());
+    }
+    auto const &input = window_.input();
+    GameInput game_input{
+        .player =
+            {
+                .movement = {static_cast<float>(router_.held(Action::MoveRight)) -
+                                 static_cast<float>(router_.held(Action::MoveLeft)),
+                             static_cast<float>(router_.held(Action::MoveForward)) -
+                                 static_cast<float>(router_.held(Action::MoveBackward))},
+                .look_delta = game_.first_person() ? input.cursor_delta() : glm::vec2{},
+                .running = router_.held(Action::Sprint),
+            },
+        .camera =
+            {
+                .enabled = router_.active_context() == InputContext::Gameplay && window_.focused(),
+                .toggle_lock = router_.pressed(Action::ToggleCameraLock),
+                .recenter = router_.held(Action::RecenterCamera),
+                .scroll = input.scroll().y,
+                .cursor = input.cursor(),
+                .viewport_size = window_.content_size(),
+                .pointer_active =
+                    window_.hovered() && window_.focused() && !window_.cursor_captured(),
+            },
+    };
+    if (window_.focused()) {
+        game_input.cycle_lighting = router_.pressed(Action::CycleLighting);
+        game_input.toggle_showcase_motion = router_.pressed(Action::ToggleShowcaseMotion);
+        game_input.exposure_steps = static_cast<int>(router_.pressed(Action::IncreaseExposure)) -
+                                    static_cast<int>(router_.pressed(Action::DecreaseExposure));
+    }
+    game_.update(game_input, delta_seconds);
+    update_title();
+}
+
+void Application::update_title()
+{
+    auto const location = game_.location();
+    auto const title =
+        std::format("lc1 | {} | {} | Lighting: {} | Exposure: {:.2f}", location.region,
+                    location.place, game_.lighting_name(), game_.output().exposure);
+    if (title != current_title_) {
+        window_.set_title(title);
+        spdlog::info("[world] {}", title);
+        current_title_ = title;
+    }
+}
+
 void Application::run_loop(std::function<bool()> const &stop_requested)
 {
     Stopwatch stopwatch;
@@ -221,7 +283,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         // Recreate only at the top of a frame, before acquiring an image.
         if (!prepare_swapchain())
             continue;
-        game_.update(window_, router_, stopwatch.tick());
+        update_game(stopwatch.tick());
 
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();

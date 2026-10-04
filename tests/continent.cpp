@@ -1,7 +1,7 @@
 #include "lc1/game/continent.hpp"
+#include "lc1/game/character.hpp"
 #include "lc1/game/map-camera-controller.hpp"
 #include "lc1/scene/camera.hpp"
-#include "lc1/scene/character.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -149,20 +149,20 @@ void terrain_collision_candidates()
 void player_and_city()
 {
     lc1::Continent const flat{flat_world()};
-    lc1::scene::Character straight{flat};
-    lc1::scene::Character diagonal{flat};
+    lc1::Character straight{flat};
+    lc1::Character diagonal{flat};
     straight.walk(flat, {1, 0, 0}, 0.1F, false);
     diagonal.walk(flat, {1, 0, 1}, 0.1F, false);
     check(near(glm::length(straight.position()), glm::length(diagonal.position())),
           "diagonal movement must not be faster");
     check(near(straight.position().y, 0) && near(straight.eye_position().y, 1.65F),
           "feet and camera remain at ground level");
-    lc1::scene::Character resumed{flat};
+    lc1::Character resumed{flat};
     resumed.walk(flat, {1, 0, 0}, 10.0F, false);
     check(near(resumed.position().x, 0.45F), "long stalls do not teleport the player");
 
     lc1::Continent const city = lc1::Continent::make_prototype();
-    lc1::scene::Character player{city};
+    lc1::Character player{city};
     for (int frame = 0; frame < 600; ++frame)
         player.walk(city, {0, 0, -1}, 1.0F / 60.0F, false);
     check(player.position().z < -10.0F, "WASD walk crosses the actual city gate");

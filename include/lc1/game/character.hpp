@@ -3,10 +3,8 @@
 #include "lc1/scene/object.hpp"
 
 namespace lc1 {
-class Continent;
-}
 
-namespace lc1::scene {
+class Continent;
 
 struct CharacterConfig {
     float half_width = 0.3F;
@@ -17,16 +15,16 @@ struct CharacterConfig {
 };
 
 // One upright, ground-level character, independent of input devices and cameras.
-// Object::transform is the sole world pose; its origin is at the character's feet.
+// scene::Object::transform is the sole world pose; its origin is at the character's feet.
 class Character {
   public:
     // Simulation-only character at the continent's spawn, with no drawable attached.
     explicit Character(Continent const &continent);
-    Character(Continent const &continent, Object object, CharacterConfig config = {});
+    Character(Continent const &continent, scene::Object object, CharacterConfig config = {});
 
     CharacterConfig const &config() const { return config_; }
     glm::vec3 position() const { return object_.transform.position; }
-    Transform const &transform() const { return object_.transform; }
+    scene::Transform const &transform() const { return object_.transform; }
 
     // World-space displacement in metres. This ground prototype requires y == 0.
     // Collision can shorten or slide the displacement; it never changes body facing.
@@ -50,14 +48,14 @@ class Character {
     glm::vec3 right() const;
     glm::vec3 eye_position() const;
 
-    // Requires an attached mesh and material; both are borrowed through Object.
+    // Requires an attached mesh and material; both are borrowed through scene::Object.
     DrawItem draw_item() const;
 
   private:
     CharacterConfig config_;
     float look_yaw_ = 0.0F;
     float look_pitch_ = 0.0F;
-    Object object_;
+    scene::Object object_;
 };
 
-} // namespace lc1::scene
+} // namespace lc1

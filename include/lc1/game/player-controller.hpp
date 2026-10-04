@@ -5,9 +5,7 @@
 namespace lc1 {
 
 class Continent;
-namespace scene {
 class Character;
-}
 
 // Resolved gameplay input. The application supplies zero input when UI/focus gates it.
 struct PlayerInput {
@@ -19,7 +17,7 @@ struct PlayerInput {
 class FirstPersonCharacterController {
   public:
     explicit FirstPersonCharacterController(Continent const &continent) : continent_(continent) {}
-    void update(float delta_seconds, PlayerInput const &input, scene::Character &character) const;
+    void update(float delta_seconds, PlayerInput const &input, Character &character) const;
 
   private:
     Continent const &continent_; // Borrowed; the world outlives this controller.
@@ -29,7 +27,7 @@ class ThirdPersonCharacterController {
   public:
     explicit ThirdPersonCharacterController(Continent const &continent) : continent_(continent) {}
     void update(float delta_seconds, PlayerInput const &input, glm::vec3 view_heading,
-                scene::Character &character) const;
+                Character &character) const;
 
   private:
     Continent const &continent_; // Borrowed; the world outlives this controller.

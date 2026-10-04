@@ -1,4 +1,4 @@
-#include "lc1/scene/character.hpp"
+#include "lc1/game/character.hpp"
 
 #include "lc1/error.hpp"
 #include "lc1/game/continent.hpp"
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace lc1::scene {
+namespace lc1 {
 namespace {
 
 bool finite(glm::vec3 value)
@@ -23,11 +23,11 @@ glm::vec3 horizontal_direction(float degrees)
 } // namespace
 
 Character::Character(Continent const &continent)
-    : Character(continent, Object{.transform = {.position = continent.spawn()}})
+    : Character(continent, scene::Object{.transform = {.position = continent.spawn()}})
 {
 }
 
-Character::Character(Continent const &continent, Object object, CharacterConfig config)
+Character::Character(Continent const &continent, scene::Object object, CharacterConfig config)
     : config_(config), object_(object)
 {
     if (!std::isfinite(config.half_width) || config.half_width <= 0.0F ||
@@ -132,4 +132,4 @@ DrawItem Character::draw_item() const
     return object_.draw_item();
 }
 
-} // namespace lc1::scene
+} // namespace lc1

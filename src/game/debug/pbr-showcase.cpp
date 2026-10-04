@@ -1,4 +1,4 @@
-#include "pbr-showcase.hpp"
+#include "lc1/game/debug/pbr-showcase.hpp"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>

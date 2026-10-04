@@ -6,7 +6,7 @@
 ## 球形光
 
 `include/lc1/scene/lights/sphere-light.hpp` 提供球心 `position`、半径 `radius`、光色、强度和
-`shadow_sample_count`，类型默认每像素每帧 1 条射线，示例参数在 `app/game-session.cpp` 中设置。
+`shadow_sample_count`，类型默认每像素每帧 1 条射线，示例参数在 `src/game/game-session.cpp` 中设置。
 阴影采样数限制在 1–32；半径为零只发射一条射线，恢复点光硬阴影。
 所有局部光源仅按距离平方反比衰减，没有距离截断参数；`radius` 只表示光源大小与阴影采样范围。
 

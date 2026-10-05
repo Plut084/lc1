@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lc1/vk/vertex.hpp"
+#include "lc1/vertex.hpp"
 
 #include <cstdint>
 #include <utility>

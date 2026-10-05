@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lc1/scene/transform.hpp"
-#include "lc1/vk/gpu-mesh.hpp"
+#include "lc1/vk/render/draw-item.hpp"
 
 namespace lc1::scene {
 

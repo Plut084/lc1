@@ -132,4 +132,4 @@ class Lc1Recipe(ConanFile):
 # the vk::raii migration nothing called a bare vk* function, so volk's
 # per-level function-pointer tables were never read, and its only remaining
 # work was one dlopen plus one vkGetInstanceProcAddr lookup -- which
-# vk::raii::Context already does. See the note at the top of include/lc1/vk/common.hpp.
+# vk::raii::Context already does. See the note at the top of include/lc1/vk/core/common.hpp.

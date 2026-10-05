@@ -235,8 +235,8 @@ Every dependency is conan-managed, on every platform, so there is one build stor
 `vulkan-memory-allocator`, or two VMA versions compete for the same include. Specifics that look
 redundant and are not:
 
-- **`lc1/vk/memory.hpp` includes `common.hpp` before VMA.** VMA must see `VK_NO_PROTOTYPES`; otherwise
-  `VMA_IMPLEMENTATION` (in `src/vk/memory.cpp`) turns on `VMA_STATIC_VULKAN_FUNCTIONS` and references
+- **`lc1/vk/core/memory.hpp` includes `common.hpp` before VMA.** VMA must see `VK_NO_PROTOTYPES`; otherwise
+  `VMA_IMPLEMENTATION` (in `src/vk/core/memory.cpp`) turns on `VMA_STATIC_VULKAN_FUNCTIONS` and references
   `vk*` symbols that nothing links. The allocator is built with `vma::raii::Allocator{instance, device,
   info}`, which requires `info.instance`, `info.device` and `info.pVulkanFunctions` to be null — it fills
   them from the raii dispatchers itself.
@@ -400,6 +400,15 @@ changes. Stable layouts and cross-pipeline compatibility take priority over matc
 order's measured binding frequency.
 
 ## Architecture
+
+`include/lc1/vk/` and `src/vk/` mirror four layers: `core` (Vulkan setup),
+`resources` (GPU objects/uploads), `presentation` (surface/swapchain/frame scheduling), and
+`render` (concrete pipelines/materials/passes). Resources depend on core; presentation and render
+each depend on core/resources, never on each other. Core has no Window, scene or game dependency.
+Device borrows a `vk::SurfaceKHR` only during construction, supplied as `*surface.raii()`.
+`RenderTarget` is a shared resource view; `FrameResources`, `DrawItem` and output settings belong
+to render. CPU `Vertex` lives in `lc1/vertex.hpp`; Vulkan vertex layout is private to render.
+All four layers still build into `lc1_engine`. See `docs/vulkan-layers.md`.
 
 `app/main.cpp` owns process setup (logging, signals, environment variables) and the final exception
 boundary. `app::Application` owns the window/Vulkan lifetime, input routing, swapchain recreation and
@@ -587,7 +596,7 @@ frame count or slot index. Each resource set owns a camera UBO/set, a descriptor
 array of model UBOs/sets, and depth/MSAA attachments. Draw i uses resource i for that frame only;
 there is no persistent object-to-slot mapping. Capacity is passed by the application (currently the
 continent view's chunk draw count),
-and exceeding it fails explicitly. `Buffer::upload` copies and performs the necessary VMA flush;
+and exceeding it fails explicitly. `GpuBuffer::upload` copies and performs the necessary VMA flush;
 the caller's fence wait makes overwriting safe. Descriptors are written at resource creation.
 
 `scene::Object` holds CPU transform data and non-owning mesh/material pointers; `draw_item()` extracts
@@ -648,28 +657,32 @@ See `docs/code-layout.md` for the directory and interface boundaries.
 | `resource-manager.*` | scene-owned typed resource caches and legacy mesh cache; relative paths identify resources |
 | `window.*` | GLFW init/terminate, the `GLFWwindow`, required surface extensions, the resize flag, every input callback and the `InputState` they fill, cursor capture |
 | `input.hpp`, `input.cpp` | `Key`, `InputState`, `Action`, `InputContext`, `Binding`, `InputRouter`: device state, the data-driven bindings, and the active context's resolved actions |
-| `vk/loader.*` | the one `dlopen` of the Vulkan loader (`vk::raii::Context`), and GLFW's copy of its `vkGetInstanceProcAddr` |
-| `vk/instance.*` | `vk::raii::Instance`, validation + sync validation, debug messenger |
-| `vk/surface.*` | the window presentation surface, created via GLFW and owned by `vk::raii` |
-| `vk/device.*` | physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
-| `vk/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
-| `vk/frame_loop.hpp`, `vk/frame-loop-impl.hpp` | per-frame sync, templated per-slot resources, WSI state machine |
-| `vk/renderer.*` | main material rendering and orchestration; normal record uses ray-query shadows, a separate entry point renders the optional legacy depth-map diagnostic |
-| `vk/ray-query-shadows.*`, `vk/temporal-shadows.cpp` | ray-query visibility, TLAS updates, temporal history and spatial filtering |
-| `vk/shadow-map-preview.*` | lazy directional depth-map preview resources and explicit ShadowMapRegion coverage; no normal lighting |
-| `vk/render-data.hpp` | shared camera, light and object shader upload layouts |
-| `vk/frame-resources.hpp` | camera and per-draw UBOs/sets, pool and attachments; owned by each frame slot |
-| `vk/render-target.hpp` | the borrowed single-sampled output view and extent shared by recording and presentation |
-| `vk/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
-| `vk/shader.*`, `vk/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
-| `vk/buffer.*` | a `VkBuffer` + its VMA allocation; vertex/index/uniform/staging differ only in flags |
-| `vk/descriptor-set.*` | one set owning its Buffer objects, with UBO size checks, borrowed combined image samplers and layout binding validation; FrameResources owns the pool |
-| `vk/gpu-image.*` | a `VkImage` + its VMA allocation + a whole-image view; does not fill itself |
-| `vk/gpu-texture.*` | uploads a CPU `Image` into a `GpuImage` through a staging buffer, left `SHADER_READ_ONLY`; file loading stays with the caller |
-| `vk/sampler.*` | a `vk::raii::Sampler`; one serves many textures |
-| `vk/mesh.*`, `vk/vertex.*` | vertex + index buffers uploaded through staging; the vertex layout; `DrawItem` |
-| `vk/one-time-submit.hpp` | record, submit and wait for one-off setup work (uploads) |
-| `vk/common.*` | hpp configuration macros, `VK_CHECK`, `transition_image_layout`, `read_file`, string helpers |
+| `vk/core/loader.*` | the one `dlopen` of the Vulkan loader (`vk::raii::Context`), and GLFW's copy of its `vkGetInstanceProcAddr` |
+| `vk/core/instance.*` | `vk::raii::Instance`, validation + sync validation, debug messenger |
+| `vk/presentation/surface.*` | the window presentation surface, created via GLFW and owned by `vk::raii` |
+| `vk/core/device.*` | physical-device pick, logical device, the VMA allocator, the single graphics+present queue |
+| `vk/presentation/swapchain.*` | swapchain, `SwapchainImage` vector, all recreation — raii except the borrowed images |
+| `vk/presentation/frame_loop.hpp` | per-frame sync, templated per-slot resources, WSI state machine |
+| `vk/render/renderer.*` | main material rendering and orchestration; normal record uses ray-query shadows, a separate entry point renders the optional legacy depth-map diagnostic |
+| `vk/render/ray-query-shadows.*`, `vk/render/temporal-shadows.cpp` | ray-query visibility, TLAS updates, temporal history and spatial filtering |
+| `vk/render/shadow-map-preview.*` | lazy directional depth-map preview resources and explicit ShadowMapRegion coverage; no normal lighting |
+| `vk/render/render-data.hpp` | shared camera, light and object shader upload layouts |
+| `vk/render/frame-resources.hpp` | camera and per-draw UBOs/sets, pool and attachments; owned by each frame slot |
+| `vk/resources/render-target.hpp` | the borrowed single-sampled output view and extent shared by recording and presentation |
+| `vk/render/pipeline.*` | graphics pipeline, its pipeline layout and descriptor set layout |
+| `vk/resources/shader.*`, `vk/resources/shader-stages.*` | shader modules, and the stage list a pipeline is built from |
+| `vk/resources/gpu-buffer.*` | a `VkBuffer` + its VMA allocation; vertex/index/uniform/staging differ only in flags |
+| `vk/resources/descriptor-set.*` | one set owning its GpuBuffer objects, with UBO size checks, borrowed combined image samplers and layout binding validation; FrameResources owns the pool |
+| `vk/resources/gpu-image.*` | a `VkImage` + its VMA allocation + a whole-image view; does not fill itself |
+| `vk/resources/gpu-texture.*` | uploads a CPU `Image` into a `GpuImage` through a staging buffer, left `SHADER_READ_ONLY`; file loading stays with the caller |
+| `vk/resources/sampler.*` | a `vk::raii::Sampler`; one serves many textures |
+| `vk/resources/gpu-mesh.*` | vertex + index buffers uploaded through staging and mesh BLAS resources |
+| `vertex.hpp`, `vk/render/vertex-input.hpp` (private) | CPU vertex data and its shader input layout |
+| `vk/render/draw-item.hpp` | borrowed mesh/material references, model transform and shadow-caster flag |
+| `vk/core/one-time-submit.hpp` | record, submit and wait for one-off setup work (uploads) |
+| `vk/core/common.*` | hpp configuration macros, `VK_CHECK` and Vulkan string helpers |
+| `vk/resources/image-barrier.*` | explicit image layout and memory barriers |
+| `vk/presentation/swapchain-policy.*` | surface format, present mode, image count and usable extent selection |
 | `scene/camera.hpp` | `scene::FpsCamera`: yaw/pitch view with perspective projection |
 | `model.hpp` | CPU mesh data and model-level import correction, baked before upload |
 | `scene/transform.hpp`, `scene/object.hpp` | transforms and drawable instances borrowing mesh/material resources |
@@ -695,7 +708,7 @@ declares Window and exposes only its raii Vulkan surface accessor.
 Fixed-size framebuffer sizes cross that boundary as `lc1::FrameExtent` rather than `vk::Extent2D`, for
 the same reason: a `vk::Extent2D` in `window.hpp` would make it a Vulkan module in all but name and drag
 the load-bearing include order in with it. The cost is one parallel 8-byte type and one conversion,
-which `compute_extent` in `swapchain.cpp` performs.
+which Application performs before calling `compute_extent` in `vk/presentation/swapchain-policy.cpp`.
 
 ### Input: device state, bindings, one active context
 
@@ -830,16 +843,15 @@ Match them up by the argument shapes, not by the spelling.
 
 ## Device selection
 
-Selection checks every extension passed to the Device constructor, not just `VK_KHR_swapchain`.
-`required_features()` builds the feature chain used both for selection and device creation:
-`sampleRateShading`, `samplerAnisotropy`, `shaderDrawParameters`, `synchronization2`,
-`dynamicRendering`, `extendedDynamicState`, `bufferDeviceAddress`, `accelerationStructure`,
-and `rayQuery`. The device also requires `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`,
-and `VK_KHR_deferred_host_operations`, and the graphics/present family must support compute
-for acceleration structure builds. VMA enables its buffer-device-address allocator flag. When adding an enabled feature, also add its
-support comparison in `supports_required_features`; unsupported candidates must be rejected before
-ranking, so a usable lower-ranked GPU can still be selected. Surface presentation support is checked
-against the caller's Surface, which Device does not own or retain.
+Device creation uses an explicit fixed Vulkan feature chain in `src/vk/core/device.cpp`.
+It enables the features currently required by rendering, including buffer device address and
+maintenance5, and the ray-query/acceleration-structure/deferred-host-operations extensions.
+The application supplies swapchain through a plain extension-name list. Physical-device selection
+checks those names/features and graphics+compute+present support before scoring candidates.
+VMA enables buffer-device-address and maintenance5 support alongside the corresponding device features.
+There is no generic request, capability snapshot or negotiation framework.
+Instance accepts plain extension/layer name lists. Requesting the Khronos validation layer also
+enables synchronization validation through a directly constructed VK_EXT_layer_settings chain.
 
 `VK_PHYSICAL_DEVICE_TYPE_CPU` devices are **excluded**, not deprioritized. llvmpipe is enumerated as a
 real device on the dev machine and nothing reorders devices (`VK_LAYER_NV_optimus` is dormant without

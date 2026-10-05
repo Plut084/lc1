@@ -4,8 +4,8 @@
 #include "lc1/mesh.hpp"
 #include "lc1/scene/transform.hpp"
 #include "lc1/tangent-space.hpp"
-#include "lc1/vk/gpu-image.hpp"
-#include "lc1/vk/gpu-mesh.hpp"
+#include "lc1/vk/resources/gpu-image.hpp"
+#include "lc1/vk/resources/gpu-mesh.hpp"
 
 #include <ktx.h>
 #include <ktxvulkan.h>

@@ -1,7 +1,7 @@
 #include "lc1/game/continent-view.hpp"
 
 #include "lc1/game/continent.hpp"
-#include "lc1/vk/renderer.hpp"
+#include "lc1/vk/render/renderer.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 

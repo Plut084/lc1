@@ -2,7 +2,7 @@
 
 #include "lc1/error.hpp"
 #include "lc1/game-clock.hpp"
-#include "lc1/vk/swapchain-policy.hpp"
+#include "lc1/vk/presentation/swapchain-policy.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -18,7 +18,6 @@ namespace lc1::app {
 namespace {
 
 constexpr double event_wait_timeout_seconds = 0.1;
-constexpr std::array device_extensions{vk::KHRSwapchainExtensionName};
 
 Instance make_instance(VulkanLoader const &loader, Window const &window, bool enable_validation)
 {
@@ -28,10 +27,129 @@ Instance make_instance(VulkanLoader const &loader, Window const &window, bool en
         extensions.push_back(vk::EXTDebugUtilsExtensionName);
         layers.push_back("VK_LAYER_KHRONOS_validation");
     }
-    Instance instance{loader, extensions, layers};
+    Instance instance{loader, std::move(extensions), std::move(layers)};
     if (enable_validation)
         instance.setup_debug_messenger();
     return instance;
+}
+
+std::optional<uint32_t> find_graphics_present_family(vk::raii::PhysicalDevice const &device,
+                                                     vk::SurfaceKHR surface)
+{
+    auto const families = device.getQueueFamilyProperties();
+    for (uint32_t i = 0; i < static_cast<uint32_t>(families.size()); ++i) {
+        if (!(families[i].queueFlags & vk::QueueFlagBits::eGraphics) ||
+            !(families[i].queueFlags & vk::QueueFlagBits::eCompute))
+            continue;
+        if (device.getSurfaceSupportKHR(i, surface) == vk::False) {
+            continue;
+        }
+        return i;
+    }
+    return std::nullopt;
+}
+
+int score_device(vk::PhysicalDeviceType type)
+{
+    switch (type) {
+    case vk::PhysicalDeviceType::eDiscreteGpu:
+        return 300;
+    case vk::PhysicalDeviceType::eIntegratedGpu:
+        return 200;
+    case vk::PhysicalDeviceType::eVirtualGpu:
+        return 100;
+    default:
+        return 50;
+    }
+}
+
+struct PickedDevice {
+    vk::raii::PhysicalDevice *device;
+    std::uint32_t queue_family;
+};
+
+PickedDevice pick_physical_device(std::vector<vk::raii::PhysicalDevice> &devices,
+                                  vk::SurfaceKHR surface)
+{
+    char const *const want = std::getenv("LC1_DEVICE");
+    bool const filtered = want != nullptr && *want != '\0';
+
+    PickedDevice best{.device = nullptr, .queue_family = 0};
+    int best_score = -1; // negative means nothing has been picked yet
+
+    for (auto &device : devices) {
+        auto const props = device.getProperties();
+
+        // llvmpipe is enumerated as a real physical device here, and nothing
+        // reorders devices for us: VK_LAYER_NV_optimus is dormant unless
+        // __NV_PRIME_RENDER_OFFLOAD=1 is set, and VK_LAYER_MESA_device_select
+        // only filters. Excluding CPU outright is what stops this game from
+        // silently rendering on the CPU rasterizer.
+        if (props.deviceType == vk::PhysicalDeviceType::eCpu)
+            continue;
+        if (props.apiVersion < vk::ApiVersion14)
+            continue;
+        if (filtered && std::strstr(props.deviceName, want) == nullptr)
+            continue;
+
+        auto const family = find_graphics_present_family(device, surface);
+        if (!family)
+            continue;
+
+        int const score = score_device(props.deviceType);
+        if (score > best_score) {
+            best_score = score;
+            best = {.device = &device, .queue_family = *family};
+        }
+    }
+
+    // best_score, not the handle, says whether anything was picked: a raii
+    // wrapper offers no null-handle comparison.
+    if (best_score < 0) {
+        if (filtered) {
+            fail("LC1_DEVICE=\"{}\" matched no usable device", want);
+        }
+        fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
+             "ray query, acceleration structures, buffer device address, all requested features, "
+             "and a graphics+compute+present queue family)");
+    }
+    return best;
+}
+
+Device make_device(Instance const &instance, Surface const &surface)
+{
+    DeviceRequirements requirements{
+        .vulkan_version = vk::ApiVersion14,
+        .extensions =
+            {
+                vk::KHRSwapchainExtensionName,
+
+                vk::KHRAccelerationStructureExtensionName,
+                vk::KHRRayQueryExtensionName,
+
+                vk::KHRDeferredHostOperationsExtensionName,
+
+                vk::EXTDescriptorHeapExtensionName,
+                vk::KHRShaderUntypedPointersExtensionName,
+            },
+        .features =
+            {
+                &vk::PhysicalDeviceFeatures::sampleRateShading,
+                &vk::PhysicalDeviceFeatures::samplerAnisotropy,
+                &vk::PhysicalDeviceVulkan11Features::shaderDrawParameters,
+                &vk::PhysicalDeviceVulkan12Features::bufferDeviceAddress,
+                &vk::PhysicalDeviceVulkan13Features::synchronization2,
+                &vk::PhysicalDeviceVulkan13Features::dynamicRendering,
+                &vk::PhysicalDeviceVulkan14Features::maintenance5,
+                &vk::PhysicalDeviceAccelerationStructureFeaturesKHR::accelerationStructure,
+                &vk::PhysicalDeviceRayQueryFeaturesKHR::rayQuery,
+            },
+    };
+    auto devices = filter_physical_devices(instance, requirements);
+    if (devices.empty())
+        fail("no Vulkan physical device meets the requirements");
+    auto picked = pick_physical_device(devices, surface.raii());
+    return Device{instance, std::move(*picked.device), picked.queue_family, requirements};
 }
 
 OutputSettings output_settings(vk::Format format)
@@ -62,7 +180,8 @@ PFN_vkVoidFunction load_imgui_vulkan_function(char const *name, void *user_data)
 Application::Application(ApplicationConfig const &config)
     : window_{1280, 720, "lc1"},
       instance_{make_instance(loader_, window_, config.enable_validation)},
-      surface_{instance_, window_}, device_{instance_, surface_, device_extensions},
+      surface_{instance_, window_}, device_{make_device(instance_, surface_)},
+      // device_{instance_, *surface_.raii(), std::array{vk::KHRSwapchainExtensionName}},
       surface_format_{
           pick_surface_format(device_.raii_physical().getSurfaceFormatsKHR(surface_.raii()))},
       renderer_{device_,

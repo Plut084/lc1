@@ -1,10 +1,11 @@
-#include "lc1/vk/device.hpp"
-#include "lc1/vk/instance.hpp"
-#include "lc1/vk/loader.hpp"
-#include "lc1/vk/one-time-submit.hpp"
-#include "lc1/vk/ray-query-shadows.hpp"
-#include "lc1/vk/shader-stages.hpp"
-#include "lc1/vk/surface.hpp"
+#include "lc1/vk/core/device.hpp"
+#include "lc1/vk/core/instance.hpp"
+#include "lc1/vk/core/loader.hpp"
+#include "lc1/vk/core/one-time-submit.hpp"
+#include "lc1/vk/presentation/surface.hpp"
+#include "lc1/vk/render/ray-query-shadows.hpp"
+#include "lc1/vk/render/renderer.hpp"
+#include "lc1/vk/resources/shader-stages.hpp"
 #include "lc1/window.hpp"
 
 #include <array>
@@ -60,13 +61,17 @@ glm::uvec4 run_case(lc1::Device const &device, lc1::Pipeline const &pipeline, Ca
         for (int index = 0; index < 16; ++index) {
             raw[index] = {255U, 0U, 1U << 16, test.history_length};
             if (index != 5) {
-                if (test.isolated) raw[index].z = 2U << 16;
-                if (test.normal_edge) surface[index].w = 16777215.0F;
-                if (test.depth_edge) surface[index].z += 0.25F;
+                if (test.isolated)
+                    raw[index].z = 2U << 16;
+                if (test.normal_edge)
+                    surface[index].w = 16777215.0F;
+                if (test.depth_edge)
+                    surface[index].z += 0.25F;
             }
         }
         raw[5].x = 0;
-        if (test.background) raw[5].z = 0;
+        if (test.background)
+            raw[5].z = 0;
     }
     auto make_input = [&](vk::Format format) {
         return lc1::GpuImage{device,
@@ -93,9 +98,9 @@ glm::uvec4 run_case(lc1::Device const &device, lc1::Pipeline const &pipeline, Ca
         make_input(vk::Format::eR32G32B32A32Uint), make_input(vk::Format::eR32G32B32A32Sfloat)};
     std::array outputs{make_output(vk::Format::eR32G32B32A32Uint),
                        make_output(vk::Format::eR32G32B32A32Sfloat)};
-    std::vector<lc1::Buffer> staging;
+    std::vector<lc1::GpuBuffer> staging;
     for (int i = 0; i < 4; ++i)
-        staging.emplace_back(device, sizeof(raw), vk::BufferUsageFlagBits::eTransferSrc,
+        staging.emplace_back(device, sizeof(raw), vk::BufferUsageFlagBits2::eTransferSrc,
                              vma::AllocationCreateFlagBits::eHostAccessSequentialWrite);
     staging[0].upload(std::as_bytes(std::span{raw}));
     staging[1].upload(std::as_bytes(std::span{surface}));
@@ -108,15 +113,15 @@ glm::uvec4 run_case(lc1::Device const &device, lc1::Pipeline const &pipeline, Ca
         temporal.previous_view_projection[3][0] = 4.0F;
     if (test.reproject)
         temporal.previous_view_projection[3][0] = 0.5F;
-    lc1::Buffer uniform{device, sizeof(temporal), vk::BufferUsageFlagBits::eUniformBuffer,
-                        vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+    lc1::GpuBuffer uniform{device, sizeof(temporal), vk::BufferUsageFlagBits2::eUniformBuffer,
+                           vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
     uniform.upload(std::as_bytes(std::span{&temporal, 1}));
     lc1::LightsData lights{};
     lights.count = 1;
     lights.lights[0].type = test.hard_light ? 0 : 3;
     lights.lights[0].radius = 1.0F;
-    lc1::Buffer light_uniform{device, sizeof(lights), vk::BufferUsageFlagBits::eUniformBuffer,
-                             vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+    lc1::GpuBuffer light_uniform{device, sizeof(lights), vk::BufferUsageFlagBits2::eUniformBuffer,
+                                 vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
     light_uniform.upload(std::as_bytes(std::span{&lights, 1}));
     auto readback = device.allocator().createBuffer(
         {.size = sizeof(raw), .usage = vk::BufferUsageFlagBits::eTransferDst},
@@ -157,11 +162,15 @@ glm::uvec4 run_case(lc1::Device const &device, lc1::Pipeline const &pipeline, Ca
                                .descriptorType = vk::DescriptorType::eUniformBuffer,
                                .pBufferInfo = &buffer},
         {});
-    vk::DescriptorBufferInfo const light_buffer{.buffer = *light_uniform.raii(), .range = sizeof(lights)};
+    vk::DescriptorBufferInfo const light_buffer{.buffer = *light_uniform.raii(),
+                                                .range = sizeof(lights)};
     device.raii().updateDescriptorSets(
-        vk::WriteDescriptorSet{.dstSet = *sets.front(), .dstBinding = 1,
-                               .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer,
-                               .pBufferInfo = &light_buffer}, {});
+        vk::WriteDescriptorSet{.dstSet = *sets.front(),
+                               .dstBinding = 1,
+                               .descriptorCount = 1,
+                               .descriptorType = vk::DescriptorType::eUniformBuffer,
+                               .pBufferInfo = &light_buffer},
+        {});
     lc1::one_time_submit(device, [&](vk::raii::CommandBuffer const &commands) {
         vk::BufferImageCopy const region{
             .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor, .layerCount = 1},
@@ -229,10 +238,10 @@ int main()
         glfwHideWindow(window.handle());
         auto extensions = window.required_instance_extensions();
         extensions.push_back(vk::EXTDebugUtilsExtensionName);
-        lc1::Instance instance{loader, extensions, {"VK_LAYER_KHRONOS_validation"}};
+        lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, surface, {}};
+        lc1::Device device{instance, *surface.raii()};
         auto module = lc1::ShaderModule::load_from_file(device, "shaders/temporal-shadows.spv");
         lc1::ShaderStages stages;
         stages.append(vk::ShaderStageFlagBits::eVertex, module, "temporalVert");
@@ -262,19 +271,24 @@ int main()
         check("camera reprojection", {.reproject = true}, 168, 8);
         check("history limit", {.history_length = 32}, 124, 32);
         check("empty history", {.history_length = 0}, 0, 1);
-        auto spatial_module = lc1::ShaderModule::load_from_file(device, "shaders/spatial-shadows.spv");
+        auto spatial_module =
+            lc1::ShaderModule::load_from_file(device, "shaders/spatial-shadows.spv");
         lc1::ShaderStages spatial_stages;
         spatial_stages.append(vk::ShaderStageFlagBits::eVertex, spatial_module, "spatialVert");
         spatial_stages.append(vk::ShaderStageFlagBits::eFragment, spatial_module, "spatialFrag");
-        lc1::Pipeline spatial_pipeline{device, spatial_stages,
-            {vk::Format::eR32G32B32A32Uint}, vk::Format::eUndefined,
-            vk::SampleCountFlagBits::e1, lc1::PipelineKind::ShadowTemporal};
+        lc1::Pipeline spatial_pipeline{device,
+                                       spatial_stages,
+                                       {vk::Format::eR32G32B32A32Uint},
+                                       vk::Format::eUndefined,
+                                       vk::SampleCountFlagBits::e1,
+                                       lc1::PipelineKind::ShadowTemporal};
         auto spatial_check = [&](char const *name, Case test, unsigned minimum, unsigned maximum) {
             auto const result = run_case(device, spatial_pipeline, test);
             unsigned const value = result.x & 255U;
             if (value < minimum || value > maximum || result.w != test.history_length ||
                 result.z != (test.background ? 0U : 1U << 16))
-                throw std::runtime_error(std::format("{}: unexpected spatial result {}", name, value));
+                throw std::runtime_error(
+                    std::format("{}: unexpected spatial result {}", name, value));
             std::cout << name << " passed\n";
         };
         spatial_check("spatial noise reduction", {.spatial = true, .history_length = 1}, 120, 240);

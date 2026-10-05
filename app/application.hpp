@@ -3,11 +3,11 @@
 #include "lc1/game/game-session.hpp"
 
 #include "lc1/input.hpp"
-#include "lc1/vk/device.hpp"
-#include "lc1/vk/frame_loop.hpp"
-#include "lc1/vk/instance.hpp"
-#include "lc1/vk/loader.hpp"
-#include "lc1/vk/surface.hpp"
+#include "lc1/vk/core/device.hpp"
+#include "lc1/vk/core/instance.hpp"
+#include "lc1/vk/core/loader.hpp"
+#include "lc1/vk/presentation/frame_loop.hpp"
+#include "lc1/vk/presentation/surface.hpp"
 #include "lc1/window.hpp"
 
 #include <cstdint>

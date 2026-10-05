@@ -4,6 +4,7 @@
 #
 #   make                                    # Linux native, Debug
 #   make run                                # ... and then run it
+#   make run-gdb                            # ... under gdb (linux-x86_64 only)
 #   make run PLATFORM=windows-x86_64        # the cross build, under wine
 #   make build PLATFORM=windows-x86_64 BUILD_TYPE=Release
 #   make deps  PLATFORM=windows-x86_64      # conan install only
@@ -57,7 +58,7 @@ BUILD_DIR := build/$(PLATFORM)/$(BUILD_TYPE)
 WINE_PREFIX ?= $(CURDIR)/build/wine-prefix
 WINE_ENV    := WINEPREFIX=$(WINE_PREFIX) WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
 
-.PHONY: all deps configure build run run-pbr clean \
+.PHONY: all deps configure build run run-gdb run-pbr clean \
         build-debug run-debug install-debug-deps install-debug-deps-windows
 
 all: build
@@ -103,6 +104,19 @@ run: build
 		cd $(BUILD_DIR) && $(WINE_ENV) wine ./lc1.exe ;; \
 	*) \
 		echo "run: unknown platform $(PLATFORM)"; exit 1 ;; \
+	esac
+
+# Same run, under gdb. Linux only: the wine build has no debugger worth pretending to
+# here. The conan env is sourced before exec for the same reason `run` needs it -- the
+# inferior must find the conan libraries, and gdb must find their debug info -- and
+# `exec` keeps Ctrl-C reaching gdb instead of a wrapper shell. Debug builds carry the
+# symbols; Release runs with a mostly-empty backtrace, which is left to the caller.
+run-gdb: build
+	@case "$(PLATFORM)" in \
+	linux-x86_64) \
+		cd $(BUILD_DIR) && . ./generators/conanrun.sh && exec gdb ./lc1 ;; \
+	*) \
+		echo "run-gdb: cannot debug PLATFORM=$(PLATFORM); only linux-x86_64 runs natively"; exit 1 ;; \
 	esac
 
 # Compatibility alias: the showcase now lives in the main game scene.

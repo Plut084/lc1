@@ -63,9 +63,9 @@ Release 明显降低 CPU 录制成本，GPU 耗时基本相同，不能单靠换
 - `src/game/game-session.cpp` 把展区五盏灯插入原三盏灯，默认模式为“全部”。
 - `shaders/shader.slang::visibilityMain` 对每盏有贡献的灯计算阴影；
   `shaders/ray_shadows.slang::shadow_visibility` 对球形光执行多条射线。
-- `src/vk/ray-query-shadows.cpp::record` 每帧执行可见度、时间累积、空间滤波。
+- `src/vk/render/ray-query-shadows.cpp::record` 每帧执行可见度、时间累积、空间滤波。
 - `shaders/spatial-shadows.slang` 在有球形光时遍历 5×5 邻域，再对相关灯累加权重。
-- `src/vk/pipeline.cpp` 的 `minSampleShading = 1.0` 让 4× MSAA 按四个采样点执行材质光照。
+- `src/vk/render/pipeline.cpp` 的 `minSampleShading = 1.0` 让 4× MSAA 按四个采样点执行材质光照。
 - 全大陆和展品目前都提交绘制；只动两个展品也会重建整个 TLAS，但实测 GPU 代价很小。
 
 ## 优化优先级

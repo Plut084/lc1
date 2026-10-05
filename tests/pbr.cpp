@@ -3,10 +3,10 @@
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/map-camera-controller.hpp"
 
-#include "lc1/vk/instance.hpp"
-#include "lc1/vk/loader.hpp"
-#include "lc1/vk/one-time-submit.hpp"
-#include "lc1/vk/surface.hpp"
+#include "lc1/vk/core/instance.hpp"
+#include "lc1/vk/core/loader.hpp"
+#include "lc1/vk/core/one-time-submit.hpp"
+#include "lc1/vk/presentation/surface.hpp"
 #include "lc1/window.hpp"
 
 #include <glm/gtc/packing.hpp>
@@ -460,10 +460,10 @@ int main()
         glfwHideWindow(window.handle());
         auto extensions = window.required_instance_extensions();
         extensions.push_back(vk::EXTDebugUtilsExtensionName);
-        lc1::Instance instance{loader, extensions, {"VK_LAYER_KHRONOS_validation"}};
+        lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, surface, {}};
+        lc1::Device device{instance, *surface.raii()};
         material_tests(device, vk::SampleCountFlagBits::e1);
         material_tests(device, vk::SampleCountFlagBits::e4);
         normal_map_tests(device, vk::SampleCountFlagBits::e1);

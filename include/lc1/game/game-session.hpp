@@ -5,7 +5,8 @@
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/player-view.hpp"
-#include "lc1/vk/gpu-texture.hpp"
+#include "lc1/vk/render/output-settings.hpp"
+#include "lc1/vk/resources/gpu-texture.hpp"
 
 #include <filesystem>
 #include <string_view>
@@ -47,17 +48,17 @@ class GameSession {
     std::string_view lighting_name() const;
 
     scene::FpsCamera const &camera() const { return player_view_.camera(); }
-    // std::span<DrawItem const> draws() const { return draws_; }
+    std::span<DrawItem const> draws() const { return draws_; }
     std::span<scene::Light const> lights() const { return active_lights_; }
     OutputSettings const &output() const { return output_; }
-    // std::uint32_t object_capacity() const { return static_cast<std::uint32_t>(draws_.size()); }
+    std::uint32_t object_capacity() const { return static_cast<std::uint32_t>(draws_.size()); }
 
-    std::vector<DrawItem> draws() const
-    {
-        std::vector<DrawItem> items;
-
-        return items;
-    }
+    // std::vector<DrawItem> draws() const
+    // {
+    //     std::vector<DrawItem> items;
+    //
+    //     return items;
+    // }
 
   private:
     void update_showcase(GameInput const &input, float delta_seconds);
@@ -73,7 +74,7 @@ class GameSession {
     GpuMaterial const player_material_;
     Character player_;
     PlayerView player_view_;
-    // std::vector<DrawItem> draws_;
+    std::vector<DrawItem> draws_;
     // Slots inside draws_, written where the constructor appends. Both are
     // rewritten in place every frame: DrawItem bakes a model matrix, so the
     // player's copy goes stale as it moves. Named offsets rather than back() --

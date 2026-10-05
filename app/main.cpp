@@ -43,11 +43,18 @@ int main()
     }
     catch (lc1::Error const &error) {
         std::println(stderr, "[lc1] fatal: {}", error.what());
+        // In debug builds, we'll check exceptions rather than process them.
+#ifndef NDEBUG
+        throw;
+#endif
         return EXIT_FAILURE;
     }
     // Vulkan exceptions already name the failing call and VkResult.
     catch (std::exception const &error) {
         std::println(stderr, "[lc1] fatal: {}", error.what());
+#ifndef NDEBUG
+        throw;
+#endif
         return EXIT_FAILURE;
     }
 

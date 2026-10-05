@@ -39,6 +39,7 @@ function(add_slang_shaders target)
                     -target spirv
                     -profile spirv_1_4
                     -capability spvRayQueryKHR
+                    -capability spvDescriptorHeapEXT
                     -emit-spirv-directly
                     -fvk-use-entrypoint-name
                     "$<$<CONFIG:Debug>:-O0;-g>"

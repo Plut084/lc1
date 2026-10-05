@@ -1,13 +1,13 @@
 #include "lc1/image.hpp"
 #include "lc1/scene/camera.hpp"
 #include "lc1/scene/lights/directional-light.hpp"
-#include "lc1/vk/device.hpp"
-#include "lc1/vk/gpu-texture.hpp"
-#include "lc1/vk/instance.hpp"
-#include "lc1/vk/loader.hpp"
-#include "lc1/vk/one-time-submit.hpp"
-#include "lc1/vk/renderer.hpp"
-#include "lc1/vk/surface.hpp"
+#include "lc1/vk/core/device.hpp"
+#include "lc1/vk/core/instance.hpp"
+#include "lc1/vk/core/loader.hpp"
+#include "lc1/vk/core/one-time-submit.hpp"
+#include "lc1/vk/presentation/surface.hpp"
+#include "lc1/vk/render/renderer.hpp"
+#include "lc1/vk/resources/gpu-texture.hpp"
 #include "lc1/window.hpp"
 
 #include <algorithm>
@@ -164,10 +164,10 @@ int main()
         glfwHideWindow(window.handle());
         auto extensions = window.required_instance_extensions();
         extensions.push_back(vk::EXTDebugUtilsExtensionName);
-        lc1::Instance instance{loader, extensions, {"VK_LAYER_KHRONOS_validation"}};
+        lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, surface, {}};
+        lc1::Device device{instance, *surface.raii()};
         exercise(device);
         std::cout << "shadow path isolation, switching, resize and rendering passed\n";
     }

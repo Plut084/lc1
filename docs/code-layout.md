@@ -10,6 +10,9 @@
 | `game/debug/pbr-showcase.*`，分别位于上述头文件和源码目录 | `lc1_game` | 当前嵌入游戏世界的 PBR 展示，供游戏和 GPU 测试共同使用 |
 | 其余引擎模块，包括 `scene/`、`vk/`、窗口及资源模块 | `lc1_engine` | 场景表达、渲染和平台能力 |
 
+`vk/` 内部分为 `core`、`resources`、`presentation`、`render`；呈现与渲染各自依赖底层
+资源，由应用组合。目录职责与依赖约定见 [Vulkan 代码分层](vulkan-layers.md)。
+
 `Character` 的声明位于 `lc1/game/character.hpp`，使用 `lc1::Character`。它依赖大陆的
 出生点和碰撞规则，并组合 `scene::Object` 保存唯一的世界变换与外观引用。场景层不负责角色规则。
 `Party` 的草稿位于 `lc1/game/party.hpp`；此次迁移没有新增队伍玩法。

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lc1/game/continent.hpp"
-#include "lc1/vk/renderer.hpp"
+#include "lc1/vk/render/renderer.hpp"
 
 #include <deque>
 #include <memory>

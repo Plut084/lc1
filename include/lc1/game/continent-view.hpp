@@ -1,7 +1,9 @@
 #pragma once
 
-#include "lc1/vk/gpu-mesh.hpp"
-#include "lc1/vk/material.hpp"
+#include "lc1/vk/render/draw-item.hpp"
+
+#include "lc1/vk/render/material.hpp"
+#include "lc1/vk/resources/gpu-mesh.hpp"
 
 #include <span>
 #include <vector>

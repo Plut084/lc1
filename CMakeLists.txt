@@ -96,34 +96,44 @@ add_subdirectory(shaders)
 
 # lc1_engine: the reusable library. Public headers live under include/lc1/
 # and are included as "lc1/..."; src/ holds sources and private headers
-# (e.g. vk/checks.hpp) that the app cannot see.
+# (e.g. vk/render/vertex-input.hpp) that the app cannot see.
 add_library(lc1_engine STATIC
     src/window.cpp
     src/input.cpp
     src/tangent-space.cpp
     src/resource-manager.cpp
-    src/vk/common.cpp
-    src/vk/loader.cpp
-    src/vk/instance.cpp
-    src/vk/surface.cpp
-    src/vk/device.cpp
-    src/vk/swapchain.cpp
-    src/vk/swapchain-policy.cpp
-    src/vk/shader.cpp
-    src/vk/shader-stages.cpp
-    src/vk/acceleration-structure.cpp
-    src/vk/buffer.cpp
-    src/vk/descriptor-set.cpp
-    src/vk/gpu-image.cpp
-    src/vk/gpu-texture.cpp
-    src/vk/gpu-mesh.cpp
-    src/vk/pipeline.cpp
-    src/vk/renderer.cpp
-    src/vk/tone-mapping.cpp
-    src/vk/ray-query-shadows.cpp
-    src/vk/shadow-map-preview.cpp
-    src/vk/temporal-shadows.cpp
-    src/vk/memory.cpp
+
+    # Vulkan setup and dispatch.
+    src/vk/core/common.cpp
+    src/vk/core/device.cpp
+    src/vk/core/instance.cpp
+    src/vk/core/loader.cpp
+    src/vk/core/memory.cpp
+
+    # GPU storage, uploads and binding primitives.
+    src/vk/resources/acceleration-structure.cpp
+    src/vk/resources/descriptor-heap.cpp
+    src/vk/resources/descriptor-set.cpp
+    src/vk/resources/gpu-buffer.cpp
+    src/vk/resources/gpu-image.cpp
+    src/vk/resources/gpu-mesh.cpp
+    src/vk/resources/gpu-texture.cpp
+    src/vk/resources/image-barrier.cpp
+    src/vk/resources/shader-stages.cpp
+    src/vk/resources/shader.cpp
+
+    # Window surfaces, swapchains and presentation policy.
+    src/vk/presentation/surface.cpp
+    src/vk/presentation/swapchain-policy.cpp
+    src/vk/presentation/swapchain.cpp
+
+    # Concrete lighting, shadow and output passes.
+    src/vk/render/pipeline.cpp
+    src/vk/render/ray-query-shadows.cpp
+    src/vk/render/renderer.cpp
+    src/vk/render/shadow-map-preview.cpp
+    src/vk/render/temporal-shadows.cpp
+    src/vk/render/tone-mapping.cpp
 
     src/stb-image.cpp
     src/game-clock.cpp

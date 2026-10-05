@@ -89,7 +89,7 @@ vector 扩容会让这个指针失效。预留容量只能延后问题，不能�
 ## 5. 数据边界：scene::Light 实际是 GPU 上传结构
 
 位置：[scene/lights/light.hpp](../include/lc1/scene/lights/light.hpp)、
-[vk/render-data.hpp](../include/lc1/vk/render-data.hpp)。
+[vk/render/render-data.hpp](../include/lc1/vk/render/render-data.hpp)。
 
 `scene::Light` 包含对齐、padding、整数类型编号和 shader 布局断言，实际是 GPU 数据格式；
 真正的场景灯光是 `PointLight/SpotLight/SphereLight/DirectionalLight`。现在 `Scene::lights()`

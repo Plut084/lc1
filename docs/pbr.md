@@ -185,8 +185,8 @@ MASK/BLEND 需要后续同时设计主通道、深度预览、ray-query 遮挡�
 - 构建：Linux Debug/Release 的 C++ 与 Slang；改动导入或依赖时补 Windows 交叉构建。
   CPU CTest 与需要真实 GPU 的测试继续分开运行。
 
-主要改动落在 `scene/` 材质定义、`vk/material.hpp`、`vk/render-data.hpp`、
-`vk/gpu-texture.*`、`vk/sampler.hpp`、`vk/vertex.hpp`、`vk/pipeline.*`、
-`vk/renderer.*`、`vk/frame-resources.hpp` 和 Slang 材质/后处理模块。
+主要改动落在 `scene/` 材质定义、`vk/render/material.hpp`、`vk/render/render-data.hpp`、
+`vk/resources/gpu-texture.*`、`vk/resources/sampler.hpp`、`vertex.hpp`、`vk/render/pipeline.*`、
+`vk/render/renderer.*`、`vk/render/frame-resources.hpp` 和 Slang 材质/后处理模块。
 阶段 4 再接入现有 glTF/scene graph 草稿；阶段 5 扩展 GPU 图像能力及环境资源。
 每阶段实施后更新 `docs/lighting.md`，区分已实现行为与后续目标。

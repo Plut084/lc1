@@ -59,6 +59,8 @@ endfunction()
 # Built only by the explicit GPU test target, not by ordinary game builds.
 add_slang_shaders(descriptor_heap_test_shader descriptor-heap-test.slang)
 set_target_properties(descriptor_heap_test_shader PROPERTIES EXCLUDE_FROM_ALL TRUE)
+add_slang_shaders(descriptor_heap_bulk_test_shader descriptor-heap-bulk-test.slang)
+set_target_properties(descriptor_heap_bulk_test_shader PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 add_slang_shaders(shaders
     shader.slang

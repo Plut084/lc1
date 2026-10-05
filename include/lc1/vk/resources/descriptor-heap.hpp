@@ -9,18 +9,18 @@ namespace lc1 {
 
 class CommandBuffer;
 
+using HeapIndex = std::uint32_t;
+
 class SamplerHeap {
     friend class DescriptorHeap;
 
   public:
-    using ShaderIndex = std::uint32_t;
-
     SamplerHeap(Device const &device, vk::DeviceSize capacity,
                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
 
-    ShaderIndex allocate();
+    HeapIndex allocate_sampler();
 
-    void deallocate(std::size_t index) { (void)index; } // TODO: implement
+    void deallocate_sampler(HeapIndex index) { (void)index; } // TODO: implement
 
   private:
     Device const *device_;
@@ -36,18 +36,16 @@ class ResourceHeap {
     friend class DescriptorHeap;
 
   public:
-    using ShaderIndex = std::uint32_t;
-
     ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                  vk::DeviceSize buffer_capacity,
                  vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
 
-    ShaderIndex allocate_image(GpuImage const &image);
-    ShaderIndex allocate_buffer(GpuBuffer const &buffer);
+    HeapIndex allocate_image(GpuImage const &image);
+    HeapIndex allocate_buffer(GpuBuffer const &buffer);
 
-    void deallocate_image(std::size_t index) { (void)index; } // TODO: implement
+    void deallocate_image(HeapIndex index) { (void)index; } // TODO: implement
 
-    void deallocate_buffer(std::size_t index) { (void)index; } // TODO: implement
+    void deallocate_buffer(HeapIndex index) { (void)index; } // TODO: implement
 
   private:
     Device const *device_;

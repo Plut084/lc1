@@ -38,6 +38,7 @@ class GpuMesh {
 
     // Binds the vertex buffer and draws. The pipeline must already be bound.
     void draw(vk::raii::CommandBuffer const &command_buffer) const;
+
     bool has_tangents() const { return has_tangents_; }
 
     vk::DeviceAddress acceleration_structure_address() const
@@ -126,7 +127,7 @@ inline GpuMesh::GpuMesh(Device const &device, std::span<Vertex const> vertices,
 
     build_acceleration_structure(device);
 
-    spdlog::info("[GpuMesh] loaded {} vertices, {} indices", vertex_count_, index_count_);
+    spdlog::debug("[GpuMesh] loaded {} vertices, {} indices", vertex_count_, index_count_);
 }
 
 } // namespace lc1

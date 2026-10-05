@@ -10,7 +10,7 @@ PlayerView::PlayerView(Continent const &continent, glm::vec3 player_position)
     : continent_{continent}, first_person_controller_{continent},
       third_person_controller_{continent}, map_camera_{player_position}
 {
-    camera_.set_zfar(800.0F);
+    camera_.set_zfar(12800.0F);
     map_camera_.apply(camera_);
 }
 

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <print>
 #include <vector>
 
 namespace lc1 {
@@ -309,8 +310,8 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         probe_sums[3] +=
             std::chrono::duration<double, std::milli>(probe_present - probe_submit).count();
         if (++probe_count == 120) {
-            std::fprintf(
-                stderr, "PROBE fence %.2f acquire %.2f record+submit %.2f present %.2f ms\n",
+            std::println(
+                stderr, "PROBE fence {:.2f} acquire {:.2f} record+submit {:.2f} present {:.2f} ms",
                 probe_sums[0] / 120, probe_sums[1] / 120, probe_sums[2] / 120, probe_sums[3] / 120);
             probe_count = 0;
             for (auto &value : probe_sums)

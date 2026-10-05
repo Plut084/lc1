@@ -56,8 +56,8 @@ void MapCameraController::update(scene::FpsCamera &camera, glm::vec3 player_posi
         if (input.toggle_lock)
             locked_ = !locked_;
         float const scroll =
-            std::isfinite(input.scroll) ? std::clamp(input.scroll, -20.0F, 20.0F) : 0.0F;
-        view_height_ = std::clamp(view_height_ * std::exp(-scroll * 0.12F), 16.0F, 96.0F);
+            std::isfinite(input.scroll) ? std::clamp(input.scroll, -100.0F, 100.0F) : 0.0F;
+        view_height_ = std::clamp(view_height_ * std::exp(-scroll * 0.12F), 16.0F, 64 * 96.0F);
     }
 
     if (locked_ || (input.enabled && input.recenter)) {

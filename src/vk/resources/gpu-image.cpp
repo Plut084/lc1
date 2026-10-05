@@ -69,8 +69,8 @@ GpuImage::GpuImage(Device const &device, vk::Format format, vk::Extent2D extent,
           device.raii_physical().getFormatProperties(format).optimalTilingFeatures},
       extent_{extent}, mip_levels_{mip_levels}, aspect_{aspect}
 {
-    spdlog::info("[GpuImage] created a {}x{} image, format {}, usage {}", extent.width,
-                 extent.height, vk::to_string(format), vk::to_string(usage));
+    spdlog::debug("[GpuImage] created a {}x{} image, format {}, usage {}", extent.width,
+                  extent.height, vk::to_string(format), vk::to_string(usage));
 }
 
 vk::ImageViewCreateInfo GpuImage::view_create_info() const

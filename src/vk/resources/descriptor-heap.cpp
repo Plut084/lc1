@@ -51,7 +51,7 @@ SamplerHeap::SamplerHeap(Device const &device, vk::DeviceSize capacity,
 {
 }
 
-SamplerHeap::ShaderIndex SamplerHeap::allocate()
+HeapIndex SamplerHeap::allocate_sampler()
 {
     if (size_ == capacity_)
         fail("DescriptorHeap: sampler heap is full");
@@ -78,7 +78,7 @@ SamplerHeap::ShaderIndex SamplerHeap::allocate()
     device_->raii().writeSamplerDescriptorsEXT(sampler_ci, sampler_har);
 
     buffer_.flush(offset_ + stride_ * size_, stride_);
-    return offset_ / stride_ + size_++;
+    return static_cast<HeapIndex>(offset_ / stride_ + size_++);
 }
 
 ResourceHeap::ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
@@ -103,7 +103,7 @@ ResourceHeap::ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
 {
 }
 
-ResourceHeap::ShaderIndex ResourceHeap::allocate_image(GpuImage const &image)
+HeapIndex ResourceHeap::allocate_image(GpuImage const &image)
 {
     if (image_size_ == image_capacity_)
         fail("DescriptorHeap: image heap is full");
@@ -127,10 +127,10 @@ ResourceHeap::ShaderIndex ResourceHeap::allocate_image(GpuImage const &image)
     device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
 
     buffer_.flush(image_offset_ + image_stride_ * image_size_, image_stride_);
-    return image_offset_ / image_stride_ + image_size_++;
+    return static_cast<HeapIndex>(image_offset_ / image_stride_ + image_size_++);
 }
 
-ResourceHeap::ShaderIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
+HeapIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
 {
     if (buffer_size_ == buffer_capacity_)
         fail("DescriptorHeap: buffer heap is full");
@@ -153,7 +153,7 @@ ResourceHeap::ShaderIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
     device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
 
     buffer_.flush(buffer_offset_ + buffer_stride_ * buffer_size_, buffer_stride_);
-    return buffer_offset_ / buffer_stride_ + buffer_size_++;
+    return static_cast<HeapIndex>(buffer_offset_ / buffer_stride_ + buffer_size_++);
 }
 
 DescriptorHeap::DescriptorHeap(Device const &device, vk::DeviceSize sampler_capacity,
@@ -372,7 +372,7 @@ void DescriptorHeap::bind_to_command_buffer(CommandBuffer &command_buffer)
 
 std::size_t DescriptorHeap::allocate_sampler()
 {
-    return sampler_heap_.allocate();
+    return sampler_heap_.allocate_sampler();
 }
 
 std::size_t DescriptorHeap::allocate_image(GpuImage const &image)

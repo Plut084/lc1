@@ -23,11 +23,11 @@ GpuBuffer::GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageF
 }
 
 GpuBuffer::GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags2 usage,
-                     vma::AllocationCreateFlags allocation_flags)
+                     vma::AllocationCreateFlags allocation_flags, vk::DeviceSize min_alignment)
     : buffer_{[&] {
           vk::BufferUsageFlags2CreateInfo const usage_info{.usage = usage};
           // Keep the pNext data alive until buffer creation has completed.
-          return device.allocator().createBuffer(
+          return device.allocator().createBufferWithAlignment(
               {
                   .pNext = &usage_info,
                   .size = size,
@@ -36,7 +36,8 @@ GpuBuffer::GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageF
               {
                   .flags = allocation_flags,
                   .usage = vma::MemoryUsage::eAuto,
-              });
+              },
+              min_alignment);
       }()},
       size_{size}
 {
@@ -49,6 +50,21 @@ void GpuBuffer::upload(std::span<std::byte const> data)
 
     // Maps, copies, flushes if the memory is not coherent, and unmaps.
     buffer_.getAllocation().copyFromMemory(data.data(), 0, data.size());
+}
+
+void *GpuBuffer::mapped_address() const
+{
+    auto *address = buffer_.getAllocation().getInfo().pMappedData;
+    if (!address)
+        fail("GpuBuffer has no persistent mapping");
+    return address;
+}
+
+void GpuBuffer::flush(vk::DeviceSize offset, vk::DeviceSize size) const
+{
+    if (offset > size_ || size > size_ - offset)
+        fail("GpuBuffer::flush: range exceeds the buffer");
+    buffer_.getAllocation().flush(offset, size);
 }
 
 } // namespace lc1

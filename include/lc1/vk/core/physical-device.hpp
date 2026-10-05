@@ -13,12 +13,12 @@
 
 namespace lc1 {
 
-using FeatureChain =
-    vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
-                       vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
-                       vk::PhysicalDeviceVulkan14Features,
-                       vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-                       vk::PhysicalDeviceRayQueryFeaturesKHR>;
+using FeatureChain = vk::StructureChain<
+    vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
+    vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
+    vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+    vk::PhysicalDeviceRayQueryFeaturesKHR, vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
+    vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>;
 
 namespace detail {
 

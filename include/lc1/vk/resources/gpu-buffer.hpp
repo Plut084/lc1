@@ -16,7 +16,7 @@ class Device;
 class GpuBuffer {
   public:
     GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags2 usage,
-              vma::AllocationCreateFlags allocation_flags = {});
+              vma::AllocationCreateFlags allocation_flags = {}, vk::DeviceSize min_alignment = 1);
 
     // Requires a buffer created with allocation flag
     // vma::AllocationCreateFlagBits::eHostAccessSequentialWrite.
@@ -29,7 +29,9 @@ class GpuBuffer {
                                                     *buffer_.getDispatcher());
     }
 
-    void *mapped_address() { return buffer_.getAllocation().map(); }
+    // Requires eMapped at allocation time; VMA owns the persistent mapping.
+    void *mapped_address() const;
+    void flush(vk::DeviceSize offset, vk::DeviceSize size) const;
 
     vk::raii::Buffer const &raii() const { return buffer_; }
 

@@ -13,10 +13,14 @@ class SamplerHeap {
     friend class DescriptorHeap;
 
   public:
+    using ShaderIndex = std::uint32_t;
+
     SamplerHeap(Device const &device, vk::DeviceSize capacity,
                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
 
-    std::size_t allocate();
+    ShaderIndex allocate();
+
+    void deallocate(std::size_t index) { (void)index; } // TODO: implement
 
   private:
     Device const *device_;
@@ -32,12 +36,18 @@ class ResourceHeap {
     friend class DescriptorHeap;
 
   public:
+    using ShaderIndex = std::uint32_t;
+
     ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                  vk::DeviceSize buffer_capacity,
                  vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
 
-    std::size_t allocate_image(GpuImage const &image);
-    std::size_t allocate_buffer(GpuBuffer const &buffer);
+    ShaderIndex allocate_image(GpuImage const &image);
+    ShaderIndex allocate_buffer(GpuBuffer const &buffer);
+
+    void deallocate_image(std::size_t index) { (void)index; } // TODO: implement
+
+    void deallocate_buffer(std::size_t index) { (void)index; } // TODO: implement
 
   private:
     Device const *device_;
@@ -72,6 +82,10 @@ class DescriptorHeap {
     template <typename T>
     void push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data);
 
+    // Returns an index relative to the whole heap, in units of the descriptor
+    // type's size, ready for ResourceDescriptorHeap / SamplerDescriptorHeap.
+    // Referenced resources must outlive all GPU submissions reading these slots.
+    // Slots are append-only until deallocation is implemented.
     std::size_t allocate_sampler();
     std::size_t allocate_image(GpuImage const &image);
     std::size_t allocate_buffer(GpuBuffer const &buffer);
@@ -88,6 +102,10 @@ class DescriptorHeap {
 template <typename T>
 inline void DescriptorHeap::push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data)
 {
+    if (data.empty() || data.size_bytes() % 4 != 0 ||
+        data.size_bytes() > descriptor_heap_properties_.maxPushDataSize)
+        fail("DescriptorHeap::push_data: size must be nonzero, a multiple of 4, and within "
+             "maxPushDataSize");
     vk::PushDataInfoEXT push_data_info{
         .data = {.address = data.data(), .size = data.size_bytes()},
     };

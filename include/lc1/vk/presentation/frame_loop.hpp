@@ -213,7 +213,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         // Waiting on frame.in_flight only proves this slot is free. This is
         // exactly why the pool is created with
         // VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT.
-        frame.command_buffer.raii().reset({});
+        frame.command_buffer.reset();
         frame.command_buffer.raii().begin({
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         });

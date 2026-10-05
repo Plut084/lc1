@@ -261,6 +261,10 @@ if(BUILD_TESTING)
         target_link_options(lc1_player_view_tests PRIVATE -static)
     endif()
     if(NOT CMAKE_CROSSCOMPILING)
+        add_executable(lc1_descriptor_heap_tests EXCLUDE_FROM_ALL tests/descriptor-heap.cpp)
+        target_link_libraries(lc1_descriptor_heap_tests PRIVATE lc1_engine)
+        lc1_enable_warnings(lc1_descriptor_heap_tests)
+        add_dependencies(lc1_descriptor_heap_tests descriptor_heap_test_shader)
         # Explicit GPU integration target: needs a display/GPU and the Conan run env.
         # Kept out of ordinary CPU-only CTest runs.
         add_executable(lc1_temporal_shadow_tests EXCLUDE_FROM_ALL tests/temporal-shadows.cpp)

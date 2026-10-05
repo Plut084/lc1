@@ -11,6 +11,13 @@ class CommandBuffer {
 
     vk::raii::CommandBuffer &raii() { return handle_; }
 
+    // The caller must wait for completion before resetting this command buffer.
+    void reset()
+    {
+        handle_.reset({});
+        bound_heap_ = nullptr;
+    }
+
     void bind_descriptor_heap(DescriptorHeap &heap)
     {
         if (bound_heap_ != &heap) {

@@ -5,28 +5,55 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string_view>
 
 namespace lc1 {
 
+namespace {
+constexpr auto mapped_heap = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
+                             vma::AllocationCreateFlagBits::eMapped;
+
+vk::DeviceSize align_descriptor(vk::DeviceSize offset, vk::DeviceSize stride)
+{
+    if (stride == 0)
+        fail("DescriptorHeap: descriptor size is zero (check device support)");
+    auto const padding = (stride - offset % stride) % stride;
+    if (offset > std::numeric_limits<vk::DeviceSize>::max() - padding)
+        fail("DescriptorHeap: offset overflow");
+    return offset + padding;
+}
+
+vk::DeviceSize region_end(vk::DeviceSize offset, vk::DeviceSize capacity, vk::DeviceSize stride,
+                          vk::DeviceSize limit)
+{
+    if (stride == 0 || offset > limit || capacity > (limit - offset) / stride)
+        fail("DescriptorHeap: capacity exceeds the device heap limit");
+    return offset + capacity * stride;
+}
+
 constexpr auto descriptor_heap_usage =
     vk::BufferUsageFlagBits2::eShaderDeviceAddress | vk::BufferUsageFlagBits2::eDescriptorHeapEXT;
+} // namespace
 
 SamplerHeap::SamplerHeap(Device const &device, vk::DeviceSize capacity,
                          vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties)
     // Not considering feature.minSamplerHeapReservedRangeWithEmbedded here.
     : device_(&device), reserved_size_(descriptor_heap_properties.minSamplerHeapReservedRange),
-      offset_(reserved_size_), stride_(descriptor_heap_properties.samplerDescriptorSize),
-      capacity_(capacity),
-      buffer_(GpuBuffer{device, offset_ + capacity * stride_, descriptor_heap_usage,
-                        vma::AllocationCreateFlagBits::eHostAccessSequentialWrite}),
+      offset_(align_descriptor(reserved_size_, descriptor_heap_properties.samplerDescriptorSize)),
+      stride_(descriptor_heap_properties.samplerDescriptorSize), capacity_(capacity),
+      buffer_(device,
+              std::max(descriptor_heap_properties.samplerHeapAlignment,
+                       region_end(offset_, capacity, stride_,
+                                  descriptor_heap_properties.maxSamplerHeapSize)),
+              descriptor_heap_usage, mapped_heap, descriptor_heap_properties.samplerHeapAlignment),
       size_(0)
 {
 }
 
-std::size_t SamplerHeap::allocate()
+SamplerHeap::ShaderIndex SamplerHeap::allocate()
 {
-    if (size_ + 1 == capacity_)
+    if (size_ == capacity_)
         fail("DescriptorHeap: sampler heap is full");
 
     vk::SamplerCreateInfo sampler_ci{
@@ -44,34 +71,41 @@ std::size_t SamplerHeap::allocate()
     };
 
     vk::HostAddressRangeEXT sampler_har{
-        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset_ + size_,
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset_ + stride_ * size_,
         .size = stride_,
     };
 
     device_->raii().writeSamplerDescriptorsEXT(sampler_ci, sampler_har);
 
-    return size_++;
+    buffer_.flush(offset_ + stride_ * size_, stride_);
+    return offset_ / stride_ + size_++;
 }
 
 ResourceHeap::ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                            vk::DeviceSize buffer_capacity,
                            vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties)
     : device_(&device), reserved_size_(descriptor_heap_properties.minResourceHeapReservedRange),
-      image_offset_(reserved_size_), image_stride_(descriptor_heap_properties.imageDescriptorSize),
+      image_offset_(
+          align_descriptor(reserved_size_, descriptor_heap_properties.imageDescriptorSize)),
+      image_stride_(descriptor_heap_properties.imageDescriptorSize),
       image_capacity_(image_capacity),
-      buffer_offset_(image_offset_ + image_capacity * image_stride_),
+      buffer_offset_(align_descriptor(region_end(image_offset_, image_capacity, image_stride_,
+                                                 descriptor_heap_properties.maxResourceHeapSize),
+                                      descriptor_heap_properties.bufferDescriptorSize)),
       buffer_stride_(descriptor_heap_properties.bufferDescriptorSize),
       buffer_capacity_(buffer_capacity),
-      buffer_(GpuBuffer{device, buffer_offset_ + buffer_capacity * buffer_stride_,
-                        descriptor_heap_usage,
-                        vma::AllocationCreateFlagBits::eHostAccessSequentialWrite}),
+      buffer_(device,
+              std::max(descriptor_heap_properties.resourceHeapAlignment,
+                       region_end(buffer_offset_, buffer_capacity, buffer_stride_,
+                                  descriptor_heap_properties.maxResourceHeapSize)),
+              descriptor_heap_usage, mapped_heap, descriptor_heap_properties.resourceHeapAlignment),
       image_size_(0), buffer_size_(0)
 {
 }
 
-std::size_t ResourceHeap::allocate_image(GpuImage const &image)
+ResourceHeap::ShaderIndex ResourceHeap::allocate_image(GpuImage const &image)
 {
-    if (image_size_ + 1 == image_capacity_)
+    if (image_size_ == image_capacity_)
         fail("DescriptorHeap: image heap is full");
 
     auto view_ci = image.view_create_info();
@@ -80,24 +114,25 @@ std::size_t ResourceHeap::allocate_image(GpuImage const &image)
         .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
     };
     vk::ResourceDescriptorInfoEXT resource_info{
-        .sType = vk::StructureType::eResourceDescriptorInfoEXT,
         .type = vk::DescriptorType::eSampledImage,
         .data = vk::ResourceDescriptorDataEXT{&image_info},
     };
 
     vk::HostAddressRangeEXT sampler_har{
-        .address = static_cast<std::byte *>(buffer_.mapped_address()) + image_offset_ + image_size_,
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + image_offset_ +
+                   image_stride_ * image_size_,
         .size = image_stride_,
     };
 
     device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
 
-    return image_size_++;
+    buffer_.flush(image_offset_ + image_stride_ * image_size_, image_stride_);
+    return image_offset_ / image_stride_ + image_size_++;
 }
 
-std::size_t ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
+ResourceHeap::ShaderIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
 {
-    if (buffer_size_ + 1 == buffer_capacity_)
+    if (buffer_size_ == buffer_capacity_)
         fail("DescriptorHeap: buffer heap is full");
 
     vk::DeviceAddressRangeEXT buffer_range{
@@ -105,20 +140,20 @@ std::size_t ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
         .size = buffer.size(),
     };
     vk::ResourceDescriptorInfoEXT resource_info{
-        .sType = vk::StructureType::eResourceDescriptorInfoEXT,
         .type = vk::DescriptorType::eUniformBuffer,
         .data = vk::ResourceDescriptorDataEXT{&buffer_range},
     };
 
     vk::HostAddressRangeEXT sampler_har{
-        .address =
-            static_cast<std::byte *>(buffer_.mapped_address()) + buffer_offset_ + buffer_size_,
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + buffer_offset_ +
+                   buffer_stride_ * buffer_size_,
         .size = buffer_stride_,
     };
 
     device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
 
-    return buffer_size_++;
+    buffer_.flush(buffer_offset_ + buffer_stride_ * buffer_size_, buffer_stride_);
+    return buffer_offset_ / buffer_stride_ + buffer_size_++;
 }
 
 DescriptorHeap::DescriptorHeap(Device const &device, vk::DeviceSize sampler_capacity,
@@ -185,13 +220,16 @@ void DescriptorHeap::probe() const
     };
     log_heap("sampler heap", sampler_heap_.buffer_, sampler_heap_.reserved_size_);
     log_region("sampler region", sampler_heap_.buffer_, sampler_heap_.offset_,
-               sampler_heap_.buffer_.size(), sampler_heap_.size_, sampler_heap_.stride_);
+               sampler_heap_.buffer_.size(), sampler_heap_.size_ * sampler_heap_.stride_,
+               sampler_heap_.stride_);
     log_heap("resource heap", resource_heap_.buffer_, resource_heap_.reserved_size_);
     log_region("image region", resource_heap_.buffer_, resource_heap_.image_offset_,
-               resource_heap_.buffer_offset_, resource_heap_.image_size_,
+               resource_heap_.buffer_offset_,
+               resource_heap_.image_size_ * resource_heap_.image_stride_,
                resource_heap_.image_stride_);
     log_region("buffer region", resource_heap_.buffer_, resource_heap_.buffer_offset_,
-               resource_heap_.buffer_.size(), resource_heap_.buffer_size_,
+               resource_heap_.buffer_.size(),
+               resource_heap_.buffer_size_ * resource_heap_.buffer_stride_,
                resource_heap_.buffer_stride_);
 
     bool const supports_heap = supports_extension(vk::EXTDescriptorHeapExtensionName);

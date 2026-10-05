@@ -359,8 +359,9 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
 {
     Stopwatch stopwatch;
     // Construct once; FrameLoop invokes the callback synchronously and never retains it.
-    std::function const record = [this](vk::raii::CommandBuffer const &command_buffer,
-                                        FrameResources &resources, RenderTarget const &target) {
+    FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
+                                                                    FrameResources &resources,
+                                                                    RenderTarget const &target) {
         renderer_.record(command_buffer, resources, target, game_.camera(), game_.lights(),
                          game_.draws(), game_.output());
 
@@ -372,7 +373,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
             .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
                              vk::AccessFlagBits2::eColorAttachmentWrite,
         };
-        command_buffer.pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
+        command_buffer.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
         vk::RenderingAttachmentInfo const color{
             .imageView = *target.view,
             .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -384,9 +385,9 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
             .layerCount = 1,
         };
         rendering.setColorAttachments(color);
-        command_buffer.beginRendering(rendering);
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *command_buffer);
-        command_buffer.endRendering();
+        command_buffer.raii().beginRendering(rendering);
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *command_buffer.raii());
+        command_buffer.raii().endRendering();
     };
 
     while (!window_.should_close() && !stop_requested()) {

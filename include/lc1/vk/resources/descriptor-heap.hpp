@@ -7,6 +7,8 @@
 
 namespace lc1 {
 
+class CommandBuffer;
+
 class SamplerHeap {
     friend class DescriptorHeap;
 
@@ -65,10 +67,10 @@ class DescriptorHeap {
     // Physical-device support does not imply that a feature was enabled on the logical device.
     void probe() const;
 
-    void bind_to_command_buffer(vk::raii::CommandBuffer const &command_buffer);
+    void bind_to_command_buffer(CommandBuffer &command_buffer);
 
     template <typename T>
-    void push_data(vk::raii::CommandBuffer const &command_buffer, std::span<T> data);
+    void push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data);
 
     std::size_t allocate_sampler();
     std::size_t allocate_image(GpuImage const &image);
@@ -84,8 +86,7 @@ class DescriptorHeap {
 };
 
 template <typename T>
-inline void DescriptorHeap::push_data(vk::raii::CommandBuffer const &command_buffer,
-                                      std::span<T> data)
+inline void DescriptorHeap::push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data)
 {
     vk::PushDataInfoEXT push_data_info{
         .data = {.address = data.data(), .size = data.size_bytes()},

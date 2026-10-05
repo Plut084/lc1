@@ -26,6 +26,7 @@
 
 namespace lc1 {
 
+class CommandBuffer;
 class Device;
 class GpuTexture;
 
@@ -62,6 +63,7 @@ class Renderer {
     // max_materials sets are live.
     GpuMaterial make_material(GpuTexture const &texture);
     GpuMaterial make_material(MaterialInfo const &info);
+
     vk::SampleCountFlagBits sample_count() const { return samples_; }
 
     // Creates one set of drawing resources with its own descriptor pool. The
@@ -75,12 +77,12 @@ class Renderer {
     // outside any rendering pass. The caller owns begin/end and the target's
     // layout transitions; record leaves it in COLOR_ATTACHMENT_OPTIMAL.
     // `target.extent` must be nonzero and fit the attachment.
-    void record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
+    void record(CommandBuffer &command_buffer_1, FrameResources &resources,
                 RenderTarget const &target, scene::FpsCamera const &camera,
                 std::span<scene::Light const> lights, std::span<DrawItem const> draws,
                 OutputSettings output = {});
 
-    void record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
+    void record(CommandBuffer &command_buffer_1, FrameResources &resources,
                 RenderTarget const &target, scene::Scene const &scene, OutputSettings output = {});
 
     // Separate diagnostic entry point. No ray queries, TLAS updates or temporal

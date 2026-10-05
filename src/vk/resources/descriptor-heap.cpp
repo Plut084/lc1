@@ -1,4 +1,5 @@
 #include "lc1/vk/resources/descriptor-heap.hpp"
+#include "lc1/vk/core/command-buffer.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -112,7 +113,7 @@ std::size_t ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
     vk::HostAddressRangeEXT sampler_har{
         .address =
             static_cast<std::byte *>(buffer_.mapped_address()) + buffer_offset_ + buffer_size_,
-        .size = image_stride_,
+        .size = buffer_stride_,
     };
 
     device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
@@ -308,9 +309,9 @@ void DescriptorHeap::probe() const
     }
 }
 
-void DescriptorHeap::bind_to_command_buffer(vk::raii::CommandBuffer const &command_buffer)
+void DescriptorHeap::bind_to_command_buffer(CommandBuffer &command_buffer)
 {
-    command_buffer.bindSamplerHeapEXT(vk::BindHeapInfoEXT{
+    command_buffer.raii().bindSamplerHeapEXT(vk::BindHeapInfoEXT{
         .heapRange =
             vk::DeviceAddressRangeEXT{
                 .address = sampler_heap_.buffer_.device_address(),
@@ -320,7 +321,7 @@ void DescriptorHeap::bind_to_command_buffer(vk::raii::CommandBuffer const &comma
         .reservedRangeSize = sampler_heap_.reserved_size_,
     });
 
-    command_buffer.bindResourceHeapEXT(vk::BindHeapInfoEXT{
+    command_buffer.raii().bindResourceHeapEXT(vk::BindHeapInfoEXT{
         .heapRange =
             vk::DeviceAddressRangeEXT{
                 .address = resource_heap_.buffer_.device_address(),

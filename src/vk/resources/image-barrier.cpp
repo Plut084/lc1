@@ -2,7 +2,7 @@
 
 namespace lc1 {
 
-void transition_image_layout(vk::raii::CommandBuffer const &command_buffer, vk::Image image,
+void transition_image_layout(vk::raii::CommandBuffer &command_buffer, vk::Image image,
                              vk::ImageLayout old_layout, vk::ImageLayout new_layout,
                              vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
                              vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,

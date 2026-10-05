@@ -1,5 +1,6 @@
 #include "lc1/vk/render/renderer.hpp"
 
+#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
 #include "lc1/vk/resources/shader-stages.hpp"
@@ -247,11 +248,13 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
     }
 }
 
-void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
+void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources,
                       RenderTarget const &target, scene::FpsCamera const &camera,
                       std::span<scene::Light const> lights, std::span<DrawItem const> draws,
                       OutputSettings output)
 {
+    auto &command_buffer = command_buffer_1.raii();
+
     if (!std::isfinite(output.exposure) || output.exposure <= 0.0F)
         fail("exposure must be finite and positive");
     if (output.encoding == OutputEncoding::Srgb && color_format_ != vk::Format::eR8G8B8A8Unorm &&
@@ -367,9 +370,11 @@ void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResour
     tone_map(command_buffer, resources, target, output);
 }
 
-void Renderer::record(vk::raii::CommandBuffer const &command_buffer, FrameResources &resources,
+void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,
                       RenderTarget const &target, scene::Scene const &scene, OutputSettings output)
 {
+    command_buffer.bind_descriptor_heap(descriptor_heap_);
+
     auto const *camera = scene.active_camera();
     if (!camera)
         fail("cannot render a scene without an active camera");

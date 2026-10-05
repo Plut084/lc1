@@ -4,6 +4,9 @@ import shadow_values;
 import modules.pbr;
 import modules.normal;
 
+// SamplerDescriptorHeap
+// ResourceDescriptorHeap
+
 struct VSInput {
     float3 position;
     float3 normal;

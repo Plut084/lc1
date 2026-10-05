@@ -1,4 +1,5 @@
 #pragma once
+#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/resources/image-barrier.hpp"
 #include <chrono>
 #include <cstdio>
@@ -38,6 +39,8 @@ enum class FrameResult : std::uint8_t {
 // Must not outlive the Device it was constructed from.
 template <typename FrameResource> class FrameLoop {
   public:
+    using RecordCallback =
+        std::function<void(CommandBuffer &, FrameResource &, RenderTarget const &)>;
     static constexpr uint32_t max_frames_in_flight = 2;
 
     // The queue comes from the Device: there is exactly one vk::raii::Queue in
@@ -56,16 +59,14 @@ template <typename FrameResource> class FrameLoop {
     // record must leave the target in that layout and close any rendering pass.
     // The callback is not retained. If it throws, stop drawing and wait for the
     // device before releasing resources; the acquired image is not presented.
-    FrameResult draw_frame(Swapchain &swapchain,
-                           std::function<void(vk::raii::CommandBuffer const &, FrameResource &,
-                                              RenderTarget const &)> const &record);
+    FrameResult draw_frame(Swapchain &swapchain, RecordCallback const &record);
 
   private:
     // Everything one frame in flight owns. The per-FRAME counterpart of
     // SwapchainImage: grouping them makes "slot i's fence guards slot i's command
     // buffer" a fact about the type rather than about three parallel indices.
     struct Frame {
-        vk::raii::CommandBuffer command_buffer;
+        CommandBuffer command_buffer;
         // Signaled by acquire, waited on by this frame's submit.
         vk::raii::Semaphore image_available;
         // Signaled when this frame's submit finishes on the GPU; waited on before
@@ -147,10 +148,7 @@ FrameLoop<GpuResource>::FrameLoop(Device const &device,
 }
 
 template <typename GpuResource>
-FrameResult FrameLoop<GpuResource>::draw_frame(
-    Swapchain &swapchain,
-    std::function<void(vk::raii::CommandBuffer const &, GpuResource &, RenderTarget const &)> const
-        &record)
+FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallback const &record)
 {
     if (!record) {
         fail("frame recording callback is empty");
@@ -215,8 +213,8 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
         // Waiting on frame.in_flight only proves this slot is free. This is
         // exactly why the pool is created with
         // VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT.
-        frame.command_buffer.reset({});
-        frame.command_buffer.begin({
+        frame.command_buffer.raii().reset({});
+        frame.command_buffer.raii().begin({
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         });
 
@@ -231,7 +229,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
         // srcAccessMask stays NONE: the presentation engine's read is not
         // tracked by access masks. This is an execution-only dependency.
         transition_image_layout(
-            frame.command_buffer, image.image, vk::ImageLayout::eUndefined,
+            frame.command_buffer.raii(), image.image, vk::ImageLayout::eUndefined,
             vk::ImageLayout::eColorAttachmentOptimal,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlags2{},
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -250,14 +248,14 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
         // is not a pipeline stage. The submit -> present semaphore pair orders
         // this write against the presentation engine's read.
         transition_image_layout(
-            frame.command_buffer, image.image, vk::ImageLayout::eColorAttachmentOptimal,
+            frame.command_buffer.raii(), image.image, vk::ImageLayout::eColorAttachmentOptimal,
             vk::ImageLayout::ePresentSrcKHR, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::AccessFlagBits2::eColorAttachmentWrite,
             vk::PipelineStageFlagBits2{}, // VK_PIPELINE_STAGE_2_NONE
             vk::AccessFlags2{},           // VK_ACCESS_2_NONE
             vk::ImageAspectFlagBits::eColor);
 
-        frame.command_buffer.end();
+        frame.command_buffer.raii().end();
 
         // One dereference to the C handle: vk::raii::Semaphore -> VkSemaphore
         // would be two user-defined conversions, and those do not chain.
@@ -276,7 +274,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(
             .setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
         vk::CommandBufferSubmitInfo command_info;
-        command_info.setCommandBuffer(*frame.command_buffer);
+        command_info.setCommandBuffer(*frame.command_buffer.raii());
 
         vk::SubmitInfo2 submit;
         submit.setWaitSemaphoreInfos(wait_semaphore)

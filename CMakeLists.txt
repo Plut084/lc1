@@ -113,14 +113,13 @@ add_library(lc1_engine STATIC
     # GPU storage, uploads and binding primitives.
     src/vk/resources/acceleration-structure.cpp
     src/vk/resources/descriptor-heap.cpp
-    src/vk/resources/descriptor-set.cpp
+    src/vk/resources/descriptor-heap-cache.cpp
     src/vk/resources/gpu-buffer.cpp
     src/vk/resources/gpu-image.cpp
     src/vk/resources/gpu-mesh.cpp
     src/vk/resources/gpu-texture.cpp
     src/vk/resources/image-barrier.cpp
-    src/vk/resources/shader-stages.cpp
-    src/vk/resources/shader.cpp
+    src/vk/resources/shader-object.cpp
 
     # Window surfaces, swapchains and presentation policy.
     src/vk/presentation/surface.cpp
@@ -128,7 +127,9 @@ add_library(lc1_engine STATIC
     src/vk/presentation/swapchain.cpp
 
     # Concrete lighting, shadow and output passes.
-    src/vk/render/pipeline.cpp
+    src/vk/render/graphics-shaders.cpp
+    src/vk/render/graphics-state.cpp
+    src/vk/render/material.cpp
     src/vk/render/ray-query-shadows.cpp
     src/vk/render/renderer.cpp
     src/vk/render/shadow-map-preview.cpp
@@ -238,6 +239,21 @@ add_dependencies(lc1 shaders copy_assets)
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME descriptor_heap_shader_interfaces
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/check_heap_shaders.py"
+            --sample-shading "${PROJECT_BINARY_DIR}/shaders/shader.spv"
+            "${PROJECT_BINARY_DIR}/shaders/shader.spv"
+            "${PROJECT_BINARY_DIR}/shaders/visibility.spv"
+            "${PROJECT_BINARY_DIR}/shaders/temporal-shadows.spv"
+            "${PROJECT_BINARY_DIR}/shaders/spatial-shadows.spv"
+            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv"
+            "${PROJECT_BINARY_DIR}/shaders/shadow.spv"
+            "${PROJECT_BINARY_DIR}/shaders/shadow-preview.spv")
+    add_test(NAME heap_struct_generator
+        COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"
+                --slangc "${SLANGC_EXECUTABLE}")
     add_executable(lc1_world_map_tests tests/world-map.cpp)
     target_link_libraries(lc1_world_map_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_world_map_tests)

@@ -5,13 +5,14 @@
 namespace lc1 {
 
 class GpuMesh;
-class GpuMaterial;
+struct MaterialInfo;
 
 // One entry of "what to draw this frame", rebuilt every frame. Non-owning: the
-// GpuMesh and the Material must outlive the frame that draws them.
+// material parameters must survive record(); mesh, textures and samplers must
+// survive GPU execution. Renderer snapshots parameters into the current frame slot.
 struct DrawItem {
     GpuMesh const *mesh = nullptr;
-    GpuMaterial const *material = nullptr;
+    MaterialInfo const *material = nullptr;
     glm::mat4 model{1.0F};
     // Printed labels still render, but need not behave like raised shadow casters.
     bool casts_shadow = true;

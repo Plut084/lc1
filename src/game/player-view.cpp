@@ -7,7 +7,7 @@
 namespace lc1 {
 
 PlayerView::PlayerView(Continent const &continent, glm::vec3 player_position)
-    : continent_{continent}, first_person_controller_{continent},
+    : continent_{&continent}, first_person_controller_{continent},
       third_person_controller_{continent}, map_camera_{player_position}
 {
     camera_.set_zfar(12800.0F);
@@ -28,7 +28,7 @@ void PlayerView::toggle(Character &player)
     if (oblique_) {
         player.set_look_angles(0.0F, 0.0F);
         // Recenter while preserving zoom and the Y lock state.
-        map_camera_.update(camera_, player.position(), continent_.bounds(), {.recenter = true},
+        map_camera_.update(camera_, player.position(), continent_->bounds(), {.recenter = true},
                            0.0F);
     }
     else {
@@ -53,7 +53,7 @@ void PlayerView::update(Character &player, PlayerInput const &input,
     map_camera_.apply(camera_);
     if (camera_input.enabled)
         third_person_controller_.update(delta_seconds, input, camera_.heading(), player);
-    map_camera_.update(camera_, player.position(), continent_.bounds(), camera_input,
+    map_camera_.update(camera_, player.position(), continent_->bounds(), camera_input,
                        delta_seconds);
     if (camera_input.enabled && camera_input.toggle_lock)
         spdlog::info("[camera] {}", map_camera_.locked() ? "locked to player" : "free camera");

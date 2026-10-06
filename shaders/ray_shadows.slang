@@ -1,7 +1,5 @@
 import lights;
 
-[[vk::binding(4, 0)]]
-RaytracingAccelerationStructure shadow_scene;
 
 // Integer hash seeded by pixel, light and frame: temporal accumulation needs new samples.
 uint shadow_hash(uint value)
@@ -28,7 +26,7 @@ float2 sample_shadow_disk(inout uint state, uint index, uint count)
     return radius * float2(cos(angle), sin(angle));
 }
 
-float trace_shadow_visibility(float3 origin, float3 direction, float distance)
+float trace_shadow_visibility(RaytracingAccelerationStructure shadow_scene, float3 origin, float3 direction, float distance)
 {
     RayDesc ray;
     ray.Origin = origin;
@@ -41,13 +39,13 @@ float trace_shadow_visibility(float3 origin, float3 direction, float distance)
     return query.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
 
-float shadow_visibility(float3 position, float3 normal, Light light, float3 direction,
+float shadow_visibility(RaytracingAccelerationStructure shadow_scene, float3 position, float3 normal, Light light, float3 direction,
                         uint2 pixel, uint light_index, uint frame_index)
 {
     float bias = max(0.002, max(max(abs(position.x), abs(position.y)), abs(position.z)) * 2e-6);
     float3 origin = position + normal * bias;
     if (light.type == 0)
-        return trace_shadow_visibility(origin, direction, 1e7);
+        return trace_shadow_visibility(shadow_scene, origin, direction, 1e7);
 
     float radius = light.type == 3 ? max(light.radius, 0.0) : 0.0;
     uint count = radius > 0.0 ? clamp(light.shadow_sample_count, 1u, 32u) : 1u;
@@ -63,7 +61,7 @@ float shadow_visibility(float3 position, float3 normal, Light light, float3 dire
         float distance = length(offset);
         // Recompute direction from the biased origin, and stop before the sampled emitter.
         visibility += distance <= bias ? 1.0 :
-            trace_shadow_visibility(origin, offset / distance, distance - bias);
+            trace_shadow_visibility(shadow_scene, origin, offset / distance, distance - bias);
     }
     return visibility / float(count);
 }

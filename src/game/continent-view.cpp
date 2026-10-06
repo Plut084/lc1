@@ -1,7 +1,6 @@
 #include "lc1/game/continent-view.hpp"
 
 #include "lc1/game/continent.hpp"
-#include "lc1/vk/render/renderer.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -200,9 +199,10 @@ void roads(Geometry &geometry, Continent const &continent, GroundBounds chunk)
 
 } // namespace
 
-ContinentView::ContinentView(Device const &device, Renderer &renderer, GpuTexture const &texture,
+ContinentView::ContinentView(Device const &device, GpuTexture const &texture,
                              Continent const &continent)
-    : material_(renderer.make_material(texture))
+    : material_(MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
+                             .base_color = {.texture = &texture}})
 {
     // 16 x 16 tiles per mesh keeps the full first continent at 384 draws, without
     // creating per-object UBOs/BLASes for thousands of tiny chunks. All are resident.

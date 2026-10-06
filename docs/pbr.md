@@ -1,5 +1,8 @@
 # PBR 渲染实施计划
 
+> 本文是早期设计记录；当前 CPU 材质与 native heap 实现见 [光照](lighting.md)。
+> `GpuMaterial`、材质 set 2、`make_material()` 和固定材质池已被替换。
+
 状态：2026-10-03 已实现阶段 1、2，以及阶段 3 的 MR/emissive 采样、MikkTSpace 切线和法线贴图。
 AO、完整 sampler 配置、glTF 材质导入与 IBL 尚未实现。当前行为、运行方法和测试见 [光照](lighting.md)。
 

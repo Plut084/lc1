@@ -46,8 +46,12 @@ FeatureChain required_features()
 {
     // Set bits by type so adding or reordering chain nodes needs no parallel edit here.
     FeatureChain features;
-    features.get<vk::PhysicalDeviceFeatures2>().features =
-        vk::PhysicalDeviceFeatures{.sampleRateShading = vk::True, .samplerAnisotropy = vk::True};
+    features.get<vk::PhysicalDeviceFeatures2>().features = vk::PhysicalDeviceFeatures{
+        .sampleRateShading = vk::True,
+        .samplerAnisotropy = vk::True,
+        // Slang loads heap acceleration-structure addresses as 64-bit integers.
+        .shaderInt64 = vk::True,
+    };
     features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters = vk::True;
     features.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress = vk::True;
     features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 = vk::True;
@@ -56,6 +60,10 @@ FeatureChain required_features()
     features.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure =
         vk::True;
     features.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery = vk::True;
+    features.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap = vk::True;
+    features.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers =
+        vk::True;
+    features.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject = vk::True;
     return features;
 }
 
@@ -72,12 +80,17 @@ bool supports_required_features(vk::raii::PhysicalDevice const &physical_device,
     auto const &have14 = available.get<vk::PhysicalDeviceVulkan14Features>();
     auto const &want14 = required.get<vk::PhysicalDeviceVulkan14Features>();
     // When adding a requested feature, add its support comparison here too.
-    return available.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
+    return available.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject &&
+           available.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap &&
+           available.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>()
+               .shaderUntypedPointers &&
+           available.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
            available.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>()
                .accelerationStructure &&
            available.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery &&
            have.sampleRateShading >= want.sampleRateShading &&
            have.samplerAnisotropy >= want.samplerAnisotropy &&
+           have.shaderInt64 >= want.shaderInt64 &&
            have11.shaderDrawParameters >= want11.shaderDrawParameters &&
            have13.synchronization2 >= want13.synchronization2 &&
            have13.dynamicRendering >= want13.dynamicRendering &&
@@ -173,6 +186,9 @@ Device::Device(Instance const &instance, vk::SurfaceKHR surface,
     try {
         std::vector<char const *> extensions{required_extensions.begin(),
                                              required_extensions.end()};
+        extensions.push_back(vk::EXTDescriptorHeapExtensionName);
+        extensions.push_back(vk::KHRShaderUntypedPointersExtensionName);
+        extensions.push_back(vk::EXTShaderObjectExtensionName);
         for (auto const *extension :
              {vk::KHRAccelerationStructureExtensionName, vk::KHRRayQueryExtensionName,
               vk::KHRDeferredHostOperationsExtensionName})

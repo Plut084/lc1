@@ -1,5 +1,6 @@
 #include "lc1/vk/resources/descriptor-heap.hpp"
 #include "lc1/vk/core/command-buffer.hpp"
+#include "lc1/vk/resources/sampler.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -53,37 +54,42 @@ SamplerHeap::SamplerHeap(Device const &device, vk::DeviceSize capacity,
 
 HeapIndex SamplerHeap::allocate_sampler()
 {
+    return allocate_sampler(Sampler::default_create_info(*device_));
+}
+
+HeapIndex SamplerHeap::allocate_sampler(vk::SamplerCreateInfo const &info)
+{
     if (size_ == capacity_)
         fail("DescriptorHeap: sampler heap is full");
+    auto const index = static_cast<HeapIndex>(offset_ / stride_ + size_++);
+    try {
+        write_sampler(index, info);
+    }
+    catch (...) {
+        --size_;
+        throw;
+    }
+    return index;
+}
 
-    vk::SamplerCreateInfo sampler_ci{
-        .magFilter = vk::Filter::eLinear,
-        .minFilter = vk::Filter::eLinear,
-        .addressModeU = vk::SamplerAddressMode::eRepeat,
-        .addressModeV = vk::SamplerAddressMode::eRepeat,
-        .addressModeW = vk::SamplerAddressMode::eRepeat,
-        .anisotropyEnable = vk::True,
-        .maxAnisotropy = device_->raii_physical().getProperties().limits.maxSamplerAnisotropy,
-        .compareEnable = vk::False,
-        .compareOp = vk::CompareOp::eAlways,
-        .borderColor = vk::BorderColor::eIntOpaqueBlack,
-        .unnormalizedCoordinates = vk::False,
-    };
-
-    vk::HostAddressRangeEXT sampler_har{
-        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset_ + stride_ * size_,
+void SamplerHeap::write_sampler(HeapIndex index, vk::SamplerCreateInfo const &info)
+{
+    auto const base = offset_ / stride_;
+    if (index < base || index - base >= size_)
+        fail("DescriptorHeap: sampler index is not allocated");
+    auto const offset = vk::DeviceSize{index} * stride_;
+    vk::HostAddressRangeEXT const range{
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset,
         .size = stride_,
     };
-
-    device_->raii().writeSamplerDescriptorsEXT(sampler_ci, sampler_har);
-
-    buffer_.flush(offset_ + stride_ * size_, stride_);
-    return static_cast<HeapIndex>(offset_ / stride_ + size_++);
+    device_->raii().writeSamplerDescriptorsEXT(info, range);
+    buffer_.flush(offset, stride_);
 }
 
 ResourceHeap::ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                            vk::DeviceSize buffer_capacity,
-                           vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties)
+                           vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties,
+                           vk::DeviceSize acceleration_capacity)
     : device_(&device), reserved_size_(descriptor_heap_properties.minResourceHeapReservedRange),
       image_offset_(
           align_descriptor(reserved_size_, descriptor_heap_properties.imageDescriptorSize)),
@@ -94,40 +100,61 @@ ResourceHeap::ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                                       descriptor_heap_properties.bufferDescriptorSize)),
       buffer_stride_(descriptor_heap_properties.bufferDescriptorSize),
       buffer_capacity_(buffer_capacity),
-      buffer_(device,
-              std::max(descriptor_heap_properties.resourceHeapAlignment,
-                       region_end(buffer_offset_, buffer_capacity, buffer_stride_,
-                                  descriptor_heap_properties.maxResourceHeapSize)),
-              descriptor_heap_usage, mapped_heap, descriptor_heap_properties.resourceHeapAlignment),
+      acceleration_stride_(acceleration_capacity
+                               ? device.raii_physical().getDescriptorSizeEXT(
+                                     vk::DescriptorType::eAccelerationStructureKHR)
+                               : 1),
+      acceleration_offset_(
+          align_descriptor(region_end(buffer_offset_, buffer_capacity_, buffer_stride_,
+                                      descriptor_heap_properties.maxResourceHeapSize),
+                           acceleration_stride_)),
+      acceleration_capacity_(acceleration_capacity),
+      buffer_(
+          device,
+          std::max(descriptor_heap_properties.resourceHeapAlignment,
+                   region_end(acceleration_offset_, acceleration_capacity_, acceleration_stride_,
+                              descriptor_heap_properties.maxResourceHeapSize)),
+          descriptor_heap_usage, mapped_heap, descriptor_heap_properties.resourceHeapAlignment),
       image_size_(0), buffer_size_(0)
 {
 }
 
-HeapIndex ResourceHeap::allocate_image(GpuImage const &image)
+HeapIndex ResourceHeap::allocate_image(GpuImage const &image, vk::ImageLayout layout)
 {
     if (image_size_ == image_capacity_)
         fail("DescriptorHeap: image heap is full");
+    auto const index = static_cast<HeapIndex>(image_offset_ / image_stride_ + image_size_++);
+    try {
+        write_image(index, image, layout);
+    }
+    catch (...) {
+        --image_size_;
+        throw;
+    }
+    return index;
+}
 
-    auto view_ci = image.view_create_info();
-    vk::ImageDescriptorInfoEXT image_info{
-        .pView = &view_ci,
-        .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+void ResourceHeap::write_image(HeapIndex index, GpuImage const &image, vk::ImageLayout layout)
+{
+    auto const base = image_offset_ / image_stride_;
+    if (index < base || index - base >= image_size_)
+        fail("DescriptorHeap: image index is not allocated");
+    auto view = image.view_create_info();
+    vk::ImageDescriptorInfoEXT const image_info{
+        .pView = &view,
+        .layout = layout,
     };
-    vk::ResourceDescriptorInfoEXT resource_info{
+    vk::ResourceDescriptorInfoEXT const info{
         .type = vk::DescriptorType::eSampledImage,
         .data = vk::ResourceDescriptorDataEXT{&image_info},
     };
-
-    vk::HostAddressRangeEXT sampler_har{
-        .address = static_cast<std::byte *>(buffer_.mapped_address()) + image_offset_ +
-                   image_stride_ * image_size_,
+    auto const offset = vk::DeviceSize{index} * image_stride_;
+    vk::HostAddressRangeEXT const range{
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset,
         .size = image_stride_,
     };
-
-    device_->raii().writeResourceDescriptorsEXT(resource_info, sampler_har);
-
-    buffer_.flush(image_offset_ + image_stride_ * image_size_, image_stride_);
-    return static_cast<HeapIndex>(image_offset_ / image_stride_ + image_size_++);
+    device_->raii().writeResourceDescriptorsEXT(info, range);
+    buffer_.flush(offset, image_stride_);
 }
 
 HeapIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
@@ -157,14 +184,16 @@ HeapIndex ResourceHeap::allocate_buffer(GpuBuffer const &buffer)
 }
 
 DescriptorHeap::DescriptorHeap(Device const &device, vk::DeviceSize sampler_capacity,
-                               vk::DeviceSize image_capacity, vk::DeviceSize buffer_capacity)
+                               vk::DeviceSize image_capacity, vk::DeviceSize buffer_capacity,
+                               vk::DeviceSize acceleration_capacity)
     : device_(&device), descriptor_heap_properties_(
                             device.raii_physical()
                                 .getProperties2<vk::PhysicalDeviceProperties2,
                                                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT>()
                                 .get<vk::PhysicalDeviceDescriptorHeapPropertiesEXT>()),
       sampler_heap_(device, sampler_capacity, descriptor_heap_properties_),
-      resource_heap_(device, image_capacity, buffer_capacity, descriptor_heap_properties_)
+      resource_heap_(device, image_capacity, buffer_capacity, descriptor_heap_properties_,
+                     acceleration_capacity)
 {
 }
 
@@ -228,9 +257,14 @@ void DescriptorHeap::probe() const
                resource_heap_.image_size_ * resource_heap_.image_stride_,
                resource_heap_.image_stride_);
     log_region("buffer region", resource_heap_.buffer_, resource_heap_.buffer_offset_,
-               resource_heap_.buffer_.size(),
+               resource_heap_.acceleration_offset_,
                resource_heap_.buffer_size_ * resource_heap_.buffer_stride_,
                resource_heap_.buffer_stride_);
+
+    log_region("acceleration-structure region", resource_heap_.buffer_,
+               resource_heap_.acceleration_offset_, resource_heap_.buffer_.size(),
+               resource_heap_.acceleration_size_ * resource_heap_.acceleration_stride_,
+               resource_heap_.acceleration_stride_);
 
     bool const supports_heap = supports_extension(vk::EXTDescriptorHeapExtensionName);
     bool const supports_untyped = supports_extension(vk::KHRShaderUntypedPointersExtensionName);
@@ -370,19 +404,62 @@ void DescriptorHeap::bind_to_command_buffer(CommandBuffer &command_buffer)
     });
 }
 
-std::size_t DescriptorHeap::allocate_sampler()
+HeapIndex DescriptorHeap::allocate_sampler()
 {
     return sampler_heap_.allocate_sampler();
 }
 
-std::size_t DescriptorHeap::allocate_image(GpuImage const &image)
+HeapIndex DescriptorHeap::allocate_image(GpuImage const &image, vk::ImageLayout layout)
 {
-    return resource_heap_.allocate_image(image);
+    return resource_heap_.allocate_image(image, layout);
 }
 
-std::size_t DescriptorHeap::allocate_buffer(GpuBuffer const &buffer)
+HeapIndex DescriptorHeap::allocate_buffer(GpuBuffer const &buffer)
 {
     return resource_heap_.allocate_buffer(buffer);
+}
+
+HeapIndex DescriptorHeap::allocate_sampler(vk::SamplerCreateInfo const &info)
+{
+    return sampler_heap_.allocate_sampler(info);
+}
+
+void DescriptorHeap::write_sampler(HeapIndex index, vk::SamplerCreateInfo const &info)
+{
+    sampler_heap_.write_sampler(index, info);
+}
+
+void DescriptorHeap::write_image(HeapIndex index, GpuImage const &image, vk::ImageLayout layout)
+{
+    resource_heap_.write_image(index, image, layout);
+}
+
+HeapIndex ResourceHeap::allocate_acceleration_structure(vk::DeviceAddress address)
+{
+    if (acceleration_size_ == acceleration_capacity_)
+        fail("DescriptorHeap: acceleration-structure heap is full");
+    if (!address)
+        fail("DescriptorHeap: acceleration-structure address is null");
+    // A zero size is permitted for an AS address range; no backing-buffer size is guessed.
+    vk::DeviceAddressRangeEXT const range{.address = address, .size = 0};
+    vk::ResourceDescriptorInfoEXT const info{
+        .type = vk::DescriptorType::eAccelerationStructureKHR,
+        .data = vk::ResourceDescriptorDataEXT{&range},
+    };
+    auto const offset = acceleration_offset_ + acceleration_size_ * acceleration_stride_;
+    vk::HostAddressRangeEXT const destination{
+        .address = static_cast<std::byte *>(buffer_.mapped_address()) + offset,
+        .size = acceleration_stride_,
+    };
+    device_->raii().writeResourceDescriptorsEXT(info, destination);
+    buffer_.flush(offset, acceleration_stride_);
+    ++acceleration_size_;
+    return static_cast<HeapIndex>(offset / acceleration_stride_);
+}
+
+HeapIndex DescriptorHeap::allocate_acceleration_structure(vk::DeviceAddress address)
+{
+    return resource_heap_.allocate_acceleration_structure(address);
 }
 
 } // namespace lc1

@@ -14,15 +14,17 @@ class PlayerView {
     void toggle(Character &player);
     void update(Character &player, PlayerInput const &input, MapCameraInput const &camera_input,
                 float delta_seconds);
+
     void set_aspect_ratio(float aspect_ratio) { camera_.set_aspect_ratio(aspect_ratio); }
 
     bool oblique() const { return oblique_; }
+
     scene::FpsCamera const &camera() const { return camera_; }
 
   private:
     void follow_first_person(Character const &player);
 
-    Continent const &continent_; // Borrowed; the game session owns the world.
+    Continent const *continent_; // Borrowed; the game session owns the world.
     FirstPersonCharacterController first_person_controller_;
     ThirdPersonCharacterController third_person_controller_;
     MapCameraController map_camera_;

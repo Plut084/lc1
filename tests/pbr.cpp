@@ -1,4 +1,5 @@
 #include "lc1/game/debug/pbr-showcase.hpp"
+#include "lc1/vk/render/renderer.hpp"
 
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/map-camera-controller.hpp"
@@ -48,6 +49,7 @@ struct Capture {
     vk::Extent2D extent;
     std::vector<std::uint8_t> output;
     std::vector<glm::vec4> hdr;
+
     glm::vec3 center() const { return hdr[(extent.height / 2) * extent.width + extent.width / 2]; }
 };
 
@@ -73,13 +75,14 @@ Capture capture(lc1::Device const &device, lc1::Renderer &renderer, lc1::FrameRe
         {.flags = vma::AllocationCreateFlagBits::eHostAccessRandom,
          .usage = vma::MemoryUsage::eAuto});
     camera.set_aspect_ratio(static_cast<float>(extent.width) / extent.height);
-    lc1::one_time_submit(device, [&](vk::raii::CommandBuffer const &commands) {
+    lc1::one_time_submit(device, [&](lc1::CommandBuffer &wrapped) {
+        auto const &commands = wrapped.raii();
         output.transition_layout(commands, vk::ImageLayout::eUndefined,
                                  vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::PipelineStageFlagBits2::eNone, {},
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                  vk::AccessFlagBits2::eColorAttachmentWrite);
-        renderer.record(commands, frame, {output.view(), extent}, camera, lights, draws, settings);
+        renderer.record(wrapped, frame, {&output.view(), extent}, camera, lights, draws, settings);
         output.transition_layout(commands, vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::ImageLayout::eTransferSrcOptimal,
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -164,7 +167,7 @@ void material_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
     auto render_material = [&](lc1::MaterialInfo const &info,
                                std::span<lc1::scene::Light const> active_lights,
                                lc1::OutputSettings settings = {}) {
-        auto material = renderer.make_material(info);
+        auto material = info;
         std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material}};
         return capture(device, renderer, frame, camera, active_lights, draws,
                        {.width = 65, .height = 65}, settings);
@@ -204,7 +207,7 @@ void material_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
     float const decoded = std::pow((128.0F / 255 + 0.055F) / 1.055F, 2.4F);
     near(render_material(info, {}).center().r, decoded, "sRGB texture decodes once");
     info.emissive.texture = &data;
-    rejects([&] { renderer.make_material(info); }, "linear emissive texture must be rejected");
+    rejects([&] { lc1::validate_material(info); }, "linear emissive texture must be rejected");
     info.emissive.texture = nullptr;
     info.parameters.emissive_factor = {0, 0, 0};
 
@@ -256,16 +259,66 @@ void material_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
     render_material(info, lights); // Every captured pixel is checked for finite HDR.
 
     info.parameters.roughness_factor = std::numeric_limits<float>::quiet_NaN();
-    rejects([&] { renderer.make_material(info); }, "NaN material must be rejected");
+    rejects([&] { lc1::validate_material(info); }, "NaN material must be rejected");
     info.parameters.roughness_factor = 1;
     rejects([&] { render_material(info, {}, {.exposure = 0}); },
             "invalid exposure must be rejected");
-    std::vector<lc1::GpuMaterial> materials;
-    for (std::uint32_t i = 0; i < lc1::Renderer::max_materials; ++i)
-        materials.push_back(renderer.make_material(info));
-    rejects([&] { renderer.make_material(info); }, "material pool limit must be explicit");
-    materials.pop_back();
-    materials.push_back(renderer.make_material(info));
+}
+
+void mutable_material_tests(lc1::Device const &device)
+{
+    lc1::Renderer renderer{device, {vk::Format::eR8G8B8A8Unorm}, vk::SampleCountFlagBits::e1};
+    auto first_frame = renderer.make_frame_resources(2);
+    auto second_frame = renderer.make_frame_resources(2);
+    lc1::scene::FpsCamera camera;
+    camera.set_position({0, 0, 4});
+    camera.look_at({0, 0, 0});
+    std::array const vertices{
+        lc1::Vertex{.position = {-0.5F, -0.5F, 0}, .normal = {0, 0, 1}, .uv = {0, 0}},
+        lc1::Vertex{.position = {0.5F, -0.5F, 0}, .normal = {0, 0, 1}, .uv = {1, 0}},
+        lc1::Vertex{.position = {0.5F, 0.5F, 0}, .normal = {0, 0, 1}, .uv = {1, 1}},
+        lc1::Vertex{.position = {-0.5F, 0.5F, 0}, .normal = {0, 0, 1}, .uv = {0, 1}},
+    };
+    std::array<std::uint32_t, 6> const indices{0, 1, 2, 0, 2, 3};
+    lc1::GpuMesh mesh{device, std::span<lc1::Vertex const>{vertices},
+                      std::span<std::uint32_t const>{indices}};
+    lc1::MaterialInfo left{.parameters = {.emissive_factor = {1, 0, 0}}};
+    lc1::MaterialInfo right{.parameters = {.emissive_factor = {0, 1, 0}}};
+    std::array draws{
+        lc1::DrawItem{.mesh = &mesh,
+                      .material = &left,
+                      .model = glm::translate(glm::mat4{1}, glm::vec3{-0.8F, 0, 0}),
+                      .casts_shadow = false},
+        lc1::DrawItem{.mesh = &mesh,
+                      .material = &right,
+                      .model = glm::translate(glm::mat4{1}, glm::vec3{0.8F, 0, 0}),
+                      .casts_shadow = false},
+    };
+    auto check_pair = [&](lc1::FrameResources &frame, glm::vec3 expected_left,
+                          glm::vec3 expected_right) {
+        auto const result = capture(device, renderer, frame, camera, {}, draws);
+        for (int channel = 0; channel < 3; ++channel) {
+            near(result.hdr[32 * 65 + 16][channel], expected_left[channel], "left draw material");
+            near(result.hdr[32 * 65 + 48][channel], expected_right[channel], "right draw material");
+        }
+    };
+    check_pair(first_frame, {1, 0, 0}, {0, 1, 0});
+    left.parameters.emissive_factor = {0, 0, 1};
+    check_pair(second_frame, {0, 0, 1}, {0, 1, 0});
+    check_pair(first_frame, {0, 0, 1}, {0, 1, 0});
+    draws[1].material = &left; // Shared CPU material, independent draw buffers.
+    left.parameters.emissive_factor = {1, 0.5F, 0};
+    check_pair(first_frame, {1, 0.5F, 0}, {1, 0.5F, 0});
+    std::array<std::uint8_t, 4> const cyan{0, 255, 255, 255};
+    lc1::GpuTexture texture{device, {1, 1}, cyan, lc1::TextureColorSpace::Srgb};
+    left.parameters.emissive_factor = {1, 1, 1};
+    left.emissive.texture = &texture;
+    check_pair(first_frame, {0, 1, 1}, {0, 1, 1});
+    left.emissive.texture = nullptr;
+    check_pair(first_frame, {1, 1, 1}, {1, 1, 1});
+    auto small_frame = renderer.make_frame_resources(1);
+    rejects([&] { capture(device, renderer, small_frame, camera, {}, draws); },
+            "draw capacity overflow must fail before upload");
 }
 
 void normal_map_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
@@ -301,7 +354,7 @@ void normal_map_tests(lc1::Device const &device, vk::SampleCountFlagBits samples
         .base = {.intensity = 2}, .direction = glm::normalize(glm::vec3{-0.3F, -0.4F, -1})})};
     auto render = [&](lc1::GpuMesh const &geometry, lc1::MaterialInfo const &parameters,
                       glm::mat4 transform = glm::mat4{1}) {
-        auto material = renderer.make_material(parameters);
+        auto material = parameters;
         std::array draws{
             lc1::DrawItem{.mesh = &geometry, .material = &material, .model = transform}};
         return capture(device, renderer, frame, camera, lights, draws);
@@ -319,7 +372,7 @@ void normal_map_tests(lc1::Device const &device, vk::SampleCountFlagBits samples
     info.parameters.normal_scale = 1;
     rejects([&] { render(no_tangents, info); }, "normal map requires a valid tangent mesh");
     info.normal.texture = &wrong_space;
-    rejects([&] { renderer.make_material(info); }, "normal texture must be linear");
+    rejects([&] { lc1::validate_material(info); }, "normal texture must be linear");
     info.normal.texture = &tilt;
 
     auto reference_case = [&](std::vector<lc1::Vertex> source, glm::mat4 model, float scale) {
@@ -392,8 +445,8 @@ void showcase_test(lc1::Device const &device)
           "showcase pedestal has no static collision");
     std::array<std::uint8_t, 4> const pixel{255, 255, 255, 255};
     lc1::GpuTexture white{device, {.width = 1, .height = 1}, pixel};
-    lc1::ContinentView terrain{device, renderer, white, continent};
-    lc1::demo::PbrShowcase scene{device, renderer, continent.spawn()};
+    lc1::ContinentView terrain{device, white, continent};
+    lc1::demo::PbrShowcase scene{device, continent.spawn()};
     std::vector<lc1::DrawItem> draws{terrain.draw_items().begin(), terrain.draw_items().end()};
     auto const offset = draws.size();
     draws.insert(draws.end(), scene.draws().begin(), scene.draws().end());
@@ -464,14 +517,16 @@ int main()
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
         lc1::Device device{instance, *surface.raii()};
+        mutable_material_tests(device);
         material_tests(device, vk::SampleCountFlagBits::e1);
         material_tests(device, vk::SampleCountFlagBits::e4);
         normal_map_tests(device, vk::SampleCountFlagBits::e1);
         normal_map_tests(device, vk::SampleCountFlagBits::e4);
         showcase_test(device);
         device.wait_idle();
-        std::cout << "PBR factors, BRDF, textures, HDR, tone mapping, MSAA, resize and pool "
-                     "lifetime passed\n";
+        std::cout
+            << "PBR factors, BRDF, textures, HDR, tone mapping, MSAA, resize and mutable materials "
+               "lifetime passed\n";
     }
     catch (std::exception const &error) {
         std::cerr << error.what() << '\n';

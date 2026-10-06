@@ -1,10 +1,11 @@
 #include "lc1/vk/render/ray-query-shadows.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 
 #include "draw-validation.hpp"
 #include "lc1/scene/camera.hpp"
+#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
-#include "lc1/vk/resources/shader-stages.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +13,7 @@
 namespace lc1 {
 namespace {
 
-Pipeline make_shadow_visibility_pipeline(Device const &device, vk::Format depth_format)
+GraphicsShaders make_shadow_visibility_shaders(Device const &device)
 {
     auto const required =
         vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eSampledImage;
@@ -21,19 +22,10 @@ Pipeline make_shadow_visibility_pipeline(Device const &device, vk::Format depth_
              .optimalTilingFeatures &
          required) != required)
         fail("RGBA32Uint shadow visibility attachments are unsupported");
-    auto const module = ShaderModule::load_from_file(device, "shaders/shader.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, module, "vertMain");
-    stages.append(vk::ShaderStageFlagBits::eFragment, module, "visibilityMain");
-    return Pipeline{device,
-                    stages,
-                    {vk::Format::eR32G32B32A32Uint, vk::Format::eR32G32B32A32Sfloat},
-                    depth_format,
-                    vk::SampleCountFlagBits::e1,
-                    PipelineKind::ShadowVisibility};
+    return {device, "shaders/visibility.spv", "vertMain", "visibilityMain"};
 }
 
-Pipeline make_shadow_temporal_pipeline(Device const &device)
+GraphicsShaders make_shadow_temporal_shaders(Device const &device)
 {
     auto const required =
         vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eSampledImage;
@@ -42,39 +34,16 @@ Pipeline make_shadow_temporal_pipeline(Device const &device)
              .optimalTilingFeatures &
          required) != required)
         fail("RGBA32Sfloat shadow surface attachments are unsupported");
-    auto const module = ShaderModule::load_from_file(device, "shaders/temporal-shadows.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, module, "temporalVert");
-    stages.append(vk::ShaderStageFlagBits::eFragment, module, "temporalFrag");
-    return Pipeline{device,
-                    stages,
-                    {vk::Format::eR32G32B32A32Uint, vk::Format::eR32G32B32A32Sfloat},
-                    vk::Format::eUndefined,
-                    vk::SampleCountFlagBits::e1,
-                    PipelineKind::ShadowTemporal};
-}
-
-Pipeline make_shadow_spatial_pipeline(Device const &device)
-{
-    auto const module = ShaderModule::load_from_file(device, "shaders/spatial-shadows.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, module, "spatialVert");
-    stages.append(vk::ShaderStageFlagBits::eFragment, module, "spatialFrag");
-    return Pipeline{device,
-                    stages,
-                    {vk::Format::eR32G32B32A32Uint},
-                    vk::Format::eUndefined,
-                    vk::SampleCountFlagBits::e1,
-                    PipelineKind::ShadowTemporal};
+    return {device, "shaders/temporal-shadows.spv", "temporalVert", "temporalFrag"};
 }
 
 } // namespace
 
 RayQueryShadows::RayQueryShadows(Device const &device, vk::Format depth_format)
-    : device_{device}, depth_format_{depth_format},
-      visibility_pipeline_{make_shadow_visibility_pipeline(device, depth_format)},
-      temporal_pipeline_{make_shadow_temporal_pipeline(device)},
-      spatial_pipeline_{make_shadow_spatial_pipeline(device)}
+    : device_{&device}, depth_format_{depth_format},
+      visibility_shaders_{make_shadow_visibility_shaders(device)},
+      temporal_shaders_{make_shadow_temporal_shaders(device)},
+      spatial_shaders_{device, "shaders/spatial-shadows.spv", "spatialVert", "spatialFrag"}
 {
 }
 
@@ -91,31 +60,23 @@ void RayQueryShadows::ensure_attachments(FrameResources &resources, vk::Extent2D
             depth_aspects |= vk::ImageAspectFlagBits::eStencil;
         }
         resources.ray_query.visibility.emplace(
-            device_, vk::Format::eR32G32B32A32Uint, extent, 1, vk::SampleCountFlagBits::e1,
+            *device_, vk::Format::eR32G32B32A32Uint, extent, 1, vk::SampleCountFlagBits::e1,
             vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
         resources.ray_query.surface.emplace(
-            device_, vk::Format::eR32G32B32A32Sfloat, extent, 1, vk::SampleCountFlagBits::e1,
+            *device_, vk::Format::eR32G32B32A32Sfloat, extent, 1, vk::SampleCountFlagBits::e1,
             vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
-        resources.ray_query.globals.set_image(
-            7, {.imageView = *resources.ray_query.surface->view(),
-                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal});
         resources.ray_query.depth.emplace(
-            device_, depth_format_, extent, 1, vk::SampleCountFlagBits::e1,
+            *device_, depth_format_, extent, 1, vk::SampleCountFlagBits::e1,
             vk::ImageUsageFlagBits::eDepthStencilAttachment, depth_aspects);
-        resources.ray_query.globals.set_image(
-            5, {
-                   .imageView = *resources.ray_query.visibility->view(),
-                   .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-               });
     }
 }
 
-void RayQueryShadows::record_visibility(vk::raii::CommandBuffer const &commands,
-                                        FrameResources &resources, vk::Extent2D extent,
-                                        std::span<DrawItem const> draws) const
+void RayQueryShadows::record_visibility(CommandBuffer &wrapped, FrameResources &resources,
+                                        vk::Extent2D extent, std::span<DrawItem const> draws) const
 {
+    auto const &commands = wrapped.raii();
     auto const &visibility = *resources.ray_query.visibility;
     auto const &depth = *resources.ray_query.depth;
     auto const &surface = *resources.ray_query.surface;
@@ -171,24 +132,26 @@ void RayQueryShadows::record_visibility(vk::raii::CommandBuffer const &commands,
     std::array const attachments{color_attachment, surface_attachment};
     rendering.setColorAttachments(attachments);
     commands.beginRendering(rendering);
-    commands.bindPipeline(vk::PipelineBindPoint::eGraphics, visibility_pipeline_.raii());
-    commands.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, visibility_pipeline_.layout(), 0,
-                                *resources.ray_query.globals.raii(), nullptr);
-    commands.setViewport(0, vk::Viewport{
-                                .y = static_cast<float>(extent.height),
-                                .width = static_cast<float>(extent.width),
-                                .height = -static_cast<float>(extent.height),
-                                .minDepth = 0.0F,
-                                .maxDepth = 1.0F,
-                            });
-    commands.setScissor(0, vk::Rect2D{.offset = {0, 0}, .extent = extent});
+    visibility_shaders_.bind(commands);
+    set_graphics_state(
+        commands,
+        {.vertex_input = VertexInput::Mesh, .color_attachment_count = 2, .depth_test = true});
+    commands.setViewportWithCount(vk::Viewport{
+        .y = static_cast<float>(extent.height),
+        .width = static_cast<float>(extent.width),
+        .height = -static_cast<float>(extent.height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F,
+    });
+    commands.setScissorWithCount(vk::Rect2D{.offset = {0, 0}, .extent = extent});
     for (std::size_t i = 0; i < draws.size(); ++i) {
         auto const &item = draws[i];
         commands.setFrontFace(glm::determinant(glm::mat3{item.model}) < 0.0F
                                   ? vk::FrontFace::eClockwise
                                   : vk::FrontFace::eCounterClockwise);
-        commands.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, visibility_pipeline_.layout(),
-                                    1, *resources.objects[i].raii(), nullptr);
+        auto pass = resources.pass_data;
+        pass.object = resources.object_indices[i];
+        wrapped.push_data(std::span{&pass, 1});
         item.mesh->draw(commands);
     }
     commands.endRendering();
@@ -231,8 +194,9 @@ void RayQueryShadows::update_acceleration_structure(vk::raii::CommandBuffer cons
     if (rebuild_scene) {
         if (!resources.ray_query.instances)
             resources.ray_query.instances.emplace(
-                device_,
-                std::max(std::size_t{1}, resources.objects.size()) * sizeof(instances.front()),
+                *device_,
+                std::max(std::size_t{1}, resources.object_buffers.size()) *
+                    sizeof(instances.front()),
                 vk::BufferUsageFlagBits2::eShaderDeviceAddress |
                     vk::BufferUsageFlagBits2::eAccelerationStructureBuildInputReadOnlyKHR,
                 vma::AllocationCreateFlagBits::eHostAccessSequentialWrite);
@@ -242,15 +206,24 @@ void RayQueryShadows::update_acceleration_structure(vk::raii::CommandBuffer cons
             .geometryType = vk::GeometryTypeKHR::eInstances,
         };
         geometry.geometry.instances = vk::AccelerationStructureGeometryInstancesDataKHR{
-            .data = vk::DeviceOrHostAddressConstKHR{device_.raii().getBufferAddress(
+            .data = vk::DeviceOrHostAddressConstKHR{device_->raii().getBufferAddress(
                 {.buffer = *resources.ray_query.instances->raii()})},
         };
         if (!resources.ray_query.scene) {
-            resources.ray_query.scene.emplace(device_, vk::AccelerationStructureTypeKHR::eTopLevel,
-                                              geometry,
-                                              static_cast<std::uint32_t>(resources.objects.size()));
-            resources.ray_query.globals.set_acceleration_structure(
-                4, *resources.ray_query.scene->raii());
+            resources.ray_query.scene.emplace(
+                *device_, vk::AccelerationStructureTypeKHR::eTopLevel, geometry,
+                static_cast<std::uint32_t>(resources.object_buffers.size()));
+            // Native AS heap loads return zero on the current Slang/NVIDIA path.
+            // A heap UBO preserves the address and the per-frame ownership contract.
+            auto const address = resources.ray_query.scene->address();
+            resources.ray_query.scene_address.emplace(
+                *device_, sizeof(address),
+                vk::BufferUsageFlagBits2::eUniformBuffer |
+                    vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+                vma::AllocationCreateFlagBits::eHostAccessSequentialWrite);
+            resources.ray_query.scene_address->upload(std::as_bytes(std::span{&address, 1}));
+            resources.pass_data.scene =
+                resources.descriptor_cache->buffer(*resources.ray_query.scene_address);
         }
         // Order the prior use of this slot's TLAS and scratch before rebuilding.
         vk::MemoryBarrier2 const before_build{
@@ -270,11 +243,12 @@ void RayQueryShadows::update_acceleration_structure(vk::raii::CommandBuffer cons
     }
 }
 
-void RayQueryShadows::record(vk::raii::CommandBuffer const &command_buffer,
-                             FrameResources &resources, vk::Extent2D extent,
+void RayQueryShadows::record(CommandBuffer &wrapped, FrameResources &resources, vk::Extent2D extent,
                              scene::FpsCamera const &camera, std::span<scene::Light const> lights,
                              std::span<DrawItem const> draws)
 {
+    auto const &command_buffer = wrapped.raii();
+    wrapped.bind_descriptor_heap(*resources.descriptor_heap);
     validate_draws(resources, extent, draws);
     for (std::size_t i = 0; i < draws.size(); ++i) {
         ObjectData const object_data{
@@ -288,7 +262,7 @@ void RayQueryShadows::record(vk::raii::CommandBuffer const &command_buffer,
                                     : 0U,
                                 0U, 0U},
         };
-        resources.objects[i].upload(0, std::as_bytes(std::span{&object_data, 1}));
+        resources.object_buffers[i].upload(std::as_bytes(std::span{&object_data, 1}));
     }
 
     // Safe to overwrite: the caller has waited for these resources' GPU use.
@@ -297,7 +271,7 @@ void RayQueryShadows::record(vk::raii::CommandBuffer const &command_buffer,
         .proj = camera.projection_matrix(),
         .position = glm::vec4{camera.position(), 1.0F},
     };
-    resources.ray_query.globals.upload(0, std::as_bytes(std::span{&ubo, 1}));
+    resources.camera_buffer.upload(std::as_bytes(std::span{&ubo, 1}));
 
     LightsData const lights_data{
         .count = static_cast<std::uint32_t>(std::min(lights.size(), std::size_t{max_num_lights})),
@@ -308,11 +282,15 @@ void RayQueryShadows::record(vk::raii::CommandBuffer const &command_buffer,
                 return arr;
             }(),
     };
-    resources.ray_query.globals.upload(1, std::as_bytes(std::span{&lights_data, 1}));
+    resources.lights_buffer.upload(std::as_bytes(std::span{&lights_data, 1}));
 
     update_acceleration_structure(command_buffer, resources, draws);
 
     ensure_attachments(resources, extent);
+    resources.pass_data.current_visibility =
+        resources.image_index(resources.shadow_visibility_index, *resources.ray_query.visibility);
+    resources.pass_data.current_surface =
+        resources.image_index(resources.surface_index, *resources.ray_query.surface);
     prepare_history(command_buffer, resources, extent);
     bool const same_topology =
         draws.size() == previous_draws_.size() &&
@@ -329,10 +307,10 @@ void RayQueryShadows::record(vk::raii::CommandBuffer const &command_buffer,
                            : 0U,
                        sequence_++, 32U, lights_data.count},
     };
-    resources.ray_query.globals.upload(6, std::as_bytes(std::span{&temporal, 1}));
-    record_visibility(command_buffer, resources, extent, draws);
-    resolve_history(command_buffer, resources, extent);
-    filter_history(command_buffer, resources, extent);
+    resources.temporal_buffer.upload(std::as_bytes(std::span{&temporal, 1}));
+    record_visibility(wrapped, resources, extent, draws);
+    resolve_history(wrapped, resources, extent);
+    filter_history(wrapped, resources, extent);
     history_write_index_ ^= 1U;
     history_valid_ = true;
     previous_view_projection_ = ubo.proj * ubo.view;

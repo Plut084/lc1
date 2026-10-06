@@ -45,17 +45,18 @@ std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &rende
         {.flags = vma::AllocationCreateFlagBits::eHostAccessRandom,
          .usage = vma::MemoryUsage::eAuto});
     camera.set_aspect_ratio(static_cast<float>(extent.width) / extent.height);
-    lc1::one_time_submit(device, [&](vk::raii::CommandBuffer const &commands) {
+    lc1::one_time_submit(device, [&](lc1::CommandBuffer &wrapped) {
+        auto const &commands = wrapped.raii();
         output.transition_layout(commands, vk::ImageLayout::eUndefined,
                                  vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::PipelineStageFlagBits2::eNone, {},
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                  vk::AccessFlagBits2::eColorAttachmentWrite);
-        lc1::RenderTarget const target{output.view(), extent};
+        lc1::RenderTarget const target{&output.view(), extent};
         if (view == View::Lit)
-            renderer.record(commands, frame, target, camera, lights, draws);
+            renderer.record(wrapped, frame, target, camera, lights, draws);
         else
-            renderer.record_shadow_map_preview(commands, frame, target, lights, draws,
+            renderer.record_shadow_map_preview(wrapped, frame, target, lights, draws,
                                                {.center = {0, 0, 0}, .half_extent = 4.0F});
         output.transition_layout(commands, vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::ImageLayout::eTransferSrcOptimal,
@@ -86,7 +87,9 @@ void exercise(lc1::Device const &device)
     lc1::Renderer renderer{device, {vk::Format::eR8G8B8A8Unorm}, samples};
     lc1::GpuTexture texture{device,
                             lc1::Image::load_from_file("assets/textures/prototype-white.png")};
-    auto material = renderer.make_material(texture);
+    auto material =
+        lc1::MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
+                          .base_color = {.texture = &texture}};
     std::array const vertices{
         lc1::Vertex{.position = {-2, 0, -2}, .uv = {0, 0}},
         lc1::Vertex{.position = {-2, 0, 2}, .uv = {0, 1}},
@@ -151,6 +154,35 @@ void exercise(lc1::Device const &device)
     draws[0].model = glm::scale(glm::mat4{1}, glm::vec3{-1, 1, 1});
     render(device, renderer, normal_frame, camera, lights, draws, View::ShadowMapDepth);
     render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
+
+    // An elevated patch casts a visible shadow on the ground. Toggling only its
+    // caster membership must change pixels, catching a missing/incorrect TLAS lookup.
+    auto occlusion_frame = renderer.make_frame_resources(2);
+    std::array occlusion_draws{
+        lc1::DrawItem{.mesh = &mesh, .material = &material},
+        lc1::DrawItem{
+            .mesh = &mesh,
+            .material = &material,
+            .model = glm::scale(glm::translate(glm::mat4{1}, glm::vec3{0, 1, 0}), glm::vec3{0.3F}),
+            .casts_shadow = false},
+    };
+    auto const unshadowed =
+        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit);
+    occlusion_draws[1].casts_shadow = true;
+    auto const shadowed =
+        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit);
+    std::size_t darker_pixels = 0;
+    for (std::size_t i = 0; i < shadowed.size(); i += 4) {
+        int const before = unshadowed[i] + unshadowed[i + 1] + unshadowed[i + 2];
+        int const after = shadowed[i] + shadowed[i + 1] + shadowed[i + 2];
+        if (before > after + 30)
+            ++darker_pixels;
+    }
+    check(darker_pixels > 10, "TLAS occluder did not produce a visible ray-query shadow");
+    occlusion_draws[1].casts_shadow = false;
+    check(render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit) ==
+              unshadowed,
+          "removing the TLAS occluder did not restore the unshadowed image");
     device.wait_idle();
 }
 

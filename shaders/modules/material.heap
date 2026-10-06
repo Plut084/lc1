@@ -1,0 +1,24 @@
+struct Material {
+    float4 base_color_factor;
+    float metallic_factor;
+    float roughtness_factor;
+
+    Texture2D base_color_texture;
+    SamplerState base_color_texture_sampler;
+    Texture2D metallic_roughness_texture;
+    SamplerState metallic_roughness_texture_sampler;
+
+    float normal_scale;
+    Texture2D normal_texture;
+    SamplerState normal_texture_sampler;
+
+    float occlusion_strength;
+    Texture2D occlusion_texture;
+    SamplerState occlusion_texture_sampler;
+
+    float3 emissive_factor;
+    Texture2D emissive_texture;
+    SamplerState emissive_texture_sampler;
+
+    uint flags;
+};

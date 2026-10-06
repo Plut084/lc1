@@ -1,10 +1,11 @@
 #include "lc1/vk/render/shadow-map-preview.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 
 #include "draw-validation.hpp"
+#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
 #include "lc1/vk/render/render-data.hpp"
-#include "lc1/vk/resources/shader-stages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,7 @@ struct ShadowData {
     glm::mat4 view_projection{1.0F};
     glm::uvec4 light_index{10U, 0U, 0U, 0U}; // x selects the shadowed light; 10 disables it.
 };
+
 static_assert(sizeof(ShadowData) == 80 && offsetof(ShadowData, light_index) == 64);
 
 constexpr std::uint32_t shadow_resolution = 2048;
@@ -29,28 +31,6 @@ vk::Format shadow_format(Device const &device)
             required)
             return format;
     fail("no sampled depth-attachment format for shadow mapping");
-}
-
-Pipeline make_shadow_pipeline(Device const &device, vk::Format format)
-{
-    auto const module = ShaderModule::load_from_file(device, "shaders/shadow.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, module, "shadowMain");
-    return Pipeline{device, stages, {}, format, vk::SampleCountFlagBits::e1, PipelineKind::Shadow};
-}
-
-Pipeline make_shadow_preview_pipeline(Device const &device, vk::Format output_format)
-{
-    auto const module = ShaderModule::load_from_file(device, "shaders/shadow-preview.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, module, "previewVert");
-    stages.append(vk::ShaderStageFlagBits::eFragment, module, "previewFrag");
-    return Pipeline{device,
-                    stages,
-                    {output_format},
-                    vk::Format::eUndefined,
-                    vk::SampleCountFlagBits::e1,
-                    PipelineKind::ShadowPreview};
 }
 
 ShadowData shadow_data(std::span<scene::Light const> lights, ShadowMapRegion const &region)
@@ -84,11 +64,11 @@ ShadowData shadow_data(std::span<scene::Light const> lights, ShadowMapRegion con
 
 } // namespace
 
-ShadowMapPreview::ShadowMapPreview(Device const &device, vk::Format output_format)
-    : device_{device}, depth_format_{shadow_format(device)},
-      depth_pipeline_{make_shadow_pipeline(device, depth_format_)},
-      preview_pipeline_{make_shadow_preview_pipeline(device, output_format)},
-      sampler_{device.raii().createSampler(vk::SamplerCreateInfo{
+ShadowMapPreview::ShadowMapPreview(Device const &device)
+    : device_{&device}, depth_format_{shadow_format(device)},
+      depth_shaders_{device, "shaders/shadow.spv", "shadowMain", ""},
+      preview_shaders_{device, "shaders/shadow-preview.spv", "previewVert", "previewFrag"},
+      sampler_{
           .magFilter = vk::Filter::eNearest,
           .minFilter = vk::Filter::eNearest,
           .mipmapMode = vk::SamplerMipmapMode::eNearest,
@@ -97,7 +77,7 @@ ShadowMapPreview::ShadowMapPreview(Device const &device, vk::Format output_forma
           .addressModeW = vk::SamplerAddressMode::eClampToBorder,
           .maxLod = 0.0F,
           .borderColor = vk::BorderColor::eFloatOpaqueWhite,
-      })}
+      }
 {
 }
 
@@ -105,7 +85,7 @@ void ShadowMapPreview::ensure_resources(FrameResources &resources) const
 {
     if (resources.shadow_map)
         return;
-    GpuImage depth{device_,
+    GpuImage depth{*device_,
                    depth_format_,
                    {shadow_resolution, shadow_resolution},
                    1,
@@ -113,20 +93,25 @@ void ShadowMapPreview::ensure_resources(FrameResources &resources) const
                    vk::ImageUsageFlagBits::eDepthStencilAttachment |
                        vk::ImageUsageFlagBits::eSampled,
                    vk::ImageAspectFlagBits::eDepth};
-    DescriptorSet globals{device_, resources.descriptor_pool, depth_pipeline_.frame_set_layout(),
-                          Pipeline::shadow_map_frame_bindings};
-    globals.add_uniform(2, sizeof(ShadowData));
-    globals.set_image(3, {.sampler = *sampler_,
-                          .imageView = *depth.view(),
-                          .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal});
-    resources.shadow_map.emplace(ShadowMapFrameResources{std::move(depth), std::move(globals)});
+    GpuBuffer uniform{*device_, sizeof(ShadowData),
+                      vk::BufferUsageFlagBits2::eUniformBuffer |
+                          vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+                      vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
+    auto &heap = *resources.descriptor_heap;
+    auto const uniform_index = resources.descriptor_cache->buffer(uniform);
+    auto const image_index =
+        heap.allocate_image(depth, vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    auto const sampler_index = heap.allocate_sampler(sampler_);
+    resources.shadow_map.emplace(ShadowMapFrameResources{
+        std::move(depth), std::move(uniform), uniform_index, image_index, sampler_index});
 }
 
-void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
-                              FrameResources &resources, RenderTarget const &target,
-                              std::span<scene::Light const> lights, std::span<DrawItem const> draws,
-                              ShadowMapRegion const &region) const
+void ShadowMapPreview::record(CommandBuffer &wrapped, FrameResources &resources,
+                              RenderTarget const &target, std::span<scene::Light const> lights,
+                              std::span<DrawItem const> draws, ShadowMapRegion const &region) const
 {
+    auto const &command_buffer = wrapped.raii();
+    wrapped.bind_descriptor_heap(*resources.descriptor_heap);
     validate_draws(resources, target.extent, draws);
     if (!std::isfinite(region.center.x) || !std::isfinite(region.center.y) ||
         !std::isfinite(region.center.z) || !std::isfinite(region.half_extent) ||
@@ -137,10 +122,10 @@ void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
         // The depth shader only consumes model; the remaining fields are unused.
         ObjectData const object{
             .model = draws[i].model, .normal_transform = glm::mat4{1}, .shadow_identity = {}};
-        resources.objects[i].upload(0, std::as_bytes(std::span{&object, 1}));
+        resources.object_buffers[i].upload(std::as_bytes(std::span{&object, 1}));
     }
     auto const shadow = shadow_data(lights, region);
-    resources.shadow_map->globals.upload(2, std::as_bytes(std::span{&shadow, 1}));
+    resources.shadow_map->uniform.upload(std::as_bytes(std::span{&shadow, 1}));
 
     constexpr auto shadow_stages = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                                    vk::PipelineStageFlagBits2::eLateFragmentTests;
@@ -166,17 +151,20 @@ void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
         .pDepthAttachment = &shadow_attachment,
     };
     command_buffer.beginRendering(shadow_rendering);
-    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, depth_pipeline_.raii());
-    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, depth_pipeline_.layout(), 0,
-                                      *resources.shadow_map->globals.raii(), nullptr);
-    command_buffer.setViewport(0, vk::Viewport{.x = 0,
-                                               .y = static_cast<float>(shadow_resolution),
-                                               .width = static_cast<float>(shadow_resolution),
-                                               .height = -static_cast<float>(shadow_resolution),
-                                               .minDepth = 0,
-                                               .maxDepth = 1});
-    command_buffer.setScissor(
-        0, vk::Rect2D{.offset = {0, 0}, .extent = {shadow_resolution, shadow_resolution}});
+    depth_shaders_.bind(command_buffer);
+    set_graphics_state(command_buffer, {.vertex_input = VertexInput::Position,
+                                        .color_attachment_count = 0,
+                                        .depth_test = true,
+                                        .depth_bias = true});
+    command_buffer.setViewportWithCount(
+        vk::Viewport{.x = 0,
+                     .y = static_cast<float>(shadow_resolution),
+                     .width = static_cast<float>(shadow_resolution),
+                     .height = -static_cast<float>(shadow_resolution),
+                     .minDepth = 0,
+                     .maxDepth = 1});
+    command_buffer.setScissorWithCount(
+        vk::Rect2D{.offset = {0, 0}, .extent = {shadow_resolution, shadow_resolution}});
     if (shadow.light_index.x < max_num_lights) {
         for (std::size_t i = 0; i < draws.size(); ++i) {
             auto const &item = draws[i];
@@ -185,9 +173,10 @@ void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
             command_buffer.setFrontFace(glm::determinant(glm::mat3{item.model}) < 0.0F
                                             ? vk::FrontFace::eClockwise
                                             : vk::FrontFace::eCounterClockwise);
-            command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                              depth_pipeline_.layout(), 1,
-                                              *resources.objects[i].raii(), nullptr);
+            auto pass = resources.pass_data;
+            pass.object = resources.object_indices[i];
+            pass.shadow = resources.shadow_map->uniform_index;
+            wrapped.push_data(std::span{&pass, 1});
             item.mesh->draw(command_buffer);
         }
     }
@@ -201,7 +190,7 @@ void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
     // Preview goes directly to the single-sampled output: it needs neither the
     // main pass's depth/MSAA attachments nor any ray-query resources.
     vk::RenderingAttachmentInfo const color{
-        .imageView = *target.view,
+        .imageView = **target.view,
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .loadOp = vk::AttachmentLoadOp::eDontCare,
         .storeOp = vk::AttachmentStoreOp::eStore,
@@ -209,15 +198,19 @@ void ShadowMapPreview::record(vk::raii::CommandBuffer const &command_buffer,
     command_buffer.beginRendering(
         vk::RenderingInfo{.renderArea = {.extent = target.extent}, .layerCount = 1}
             .setColorAttachments(color));
-    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, preview_pipeline_.raii());
-    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, preview_pipeline_.layout(),
-                                      0, *resources.shadow_map->globals.raii(), nullptr);
-    command_buffer.setViewport(0, vk::Viewport{.y = static_cast<float>(target.extent.height),
-                                               .width = static_cast<float>(target.extent.width),
-                                               .height = -static_cast<float>(target.extent.height),
-                                               .minDepth = 0.0F,
-                                               .maxDepth = 1.0F});
-    command_buffer.setScissor(0, vk::Rect2D{.extent = target.extent});
+    preview_shaders_.bind(command_buffer);
+    set_graphics_state(command_buffer);
+    command_buffer.setViewportWithCount(
+        vk::Viewport{.y = static_cast<float>(target.extent.height),
+                     .width = static_cast<float>(target.extent.width),
+                     .height = -static_cast<float>(target.extent.height),
+                     .minDepth = 0.0F,
+                     .maxDepth = 1.0F});
+    command_buffer.setScissorWithCount(vk::Rect2D{.extent = target.extent});
+    auto pass = resources.pass_data;
+    pass.shadow_image = resources.shadow_map->image_index;
+    pass.sampler = resources.shadow_map->sampler_index;
+    wrapped.push_data(std::span{&pass, 1});
     command_buffer.draw(3, 1, 0, 0);
     command_buffer.endRendering();
 }

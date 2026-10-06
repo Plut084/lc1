@@ -1,11 +1,25 @@
 import lights;
-import ray_shadows;
 import shadow_values;
 import modules.pbr;
+#include "generated/modules/material.slang"
 import modules.normal;
 
-// SamplerDescriptorHeap
-// ResourceDescriptorHeap
+struct PushData {
+    uint frame_buffer_index;
+};
+
+[[vk::push_constant]]
+PushData push_data;
+
+struct FrameBufferObject {
+    float4 clear_color; // TODO: For test only.
+
+    uint camera_index; // view projection
+    uint lights_index;
+    uint object_data_index; // model
+    uint material_index;
+    uint shadow_visibility_index;
+};
 
 struct VSInput {
     float3 position;
@@ -26,37 +40,11 @@ struct LightsData {
     Light lights[10];
 };
 
-[[vk::binding(0, 0)]]
-ConstantBuffer<Camera> camera;
-[[vk::binding(1, 0)]]
-ConstantBuffer<LightsData> lights;
-
 struct ObjectData {
     float4x4 model;
     float4x4 normal_transform;
     uint4 shadow_identity;
 };
-
-[[vk::binding(0, 1)]]
-ConstantBuffer<ObjectData> object_data;
-
-[[vk::binding(0, 2)]]
-Sampler2D base_color_texture;
-
-struct MaterialData {
-    float4 base_color_factor;
-    float4 emissive_factor;
-    float4 surface;
-    uint4 flags;
-};
-[[vk::binding(1, 2)]] ConstantBuffer<MaterialData> material;
-[[vk::binding(2, 2)]] Sampler2D metallic_roughness_texture;
-[[vk::binding(3, 2)]] Sampler2D normal_texture;
-[[vk::binding(4, 2)]] Sampler2D occlusion_texture;
-[[vk::binding(5, 2)]] Sampler2D emissive_texture;
-
-[[vk::binding(5, 0)]]
-Texture2D<uint4> shadow_visibility_values;
 
 struct VSOutput {
     float4 pos : SV_Position;
@@ -70,80 +58,87 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertMain(VSInput input)
 {
+    ConstantBuffer<FrameBufferObject> frame_buffer = ResourceDescriptorHeap[push_data.frame_buffer_index];
+    ConstantBuffer<Camera> camera = ResourceDescriptorHeap[frame_buffer.camera_index];
+    ConstantBuffer<ObjectData> object_data = ResourceDescriptorHeap[frame_buffer.object_data_index];
     VSOutput output;
-    float4 world_position = mul(object_data.model, float4(input.position, 1.0));
-    output.pos = mul(camera.proj, mul(camera.view, world_position));
+    // Read GLM's stored columns explicitly. Slang 2026.18's native heap path
+    // misreads aggregate matrix members passed directly to mul; see docs/lighting.md.
+    float4 world_position = object_data.model[0] * input.position.x +
+        object_data.model[1] * input.position.y + object_data.model[2] * input.position.z + object_data.model[3];
+    float4 view_position = camera.view[0] * world_position.x + camera.view[1] * world_position.y + camera.view[2] * world_position.z + camera.view[3] * world_position.w;
+    output.pos = camera.proj[0] * view_position.x + camera.proj[1] * view_position.y + camera.proj[2] * view_position.z + camera.proj[3] * view_position.w;
     output.world_position = world_position.xyz;
     output.uv = input.uv;
     output.color = input.color;
-    output.world_normal = mul((float3x3)object_data.normal_transform, input.normal);
-    float handedness = determinant((float3x3)object_data.model) < 0.0 ? -1.0 : 1.0;
-    output.world_tangent = float4(mul((float3x3)object_data.model, input.tangent.xyz),
-                                  input.tangent.w * handedness);
+    output.world_normal = (object_data.normal_transform[0].xyz * input.normal.x + object_data.normal_transform[1].xyz * input.normal.y + object_data.normal_transform[2].xyz * input.normal.z);
+    float handedness = dot(object_data.model[0].xyz, cross(object_data.model[1].xyz, object_data.model[2].xyz)) < 0.0 ? -1.0 : 1.0;
+    output.world_tangent =
+        float4((object_data.model[0].xyz * input.tangent.x + object_data.model[1].xyz * input.tangent.y + object_data.model[2].xyz * input.tangent.z), input.tangent.w * handedness);
     return output;
 }
 
 [shader("fragment")]
 [earlydepthstencil]
-float4 fragMain(VSOutput input) : SV_TARGET
+float4 fragMain(VSOutput input, uint sample_index : SV_SampleIndex) : SV_TARGET
 {
+    ConstantBuffer<FrameBufferObject> frame_buffer = ResourceDescriptorHeap[push_data.frame_buffer_index];
+    ConstantBuffer<Camera> camera = ResourceDescriptorHeap[frame_buffer.camera_index];
+    ConstantBuffer<LightsData> lights = ResourceDescriptorHeap[frame_buffer.lights_index];
+    // Shader objects have no sampleShadingEnable state. A static SampleId read
+    // enables full sample shading; evaluate UVs at that sample for texture detail.
+    input.uv = EvaluateAttributeAtSample(input.uv, sample_index);
+    Material material = load_material(frame_buffer.material_index);
+    Texture2D<uint4> shadow_visibility_values = ResourceDescriptorHeap[frame_buffer.shadow_visibility_index];
     uint4 visibility = shadow_visibility_values.Load(int3(int2(input.pos.xy), 0));
-    float3 base_color = saturate(base_color_texture.Sample(input.uv).rgb *
-                                material.base_color_factor.rgb * input.color);
-    float4 mr = metallic_roughness_texture.Sample(input.uv);
-    float metallic = saturate(material.surface.x * mr.b);
-    float roughness = saturate(material.surface.y * mr.g);
+    float3 base_color = saturate(
+        material.base_color_texture.Sample(material.base_color_texture_sampler, input.uv).rgb *
+        material.base_color_factor.rgb * input.color);
+    float4 mr = material.metallic_roughness_texture.Sample(
+        material.metallic_roughness_texture_sampler, input.uv);
+    float metallic = saturate(material.metallic_factor * mr.b);
+    float roughness = saturate(material.roughtness_factor * mr.g);
     float3 surface_normal =
         input.world_normal * rsqrt(max(dot(input.world_normal, input.world_normal), 1e-8));
     float3 normal = surface_normal;
     // Missing maps and zero scale use the unperturbed mesh normal, with no sample.
-    if ((material.flags.x & 1u) != 0 && material.surface.z > 0.0)
-        normal = mapped_normal(surface_normal, input.world_tangent,
-                                normal_texture.Sample(input.uv).rgb, material.surface.z);
+    if ((material.flags & 1u) != 0 && material.normal_scale > 0.0)
+        normal = mapped_normal(
+            surface_normal, input.world_tangent,
+            material.normal_texture.Sample(material.normal_texture_sampler, input.uv).rgb,
+            material.normal_scale);
     float3 to_view = camera.position.xyz - input.world_position;
     float3 view_direction = to_view * rsqrt(max(dot(to_view, to_view), 1e-8));
     // Direct lighting until IBL is added. Emission is independent of shadows.
-    float3 color = emissive_texture.Sample(input.uv).rgb * material.emissive_factor.rgb;
+    float3 color =
+        material.emissive_texture.Sample(material.emissive_texture_sampler, input.uv).rgb *
+        material.emissive_factor;
     for (uint i = 0; i < min(lights.count, 10u); ++i) {
-        LightSample sample = sample_light(lights.lights[i], input.world_position);
+        // Read fields before passing the light by value (same heap aggregate constraint).
+        Light light;
+        light.position = lights.lights[i].position;
+        light.type = lights.lights[i].type;
+        light.direction = lights.lights[i].direction;
+        light.radius = lights.lights[i].radius;
+        light.color = lights.lights[i].color;
+        light.intensity = lights.lights[i].intensity;
+        light.spot_angles = lights.lights[i].spot_angles;
+        light.shadow_sample_count = lights.lights[i].shadow_sample_count;
+        light.padding = 0;
+        LightSample sample = sample_light(light, input.world_position);
         float n_dot_l = saturate(dot(normal, sample.direction));
         // Visibility uses the unperturbed normal. Do not let a normal map light
         // the back of that surface using a skipped/default-white shadow value.
         if (!any(sample.radiance > 0.0) || n_dot_l <= 0.0 ||
-            dot(surface_normal, sample.direction) <= 0.0 || dot(surface_normal, view_direction) <= 0.0)
+            dot(surface_normal, sample.direction) <= 0.0 ||
+            dot(surface_normal, view_direction) <= 0.0)
             continue;
 
-        float3 brdf = evaluate_pbr(base_color, metallic, roughness, normal, view_direction,
-                                   sample.direction);
+        float3 brdf =
+            evaluate_pbr(base_color, metallic, roughness, normal, view_direction, sample.direction);
         color += unpack_visibility(visibility, i) * sample.radiance * brdf * n_dot_l;
     }
 
     // Opaque output; preserve HDR up to the largest finite RGBA16F value.
     return float4(min(color, float3(65504.0)), 1.0);
-}
-
-// Single-sampled raster pass: cache visibility at pixel frequency, 8 bits per light.
-// The MSAA material pass reuses these values instead of tracing per sample.
-[shader("fragment")]
-[earlydepthstencil]
-ShadowOutput visibilityMain(VSOutput input)
-{
-    float3 normal =
-        input.world_normal * rsqrt(max(dot(input.world_normal, input.world_normal), 1e-8));
-    uint4 visibility = uint4(0xffffffffu);
-    for (uint i = 0; i < min(lights.count, 10u); ++i) {
-        LightSample sample = sample_light(lights.lights[i], input.world_position);
-        if (!any(sample.radiance > 0.0) || dot(normal, sample.direction) <= 0.0)
-            continue;
-        float value =
-            shadow_visibility(input.world_position, normal, lights.lights[i], sample.direction,
-                              uint2(input.pos.xy), i, temporal.frame_info.y);
-        pack_visibility(visibility, i, value);
-    }
-    visibility.z = (visibility.z & 65535u) | (object_data.shadow_identity.x << 16);
-    visibility.w = object_data.shadow_identity.y;
-    ShadowOutput output;
-    output.visibility = visibility;
-    output.surface = float4(input.world_position, pack_normal(normal));
-    return output;
 }

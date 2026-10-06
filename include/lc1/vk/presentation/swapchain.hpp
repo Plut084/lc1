@@ -53,14 +53,16 @@ class Swapchain {
     void recreate(SwapchainConfig const &config, vk::Extent2D extent);
 
     vk::Format format() const { return format_; }
+
     vk::Extent2D extent() const { return extent_; }
+
     std::vector<SwapchainImage> const &images() const { return images_; }
 
     // For FrameLoop: acquireNextImage is a SwapchainKHR method.
     vk::raii::SwapchainKHR const &raii() const { return swapchain_; }
 
   private:
-    Device const &device_;
+    Device const *device_; // Non-owning, non-null; the device outlives this object.
     // Non-owning: Surface must outlive this swapchain, including recreation.
     Surface const *surface_;
 

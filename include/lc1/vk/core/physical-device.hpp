@@ -18,7 +18,7 @@ using FeatureChain = vk::StructureChain<
     vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
     vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
     vk::PhysicalDeviceRayQueryFeaturesKHR, vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
-    vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>;
+    vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT>;
 
 namespace detail {
 

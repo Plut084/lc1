@@ -26,9 +26,26 @@ class CommandBuffer {
         }
     }
 
+    template <typename T> void push_data(std::span<T> data);
+
   private:
     vk::raii::CommandBuffer handle_;
     DescriptorHeap *bound_heap_ = nullptr;
 };
+
+template <typename T> inline void CommandBuffer::push_data(std::span<T> data)
+{
+    if (!bound_heap_)
+        fail("CommandBuffer::push_data: no heap bound to this command buffer");
+
+    if (data.empty() || data.size_bytes() % 4 != 0 ||
+        data.size_bytes() > bound_heap_->descriptor_heap_properties_.maxPushDataSize)
+        fail("CommandBuffer::push_data: size must be nonzero, a multiple of 4, and within "
+             "maxPushDataSize");
+    vk::PushDataInfoEXT push_data_info{
+        .data = {.address = data.data(), .size = data.size_bytes()},
+    };
+    handle_.pushDataEXT(push_data_info);
+}
 
 } // namespace lc1

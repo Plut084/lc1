@@ -22,16 +22,35 @@ color = emissive + Σ visibility * radiance * (diffuse + specular) * NdotL
 选择支持的采样数。当前没有 IBL，也没有固定环境补光；无灯且无发光的表面为黑色。
 
 `scene::PbrParameters` 保存线性参数，`scene::PbrMaterial` 另带非拥有的 CPU 图像引用。
-`Renderer::make_material(MaterialInfo)` 接收参数和已上传的 GPU 纹理，在 set 2 中绑定独立的 64 字节
-材质 UBO 及五个纹理槽；`Material` 持有 UBO/set，创建后不可变，可跨帧、跨实例共享。
-参数使用 glTF 默认值；旧 `make_material(texture)` 入口显式使用 metallic = 0、roughness = 0.8。
-材质池允许最多 64 个同时存活的材质，移动对象不占额外配额，释放后可复用。
+游戏持有 `MaterialInfo`（参数及 GPU 纹理/采样器借用），`DrawItem::material` 指向它。
+多个物体可共享并修改同一份 CPU 材质，不再创建 `GpuMaterial`，也没有独立材质 descriptor pool
+或 64 个存活材质的限制。参数使用 glTF 默认值；程序生成的普通表面显式设 metallic = 0、
+roughness = 0.8。
+
+`Renderer::record()` 在验证输入后，将材质参数及 heap 索引复制到当前 `FrameResources`。
+每个 draw 各有 object、material、frame UBO，后者保存该 draw 的资源索引；不会在录制下一次
+draw 时覆盖前一次 draw 的数据。camera/lights 在同一帧槽内共享。CPU 参数只需活到 record
+返回，mesh、纹理和采样器则必须活到对应 GPU 工作完成。
+
+主材质通道使用原生 descriptor heap。每个帧槽持有自己的 heap；buffer 描述符在创建时分配，
+纹理/采样器槽位首次使用时分配，后续在等待该槽 fence 后原位写入。因此改变参数、换纹理或
+resize 不持续消耗新槽位，也不修改其他在途帧的描述符。buffer 的重复查询通过每个帧槽自己的 `DescriptorHeapCache`；会原位重写的 image 槽位
+直接持有索引，不与缓存的资源身份混用。帧容量仍由 `make_frame_resources` 指定，
+超限在上传前明确失败，不自动扩容。
+
+阴影、时间累积、空间滤波、tone mapping 和深度预览也都使用 native descriptor heap。
+`PassData` 将各通道所需的资源索引作为 push data 记录，每个 draw 的 object 索引独立。
+相机、灯光与物体 buffer 在 ray-query 准备阶段上传一次，随后主材质通道复用；不能在提交前
+清除阴影接收面 ID 或覆盖其他通道要读取的数据。各通道使用 shader object，不创建 graphics
+pipeline、pipeline layout 或 descriptor set layout/pool。ImGui 按显式约定继续使用官方 Vulkan
+后端，其内部 pipeline 和 descriptor set 是例外。主片元 shader 通过实际读取 `SV_SampleIndex`
+并在该采样点插值 UV 保持完整 sample shading；实现及验证见 [shader object](shader-objects.md)。
 
 已采样底色、metallic-roughness 和 emissive；MR 的 G 是粗糙度，B 是金属度，分别乘 factor。
-底色和 emissive 使用 `TextureColorSpace::Srgb`，MR 使用 `Linear`，错误的色彩空间在创建材质时报错。
+底色和 emissive 使用 `TextureColorSpace::Srgb`，MR 使用 `Linear`，错误的色彩空间在绘制前验证时报错。
 缺少上述贴图时绑定白色替代纹理，因此常量 factor 同样有效。
 normal 贴图已接入，必须使用 `TextureColorSpace::Linear`；`normal_scale` 缩放切线空间 XY 分量。
-材质 UBO 的 `flags.x` bit 0 表示贴图存在。没有贴图或强度为零时直接用网格法线，不采样默认法线纹理。
+材质 UBO 的 `flags` bit 0 表示贴图存在。没有贴图或强度为零时直接用网格法线，不采样默认法线纹理。
 occlusion 仍待 IBL 接入，非空贴图目前明确报未支持。
 所有材质目前按不透明单面绘制，alpha 不开启混合；参与投影的几何仍视为不透明遮挡物。
 
@@ -117,7 +136,7 @@ cd build/linux-x86_64/Debug
 ```
 
 测试实际 shader 的 BRDF 参考值、默认纹理、MR 通道、色彩空间、发光、粗糙度边界、各类光源、
-HDR 读回、曝光、sRGB 输出、MSAA 后色调映射、resize 和材质池复用。
+HDR 读回、曝光、sRGB 输出、MSAA 后色调映射、resize、共享 CPU 材质修改、逐 draw 数据隔离及纹理切换。
 还检查展区中央道路畅通、展台碰撞、动画矩阵更新、主场景斜视与地面视角。
 CPU `tangent_space` 测试覆盖平面 UV、旋转 UV、镜像接缝和退化输入；模型测试覆盖烘焙的切线变换。
 GPU 测试另检查默认法线、强度零、缺失切线、错误色彩空间、镜像 UV、镜像／非均匀实例变换，
@@ -132,3 +151,36 @@ GPU 测试另检查默认法线、强度零、缺失切线、错误色彩空间�
 2026-10-03 完成法线贴图与展示外观修正：Linux Debug/Release 各 4 项 CPU CTest 通过，
 PBR 数值、镜像/缩放法线、阴影投影开关及既有阴影 GPU 回归通过，验证与同步验证无报错。
 Windows Release 交叉构建通过；主程序使用细节法线和无文字投影的展区运行并正常退出。
+
+## Native heap 的字段读取验证
+
+本机 Slang 2026.18 / NVIDIA 上，直接将 heap `ConstantBuffer` 中的矩阵或 `Light`
+聚合成员传给计算函数得到错误结果；相同字段的向量/标量读取可正常工作。
+主 shader 因而显式读取 GLM 存储的矩阵列，按列求线性组合，灯光逐字段读取后传给
+`sample_light`。镜像手性使用三列的混合积。这里记录的是该编译器/驱动组合的复现结果，
+没有据此断言 C++/Slang 语言禁止聚合访问或确定是某一方的缺陷。
+
+PBR GPU 测试覆盖投影、物体平移、逆转置法线、镜像/非均匀缩放、镜像 UV，以及不同光源。
+保留这些数值检查；升级 Slang 或改变 heap 读取写法时需重新运行，不能只检查编译成功。
+
+本轮 Linux Debug 验证：完整应用构建、`lc1_pbr_tests`、`lc1_shadow_path_tests`、
+`lc1_temporal_shadow_tests` 和 `lc1_descriptor_heap_tests` 通过；GPU validation 与同步验证
+无警告或错误。日志位于构建目录 `artifacts/material-*.log`。CPU CTest 为 5/6：
+未改动的地图缩放上限为 6144，而 `continent` 测试仍预期 96；此项未在材质迁移中修改。
+Windows 和其他 GPU 尚未验证。
+
+## 全通道 heap 迁移的验证边界
+
+本轮新增 `descriptor_heap_shader_interfaces` CPU 检查，读取七个生产 shader 的 SPIR-V，
+要求 native heap 扩展且没有 `Binding` / `DescriptorSet` 装饰。完整项目和 GPU 测试目标可编译。
+窗口 GPU 测试因沙箱无法连接 Wayland 未执行；用户已授权提升权限，但自动审批服务持续返回
+404（审批模型不受支持），没有完成审批。沙箱内独立 heap 测试也在创建实例时返回
+`ErrorIncompatibleDriver`。前一节的 GPU 通过结果属于上一次材质迁移，不代表本轮新增的
+TLAS 描述符、时间累积、深度预览 heap 路径已在 GPU 上验证。
+
+本轮 CPU CTest 为 6/7（包含新增的 shader 接口检查），剩余失败仍是既有地图缩放范围断言。
+
+2026-10-06 修复 `shaderInt64` 未启用及直接 AS heap 读取导致的设备丢失后，Linux Debug
+的 PBR、阴影路径、时间/空间阴影 GPU 测试均通过，主程序启动、resize 和正常退出通过，
+validation 与 synchronization validation 无消息。生产 TLAS 改为通过 heap UBO 读取地址；
+具体证据、回归与尚未验证的平台见 [阴影验证记录](ray-query-shadows.md#地址读取修复后的验证2026-10-06)。

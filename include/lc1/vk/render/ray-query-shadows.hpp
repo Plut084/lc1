@@ -2,7 +2,7 @@
 
 #include "lc1/vk/render/draw-item.hpp"
 
-#include "lc1/vk/render/pipeline.hpp"
+#include "lc1/vk/render/graphics-shaders.hpp"
 #include "lc1/vk/render/render-data.hpp"
 #include "lc1/vk/resources/gpu-image.hpp"
 #include "lc1/vk/resources/gpu-mesh.hpp"
@@ -15,7 +15,9 @@
 namespace lc1 {
 
 class Device;
+class CommandBuffer;
 struct FrameResources;
+
 namespace scene {
 class FpsCamera;
 } // namespace scene
@@ -24,6 +26,7 @@ struct TemporalShadowData {
     glm::mat4 previous_view_projection{1.0F};
     glm::uvec4 frame_info{}; // valid, sequence index, history limit, light count
 };
+
 static_assert(sizeof(TemporalShadowData) == 80 && offsetof(TemporalShadowData, frame_info) == 64);
 
 // Ray-query visibility, temporal accumulation and spatial filtering. The Device
@@ -34,9 +37,10 @@ class RayQueryShadows {
 
     // Called after the slot fence. Uploads camera/light/object data shared with
     // the subsequent material pass, and leaves visibility ready for sampling.
-    void record(vk::raii::CommandBuffer const &commands, FrameResources &resources,
-                vk::Extent2D extent, scene::FpsCamera const &camera,
-                std::span<scene::Light const> lights, std::span<DrawItem const> draws);
+    void record(CommandBuffer &commands, FrameResources &resources, vk::Extent2D extent,
+                scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                std::span<DrawItem const> draws);
+
     void invalidate_history() { history_valid_ = false; }
 
   private:
@@ -44,25 +48,26 @@ class RayQueryShadows {
     void update_acceleration_structure(vk::raii::CommandBuffer const &commands,
                                        FrameResources &resources,
                                        std::span<DrawItem const> draws) const;
-    void record_visibility(vk::raii::CommandBuffer const &commands, FrameResources &resources,
-                           vk::Extent2D extent, std::span<DrawItem const> draws) const;
+    void record_visibility(CommandBuffer &commands, FrameResources &resources, vk::Extent2D extent,
+                           std::span<DrawItem const> draws) const;
     void prepare_history(vk::raii::CommandBuffer const &commands, FrameResources &resources,
                          vk::Extent2D extent);
-    void resolve_history(vk::raii::CommandBuffer const &commands, FrameResources &resources,
+    void resolve_history(CommandBuffer &commands, FrameResources &resources,
                          vk::Extent2D extent) const;
-    void filter_history(vk::raii::CommandBuffer const &commands, FrameResources &resources,
+    void filter_history(CommandBuffer &commands, FrameResources &resources,
                         vk::Extent2D extent) const;
 
-    Device const &device_;
+    Device const *device_; // Non-owning, non-null; the device outlives this object.
     vk::Format depth_format_;
-    Pipeline visibility_pipeline_;
-    Pipeline temporal_pipeline_;
-    Pipeline spatial_pipeline_;
+    GraphicsShaders visibility_shaders_;
+    GraphicsShaders temporal_shaders_;
+    GraphicsShaders spatial_shaders_;
 
     struct HistoryFrame {
         GpuImage visibility;
         GpuImage surface;
     };
+
     // Consecutive submissions share history, independently of frame slots.
     // Replacing these images requires waiting for ALL outstanding GPU use.
     std::array<std::optional<HistoryFrame>, 2> history_;

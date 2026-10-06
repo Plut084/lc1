@@ -12,17 +12,15 @@ namespace lc1 {
 
 class Continent;
 class Device;
-class Renderer;
 class GpuTexture;
 
 // Static GPU snapshot, divided into 16 x 16 tile chunks (256 m at the current scale).
 // Ground follows tile/patch edges rather than subdividing the whole world every 4 m.
 // All chunks are resident for this first outline; streaming is not implemented yet.
-// Device, Renderer and GpuTexture must outlive it.
+// Device and GpuTexture must outlive it.
 class ContinentView {
   public:
-    ContinentView(Device const &device, Renderer &renderer, GpuTexture const &texture,
-                  Continent const &continent);
+    ContinentView(Device const &device, GpuTexture const &texture, Continent const &continent);
     ContinentView(ContinentView const &) = delete;
     ContinentView &operator=(ContinentView const &) = delete;
     ContinentView(ContinentView &&) = delete;
@@ -31,7 +29,7 @@ class ContinentView {
     std::span<DrawItem const> draw_items() const { return draws_; }
 
   private:
-    GpuMaterial material_;
+    MaterialInfo material_;
     std::vector<GpuMesh> meshes_;
     // Borrow the completed meshes_ array and material_; neither moves after construction.
     std::vector<DrawItem> draws_;

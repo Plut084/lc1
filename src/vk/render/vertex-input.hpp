@@ -3,17 +3,21 @@
 #include "lc1/vertex.hpp"
 #include "lc1/vk/core/common.hpp"
 
+#include <array>
 #include <cstddef>
-#include <vector>
 
 namespace lc1::detail {
 
-inline vk::VertexInputBindingDescription vertex_binding_description()
+inline constexpr vk::VertexInputBindingDescription2EXT vertex_binding_description()
 {
-    return {.binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex};
+    return {.binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex,
+            .divisor = 1};
 }
 
-inline std::vector<vk::VertexInputAttributeDescription> vertex_attribute_descriptions()
+inline constexpr std::array<vk::VertexInputAttributeDescription2EXT, 5>
+vertex_attribute_descriptions()
 {
     return {{
         {.location = 0,

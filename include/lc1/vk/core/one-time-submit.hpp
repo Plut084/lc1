@@ -1,7 +1,9 @@
 #pragma once
 
+#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/common.hpp"
 #include "lc1/vk/core/device.hpp"
+#include <type_traits>
 
 #include <limits>
 
@@ -9,7 +11,8 @@ namespace lc1 {
 
 // Records `record` into a fresh command buffer, submits it, and blocks until the
 // GPU has finished it. For setup work such as uploads -- never inside the frame
-// loop, where the wait would stall rendering.
+// loop, where the wait would stall rendering. The callback can take either a
+// CommandBuffer& (for heap rendering) or a const vk::raii::CommandBuffer&.
 //
 // A transient pool per call: cheap enough for one-off work, and it leaves
 // FrameLoop's pool untouched.
@@ -21,7 +24,7 @@ void one_time_submit(Device const &device, auto &&record)
         .flags = vk::CommandPoolCreateFlagBits::eTransient,
         .queueFamilyIndex = device.queue_family(),
     });
-    vk::raii::CommandBuffers const command_buffers{
+    vk::raii::CommandBuffers command_buffers{
         raii_device,
         {
             .commandPool = *pool,
@@ -29,10 +32,14 @@ void one_time_submit(Device const &device, auto &&record)
             .commandBufferCount = 1,
         },
     };
-    vk::raii::CommandBuffer const &command_buffer = command_buffers.front();
+    CommandBuffer wrapped{std::move(command_buffers.front())};
+    auto const &command_buffer = wrapped.raii();
 
     command_buffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    record(command_buffer);
+    if constexpr (std::is_invocable_v<decltype(record), CommandBuffer &>)
+        record(wrapped);
+    else
+        record(command_buffer);
     command_buffer.end();
 
     vk::CommandBufferSubmitInfo command_info;

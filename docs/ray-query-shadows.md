@@ -1,7 +1,7 @@
 # Ray query 阴影
 
 使用 `VK_KHR_ray_query` 查询场景遮挡，方向光、点光和聚光灯发射一条硬阴影射线。
-`SphereLight` 支持球形面积光近似，结合帧内采样和跨帧累积求可见度。环境光不受遮挡影响。
+`SphereLight` 支持球形面积光近似，结合帧内采样和跨帧累积求可见度。当前尚未实现环境光或 IBL。
 
 ## 球形光
 
@@ -22,8 +22,8 @@ visibility = 未被遮挡的射线数 / shadow_sample_count
 以便时间累积获得新样本。
 射线从沿法线偏移的表面位置指向采样位置，并止于该位置之前，光源后方几何体不产生遮挡。
 
-直接光仍在中心求方向、距离衰减及现有 Blinn–Phong 项，再乘平均可见度。
-这是球形光的圆盘阴影近似，不是球面发光的完整积分，也未把光照模型改成 PBR。
+直接光仍在中心求方向、距离衰减及 GGX/Smith/Schlick PBR 项，再乘平均可见度。
+这是球形光的圆盘阴影近似，不是球面发光的完整积分。
 半径只控制阴影半影，不代表可见的发光球网格。方向光启用时仍使用硬阴影。
 增加每帧采样数可加快收敛，但开销相应增加；默认通过下述时间累积减少低采样噪点。
 
@@ -84,10 +84,42 @@ visibility = 未被遮挡的射线数 / shadow_sample_count
   由调用方选择覆盖区域；这些参数不会传给 ray query 路径。
 - 主程序只调用正常光照入口；独立深度预览由 GPU 测试等显式调用。
 
-两条路径的帧资源在 `FrameResources` 中分组。预览管线在首次调用时创建，每个帧槽的
-贴图与描述符也延迟至该槽首次预览时分配。正常 set 0 保留绑定 0、1、4–10，预览 set 0
-只有绑定 2、3；两者的对象 set 1 相同，但 set 0 不同意味着不能依赖跨管线保留绑定。
-切换路径时显式重新绑定描述符，不再为预览填充无关的 ray query 绑定。
+两条路径的帧资源在 `FrameResources` 中分组。预览 shader object 在首次调用时创建，每个帧槽的
+贴图与描述符也延迟至该槽首次预览时分配。所有通道均使用 native descriptor heap，
+`PassData` 的 push data 选择 camera/lights/object、TLAS、当前与历史图片，以及预览资源。
+每个 draw 在命令流中记录自己的 object 索引；各通道不创建 descriptor set 或 pipeline layout。
+预览深度图片使用显式 `DepthStencilReadOnlyOptimal` 描述符布局。切换路径时提交相应索引，
+不为预览建立 TLAS，也不清除仍将由阴影通道读取的 receiver ID。
+
+所有绘制通道使用 `GraphicsShaders` 和显式动态状态，不创建 graphics pipeline。深度图
+通道只绑定顶点 shader 并解除片元阶段；正常通道、双附件时间累积、单附件空间滤波与预览
+各自重设状态，避免 depth bias、采样数或颜色写入设置串到下一通道。见 [shader object](shader-objects.md)。
+
+### TLAS 地址的 heap 读取（2026-10-06）
+
+Slang 2026.18 将 `ResourceDescriptorHeap[index]` 转成 acceleration structure 时，
+先从 heap 读取 64 位地址，再执行 `OpConvertUToAccelerationStructureKHR`。
+因此 `visibility.spv` 声明 `Int64`；应用的设备需求与 GPU 测试使用的默认设备路径都必须
+检查并启用 `shaderInt64`，否则创建 shader module 会触发 `pCode-08740`。
+
+本机 RTX 4060 Laptop / NVIDIA 610.57.04 上，修复 feature 后，该原生 AS heap 读取路径
+仍导致 `ErrorDeviceLost`，内核记录 Xid 109。CPU 检查确认描述符内保存了正确地址，stride
+为 8；独立 GPU 原始地址回读却得到零。同一 TLAS 地址通过 push data 传入时可正常查询。
+原始 SPIR-V 通过 `spirv-val --target-env vulkan1.4`；这些结果定位了失败路径，尚不能据此
+确定 Slang 或驱动哪一方有缺陷。
+
+生产可见度通道因此让 `PassData.scene` 索引一个 heap uniform-buffer descriptor。
+每个帧槽的 `scene_address` 缓冲保存 8 字节 TLAS 地址，shader 读取
+`ConstantBuffer<ShadowSceneData>` 后构造 `RaytracingAccelerationStructure`。
+地址缓冲随 TLAS 创建，原地址上的重建不需更新它；两者都保留到该槽 GPU 工作完成。
+每槽增加一个 buffer descriptor，不改变 ray query、同步、阴影采样或 native heap 架构。
+`ResourceHeap::allocate_acceleration_structure` 保留为独立接口，生产 Renderer 不使用该路径；
+恢复直接 AS heap 读取前必须重新验证。
+
+Linux Debug 的 PBR、阴影切换/resize、时间累积/空间过滤 GPU 测试及主程序运行检查见下方
+验证记录。新增遮挡回归固定可见几何，仅切换高处物体的 `casts_shadow`：加入 TLAS 必须
+产生可见阴影，移除后必须恢复原图，避免仅凭“没有崩溃”认定查询正确。
+
 
 预览直接输出到单采样目标，不创建主光照的深度/MSAA 附件，不更新 TLAS，也不运行时间累积。
 返回正常画面时重置历史有效性；已分配资源留待后续复用，退出前仍须等待 GPU 完成。
@@ -142,3 +174,18 @@ cd build/linux-x86_64/Debug
 . ./generators/conanrun.sh
 ./lc1_shadow_path_tests
 ```
+
+本轮全 heap 迁移的 shader 接口检查与构建已通过；GPU 运行因沙箱访问和自动审批服务故障
+尚未完成。下列/既有 GPU 通过记录属于迁移前的实现；本轮边界见 [光照](lighting.md)。
+
+### 地址读取修复后的验证（2026-10-06）
+
+Linux Debug / RTX 4060 Laptop / NVIDIA 610.57.04：`lc1_pbr_tests`、
+`lc1_shadow_path_tests`（含新增遮挡回归）、`lc1_temporal_shadow_tests` 均通过，
+validation 和 synchronization validation 无警告或错误。主程序运行 12 秒，经历窗口
+resize，收到 SIGTERM 后正常退出（退出码 0）。shader heap 接口 CTest 和可见度 shader 的
+`spirv-val --target-env vulkan1.4` 通过。使用跳过射线的诊断 shader 时，新增遮挡回归按预期失败。
+
+日志位于 Linux Debug 构建目录的 `artifacts/int64-{pbr,shadow-paths,temporal-shadows,game-smoke}.log`。
+这些结果补充并取代前一段对本轮 GPU 尚未执行的状态描述；不代表 Windows、Release 或
+其他 GPU/驱动已经验证。本次没有重跑完整 CPU CTest。

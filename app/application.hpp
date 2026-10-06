@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lc1/vk/render/renderer.hpp"
+
 #include "lc1/game/game-session.hpp"
 
 #include "lc1/input.hpp"

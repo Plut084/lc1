@@ -1,9 +1,16 @@
 # Descriptor heap 最小 GPU 测试
 
-`lc1_descriptor_heap_tests` 使用原生 `VK_EXT_descriptor_heap` 与
-`VK_KHR_shader_untyped_pointers`，离屏绘制两个三角形，不需要窗口或显示服务器。
+`lc1_descriptor_heap_tests` 使用原生 `VK_EXT_descriptor_heap`、
+`VK_KHR_shader_untyped_pointers` 和 `VK_EXT_shader_object`，离屏绘制两个三角形，不需要窗口或显示服务器。
 不创建 descriptor set、descriptor set layout 或 pipeline layout，也不使用
 `VkShaderDescriptorSetAndBindingMappingInfoEXT`。
+
+基础测试和 bulk 测试均使用 `GraphicsShaders` 与 `set_graphics_state`，不创建 graphics
+pipeline。基础测试还要求 `sampleRateShading` 与 4× RGBA8 颜色附件，使用独立 shader 入口
+验证 1×/4×/1× 的逐采样结果：输出采样编号的一阶、二阶矩，resolve 后逐像素比较解析均值。
+每次绘制前故意设置错误的采样数、零 sample mask、关闭颜色写入及 rasterizer discard，
+验证公共动态状态设置能恢复它们。生产主光照的 SampleId 读取另由
+`descriptor_heap_shader_interfaces` CTest 检查。迁移结果见 [shader object](shader-objects.md)。
 
 ## 构建和运行
 
@@ -88,3 +95,68 @@ validation 和 synchronization validation 无警告或错误输出。
 
 本次日志保存在构建目录的 `artifacts/descriptor-heap-bulk-uniform.log` 和
 `artifacts/descriptor-heap-bulk-storage.log`。这些结果不代表其他驱动或 Windows 已验证。
+
+## DescriptorHeapCache
+
+`DescriptorHeapCache` 组合并借用一个 `DescriptorHeap`，用于渲染线程上的重复查询：
+
+```cpp
+DescriptorHeap heap{device, sampler_capacity, image_capacity, buffer_capacity};
+DescriptorHeapCache cache{heap};
+auto const image_index = cache.image(texture.image());
+auto const buffer_index = cache.buffer(uniform_buffer);
+auto const sampler_index = cache.sampler();
+```
+
+同一资源重复查询返回相同索引，不重复分配；不同资源不会因内容相同而合并。
+当前 heap 只支持整张 sampled image view、整块 uniform buffer 和一种固定 sampler，
+cache 保持这个范围。若未来增加 view、offset/range、layout 或 sampler 参数，必须同时
+扩展 key，不能将不同描述符当作同一个缓存项。
+
+image 以 `vk::ImageView`、buffer 以 `vk::Buffer` 为键，不使用 C++ 对象地址；移动资源
+不会改变缓存命中。缓存不持有 GPU 资源。销毁或替换资源前必须调用对应的
+`cache.invalidate(resource)`，因为 Vulkan 句柄也可能复用。批量销毁资源前可 `clear()`，
+但这会忘记其他存活资源的索引，之后查询将消耗新槽位。
+
+失效或 clear 只清除 CPU 查找记录，不释放、覆盖或回收 heap 槽位，不等待 GPU。
+先前返回的索引在 heap 和原资源仍存活时继续有效；真正销毁资源仍须等待所有 GPU 使用
+完成。当前 append-only 分配器不适合通过反复 clear 解决长期 resize 的槽位回收问题。
+heap 必须比 cache 长寿且不能在借用期间移动。cache 不可复制。
+
+Renderer 若持有 heap 和 cache，按此顺序声明，保证 cache 先析构；外部持有的材质和
+帧资源必须在销毁前通知缓存失效。帧资源专用索引也可直接保存在 `FrameResources`，
+避免为了取得同一索引而反复查找。构建缓存本身不会自动迁移 Renderer 的现有分配调用。
+
+现有 `lc1_descriptor_heap_tests` 已通过 cache 获得绘制索引，并增加以下验证：
+
+- 两种图像和 buffer 的索引互异，重复查询不消耗槽位，固定 sampler 只分配一次。
+- 移动 buffer/texture 后仍命中原索引。
+- 满 heap 仍能命中已有条目；失效只影响指定资源，clear 忘记所有类型。
+- 分配失败不留下占位条目，后续重试仍明确失败。
+- 两轮实际绘制和像素回读验证缓存索引能用于 GPU 访问。
+
+本机 Linux Debug / NVIDIA GeForce RTX 4060 Laptop GPU 验证通过，validation 和
+synchronization validation 无警告或错误。材质迁移完成后，完整 CMake target 已构建并重新运行通过，日志为构建目录中的
+`artifacts/material-descriptor-heap.log`。尚未验证 Windows，也未实现自动资源失效或槽位回收。
+
+材质主通道使用每个帧槽自己的 heap 和固定槽位索引；`write_image` / `write_sampler`
+只允许覆盖已经分配的槽位，调用者必须先等待所有使用该槽位的 GPU 工作完成。
+这些原位写入不经过 cache。不要覆盖仍由 cache 映射为另一资源的槽位，否则会破坏缓存语义。
+
+## 全通道迁移
+
+项目 `DescriptorSet` 类及其源文件已删除，生产通道全部使用 heap；ImGui 官方后端是明确保留的
+例外。每个帧槽的缓存复用固定 buffer 索引；会原位更新的图片槽位仍由帧槽直接管理。
+新增的 acceleration-structure 分区按 `getDescriptorSizeEXT(eAccelerationStructureKHR)`
+独立确定 stride，不能假定与 uniform buffer 描述符同尺寸。仅当容量非零时查询该类型，
+不影响不启用 AS 扩展的基础 heap 测试。TLAS 描述符使用 AS device address 和允许的零 size，
+底层 AS 必须在所有 GPU 使用结束前存活。深度图片可显式指定 `eDepthStencilReadOnlyOptimal`。
+
+2026-10-06 的 GPU 排查发现本机直接 AS heap 地址读取异常；生产 Renderer 改为通过
+heap UBO 读取 TLAS 地址，仍使用原生 heap 和 push-data 索引。上面的 AS 分区接口保留，
+但不属于当前生产路径的通过范围。复现证据、设备版本与替代路径见
+[TLAS 地址读取](ray-query-shadows.md#tlas-地址的-heap-读取2026-10-06)。
+
+`ctest -R descriptor_heap_shader_interfaces` 检查生产 SPIR-V 不再需要 set/binding 映射。
+本轮 GPU 运行受到沙箱/审批服务故障阻塞，详见 [光照验证边界](lighting.md)。上面的 GPU
+通过记录属于更早的实现，不能作为新增 AS 和辅助通道迁移的 GPU 验证结果。

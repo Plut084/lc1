@@ -1,4 +1,7 @@
 #include "lc1/game/debug/pbr-showcase.hpp"
+#include "lc1/scene/lights/point-light.hpp"
+#include "lc1/scene/lights/sphere-light.hpp"
+#include "lc1/scene/lights/spot-light.hpp"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,6 +37,7 @@ struct Geometry {
             float x, y, z;
             unsigned char color[4];
         };
+
         static_assert(sizeof(FontVertex) == 16);
         std::vector<FontVertex> font(text.size() * 64);
         float const width = static_cast<float>(stb_easy_font_width(text.data()));
@@ -129,20 +133,20 @@ std::vector<ContinentBlock> PbrShowcase::spawn_blocks()
     return blocks;
 }
 
-GpuMaterial const &PbrShowcase::material(Renderer &renderer, glm::vec3 color, float metallic,
-                                         float roughness, glm::vec3 emission)
+MaterialInfo const &PbrShowcase::material(glm::vec3 color, float metallic, float roughness,
+                                          glm::vec3 emission)
 {
     MaterialInfo info;
     info.parameters = {.base_color_factor = glm::vec4{color, 1},
                        .emissive_factor = emission,
                        .metallic_factor = metallic,
                        .roughness_factor = roughness};
-    materials_.push_back(renderer.make_material(info));
+    materials_.push_back(info);
     return materials_.back();
 }
 
-std::size_t PbrShowcase::place(GpuMesh const &mesh, GpuMaterial const &material, glm::vec3 position,
-                               glm::vec3 scale, float yaw)
+std::size_t PbrShowcase::place(GpuMesh const &mesh, MaterialInfo const &material,
+                               glm::vec3 position, glm::vec3 scale, float yaw)
 {
     auto transform = glm::translate(glm::mat4{1}, position + origin_);
     transform = glm::rotate(transform, yaw, glm::vec3{0, 1, 0});
@@ -208,14 +212,14 @@ GpuTexture const &PbrShowcase::texture(Device const &device, TexturePattern patt
     return *textures_.back();
 }
 
-PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 origin)
+PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     : origin_(origin), sphere_(make_sphere(device)), cube_(make_cube(device, false)),
       vertex_colors_(make_cube(device, true))
 {
-    auto const &white = material(renderer, {0.7F, 0.75F, 0.8F}, 0, 0.85F);
-    auto const &dark = material(renderer, {0.035F, 0.045F, 0.06F}, 0, 0.6F);
-    auto const &trim = material(renderer, {0, 0, 0}, 0, 1, {0.04F, 0.6F, 0.85F});
-    auto const &lettering = material(renderer, {0, 0, 0}, 0, 1, {1.8F, 1.8F, 1.8F});
+    auto const &white = material({0.7F, 0.75F, 0.8F}, 0, 0.85F);
+    auto const &dark = material({0.035F, 0.045F, 0.06F}, 0, 0.6F);
+    auto const &trim = material({0, 0, 0}, 0, 1, {0.04F, 0.6F, 0.85F});
+    auto const &lettering = material({0, 0, 0}, 0, 1, {1.8F, 1.8F, 1.8F});
     Geometry labels;
     auto label = [&](std::string text, glm::vec3 center, float height, float width) {
         labels.label(std::move(text), center, height, width);
@@ -225,7 +229,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     floor_info.parameters.roughness_factor = 0.9F;
     floor_info.base_color.texture =
         &texture(device, TexturePattern::Floor, TextureColorSpace::Srgb);
-    materials_.push_back(renderer.make_material(floor_info));
+    materials_.push_back(floor_info);
     for (float const x : {-13.5F, 13.5F}) {
         place(cube_, materials_.back(), {x, 0.03F, 0}, {17, 0.02F, 41});
         place(cube_, trim, {x > 0 ? 5.2F : -5.2F, 0.06F, 0}, {0.07F, 0.03F, 41});
@@ -236,8 +240,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     label("ROUGHNESS  0     .25     .5     .75     1", {-13.2F, 0.72F, -13.94F}, 0.42F, 14.8F);
     for (int row = 0; row < 3; ++row)
         for (int column = 0; column < 5; ++column) {
-            auto const &sample =
-                material(renderer, {0.8F, 0.32F, 0.08F}, row / 2.0F, column / 4.0F);
+            auto const &sample = material({0.8F, 0.32F, 0.08F}, row / 2.0F, column / 4.0F);
             place(sphere_, sample, {-18.5F + column * 2.6F, 5.6F - row * 1.8F, -16.2F},
                   glm::vec3{0.72F});
         }
@@ -256,7 +259,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
         info.parameters.normal_scale = static_cast<float>(i);
         if (i != 0)
             info.normal.texture = &normal_texture;
-        materials_.push_back(renderer.make_material(info));
+        materials_.push_back(info);
         float const x = -18.5F + i * 5.0F;
         place(cube_, materials_.back(), {x, 1.0F, -9}, {3.5F, 0.3F, 3.5F});
         label(normal_labels[i], {x, 0.68F, -6.94F}, 0.5F, 4.5F);
@@ -269,15 +272,15 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     textured.parameters.metallic_factor = 0;
     textured.parameters.roughness_factor = 0.45F;
     textured.base_color.texture = &checker;
-    materials_.push_back(renderer.make_material(textured));
+    materials_.push_back(textured);
     place(cube_, materials_.back(), {8.5F, 2, -16}, glm::vec3{2.0F}, 0.3F);
     textured.parameters.base_color_factor = {0.3F, 0.95F, 0.55F, 1};
-    materials_.push_back(renderer.make_material(textured));
+    materials_.push_back(textured);
     place(sphere_, materials_.back(), {13.4F, 2, -16}, glm::vec3{1.05F});
     MaterialInfo mapped;
     mapped.parameters.base_color_factor = {0.85F, 0.42F, 0.1F, 1};
     mapped.metallic_roughness.texture = &mr;
-    materials_.push_back(renderer.make_material(mapped));
+    materials_.push_back(mapped);
     place(sphere_, materials_.back(), {18.2F, 2, -16}, glm::vec3{1.05F}, 1.1F);
     label("TEXTURE CHANNELS", {13.5F, 4.1F, -18.4F}, 0.7F, 14);
     label("BASE COLOR", {8.5F, 0.68F, -13.94F}, 0.45F, 4);
@@ -289,7 +292,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
                                   glm::vec3{0.06F, 0.2F, 0.7F}};
     std::array const names{"GOLD", "COPPER", "SILVER", "IRON", "PAINT"};
     for (std::size_t i = 0; i < metal_colors.size(); ++i) {
-        auto const &sample = material(renderer, metal_colors[i], i == 4 ? 0.0F : 1.0F, 0.23F);
+        auto const &sample = material(metal_colors[i], i == 4 ? 0.0F : 1.0F, 0.23F);
         float const x = 7.5F + static_cast<float>(i) * 2.75F;
         place(sphere_, sample, {x, 1.8F, -9}, glm::vec3{0.82F});
         label(names[i], {x, 0.68F, -6.94F}, 0.44F, 2.4F);
@@ -305,7 +308,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
         label(x < 0 ? "POINT / HARD SHADOW" : "SPHERE / SOFT SHADOW", {x, 0.64F, 6.06F}, 0.62F,
               11.5F);
     }
-    auto const &moving = material(renderer, {0.6F, 0.08F, 0.04F}, 0, 0.4F);
+    auto const &moving = material({0.6F, 0.08F, 0.04F}, 0, 0.4F);
     moving_shadow_draw_ = place(cube_, moving, {15, 2.1F, 2.5F}, {1.3F, 1.3F, 1.3F});
     lights_.push_back(
         scene::to_light(scene::PointLight{.base = {.color = {0.75F, 0.85F, 1}, .intensity = 110},
@@ -330,7 +333,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
 
     // Display fixtures are rings around the light, never closed meshes enclosing it.
     // A closed emissive bulb would otherwise shadow its own point/sphere source.
-    auto const &fixture = material(renderer, {0, 0, 0}, 0, 1, {3, 4, 6});
+    auto const &fixture = material({0, 0, 0}, 0, 1, {3, 4, 6});
     for (auto const &light : lights_) {
         auto const p = light.position - origin_;
         float const radius = light.type == 3 ? 1.15F : 0.28F;
@@ -344,8 +347,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     std::array const powers{0.25F, 1.0F, 4.0F, 16.0F, 64.0F};
     std::array const power_labels{".25", "1", "4", "16", "64"};
     for (std::size_t i = 0; i < powers.size(); ++i) {
-        auto const &emissive =
-            material(renderer, {0, 0, 0}, 0, 1, glm::vec3{1, 0.22F, 0.025F} * powers[i]);
+        auto const &emissive = material({0, 0, 0}, 0, 1, glm::vec3{1, 0.22F, 0.025F} * powers[i]);
         float const x = -18.5F + static_cast<float>(i) * 2.7F;
         place(cube_, emissive, {x, 1.8F, 15}, {2.05F, 1.7F, 0.2F});
         label(power_labels[i], {x, 0.68F, 18.06F}, 0.6F, 2.2F);
@@ -356,7 +358,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     emission_map.parameters.metallic_factor = 0;
     emission_map.emissive.texture =
         &texture(device, TexturePattern::Emission, TextureColorSpace::Srgb);
-    materials_.push_back(renderer.make_material(emission_map));
+    materials_.push_back(emission_map);
     place(cube_, materials_.back(), {-13, 4, 14}, {8, 1.4F, 0.2F});
     label("EMISSION / HDR", {-13, 5.45F, 11.86F}, 0.8F, 14);
 
@@ -368,7 +370,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
                                .roughness_factor = 0.25F};
     ceramic_info.parameters.normal_scale = 0.65F;
     ceramic_info.normal.texture = &fine_normal;
-    materials_.push_back(renderer.make_material(ceramic_info));
+    materials_.push_back(ceramic_info);
     auto const &ceramic = materials_.back();
     place(sphere_, ceramic, {13, 1.6F, 15}, {1.7F, 0.65F, 0.85F});
     MaterialInfo vertex_info;
@@ -376,7 +378,7 @@ PbrShowcase::PbrShowcase(Device const &device, Renderer &renderer, glm::vec3 ori
     vertex_info.parameters.roughness_factor = 0.38F;
     vertex_info.parameters.normal_scale = 0.65F;
     vertex_info.normal.texture = &fine_normal;
-    materials_.push_back(renderer.make_material(vertex_info));
+    materials_.push_back(vertex_info);
     auto const &vertex_material = materials_.back();
     place(vertex_colors_, vertex_material, {8.2F, 2.1F, 15}, {-1.7F, 1.7F, 1.7F}, -0.3F);
     rotating_draw_ = place(vertex_colors_, vertex_material, {18, 2.1F, 15}, glm::vec3{1.9F});

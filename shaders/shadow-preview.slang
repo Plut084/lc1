@@ -1,3 +1,4 @@
+import pass_data;
 import shadows;
 
 struct PreviewVertex {
@@ -17,6 +18,8 @@ PreviewVertex previewVert(uint vertex_id : SV_VertexID)
 float4 previewFrag(PreviewVertex input) : SV_TARGET
 {
     // Raw normalized depth; UVs cover the entire map.
-    float depth = shadow_map.SampleLevel(input.uv, 0).r;
+    Texture2D<float> shadow_map = ResourceDescriptorHeap[pass_data.shadow_image];
+    SamplerState shadow_sampler = SamplerDescriptorHeap[pass_data.sampler];
+    float depth = shadow_map.SampleLevel(shadow_sampler, input.uv, 0);
     return float4(float3(depth), 1);
 }

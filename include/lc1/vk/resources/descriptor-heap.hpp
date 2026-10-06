@@ -19,6 +19,9 @@ class SamplerHeap {
                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
 
     HeapIndex allocate_sampler();
+    HeapIndex allocate_sampler(vk::SamplerCreateInfo const &info);
+    // The caller must wait for every GPU use of this slot before overwriting it.
+    void write_sampler(HeapIndex index, vk::SamplerCreateInfo const &info);
 
     void deallocate_sampler(HeapIndex index) { (void)index; } // TODO: implement
 
@@ -38,10 +41,23 @@ class ResourceHeap {
   public:
     ResourceHeap(Device const &device, vk::DeviceSize image_capacity,
                  vk::DeviceSize buffer_capacity,
-                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties);
+                 vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties,
+                 vk::DeviceSize acceleration_capacity = 0);
 
-    HeapIndex allocate_image(GpuImage const &image);
+    ResourceHeap(ResourceHeap const &) = delete;
+    ResourceHeap(ResourceHeap &&) = delete;
+    ResourceHeap &operator=(ResourceHeap const &) = delete;
+    ResourceHeap &operator=(ResourceHeap &&) = delete;
+    ~ResourceHeap() = default;
+
+    HeapIndex allocate_image(GpuImage const &image,
+                             vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
+    // The caller must wait for every GPU use of this slot before overwriting it.
+    void write_image(HeapIndex index, GpuImage const &image,
+                     vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
     HeapIndex allocate_buffer(GpuBuffer const &buffer);
+    // Borrows a live address returned by getAccelerationStructureAddressKHR.
+    HeapIndex allocate_acceleration_structure(vk::DeviceAddress address);
 
     void deallocate_image(HeapIndex index) { (void)index; } // TODO: implement
 
@@ -56,6 +72,10 @@ class ResourceHeap {
     vk::DeviceSize buffer_offset_;
     vk::DeviceSize buffer_stride_;
     std::size_t buffer_capacity_;
+    vk::DeviceSize acceleration_stride_;
+    vk::DeviceSize acceleration_offset_;
+    vk::DeviceSize acceleration_capacity_;
+    std::size_t acceleration_size_ = 0;
     GpuBuffer buffer_;
     std::size_t image_size_;
     std::size_t buffer_size_;
@@ -67,9 +87,12 @@ class ResourceHeap {
 // GPU, to properly synchronize with VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT or
 // VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT.
 class DescriptorHeap {
+    friend class CommandBuffer;
+
   public:
     DescriptorHeap(Device const &device, vk::DeviceSize sampler_capacity,
-                   vk::DeviceSize image_capacity, vk::DeviceSize buffer_capacity);
+                   vk::DeviceSize image_capacity, vk::DeviceSize buffer_capacity,
+                   vk::DeviceSize acceleration_capacity = 0);
 
     // Logs physical-device support, descriptor sizes/limits and this heap's allocation state.
     // Physical-device support does not imply that a feature was enabled on the logical device.
@@ -77,16 +100,22 @@ class DescriptorHeap {
 
     void bind_to_command_buffer(CommandBuffer &command_buffer);
 
-    template <typename T>
-    void push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data);
-
     // Returns an index relative to the whole heap, in units of the descriptor
     // type's size, ready for ResourceDescriptorHeap / SamplerDescriptorHeap.
     // Referenced resources must outlive all GPU submissions reading these slots.
     // Slots are append-only until deallocation is implemented.
-    std::size_t allocate_sampler();
-    std::size_t allocate_image(GpuImage const &image);
-    std::size_t allocate_buffer(GpuBuffer const &buffer);
+    HeapIndex allocate_sampler();
+    HeapIndex allocate_sampler(vk::SamplerCreateInfo const &info);
+    // The caller must wait for every GPU use of this slot before overwriting it.
+    void write_sampler(HeapIndex index, vk::SamplerCreateInfo const &info);
+    HeapIndex allocate_image(GpuImage const &image,
+                             vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
+    // The caller must wait for every GPU use of this slot before overwriting it.
+    void write_image(HeapIndex index, GpuImage const &image,
+                     vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
+    HeapIndex allocate_buffer(GpuBuffer const &buffer);
+    // Borrows a live address returned by getAccelerationStructureAddressKHR.
+    HeapIndex allocate_acceleration_structure(vk::DeviceAddress address);
 
   private:
     Device const *device_;
@@ -96,18 +125,5 @@ class DescriptorHeap {
     SamplerHeap sampler_heap_;
     ResourceHeap resource_heap_;
 };
-
-template <typename T>
-inline void DescriptorHeap::push_data(vk::raii::CommandBuffer &command_buffer, std::span<T> data)
-{
-    if (data.empty() || data.size_bytes() % 4 != 0 ||
-        data.size_bytes() > descriptor_heap_properties_.maxPushDataSize)
-        fail("DescriptorHeap::push_data: size must be nonzero, a multiple of 4, and within "
-             "maxPushDataSize");
-    vk::PushDataInfoEXT push_data_info{
-        .data = {.address = data.data(), .size = data.size_bytes()},
-    };
-    command_buffer.pushDataEXT(push_data_info);
-}
 
 } // namespace lc1

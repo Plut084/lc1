@@ -31,7 +31,7 @@ char const *present_mode_name(vk::PresentModeKHR mode)
 
 Swapchain::Swapchain(Device const &device, Surface const &surface, SwapchainConfig const &config,
                      vk::Extent2D extent)
-    : device_{device}, surface_{&surface}, swapchain_(nullptr), format_{vk::Format::eUndefined},
+    : device_{&device}, surface_{&surface}, swapchain_(nullptr), format_{vk::Format::eUndefined},
       extent_{extent}
 {
     recreate(config, extent);
@@ -48,7 +48,7 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
     try {
         vk::SurfaceKHR const surface = *surface_->raii();
 
-        auto const caps = device_.raii_physical().getSurfaceCapabilitiesKHR(surface);
+        auto const caps = device_->raii_physical().getSurfaceCapabilitiesKHR(surface);
 
         if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment)) {
             fail("surface does not support VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT");
@@ -71,7 +71,7 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
             fail("requested composite alpha mode is not supported by the surface");
         }
 
-        auto const formats = device_.raii_physical().getSurfaceFormatsKHR(surface);
+        auto const formats = device_->raii_physical().getSurfaceFormatsKHR(surface);
         bool const any_format = formats.size() == 1 &&
                                 formats.front().format == vk::Format::eUndefined &&
                                 formats.front().colorSpace == config.surface_format.colorSpace;
@@ -79,14 +79,14 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
             (!any_format && std::ranges::find(formats, config.surface_format) == formats.end())) {
             fail("requested surface format/color space is not supported");
         }
-        auto const modes = device_.raii_physical().getSurfacePresentModesKHR(surface);
+        auto const modes = device_->raii_physical().getSurfacePresentModesKHR(surface);
         if (std::ranges::find(modes, config.present_mode) == modes.end()) {
             fail("requested present mode is not supported by the surface");
         }
 
         // Present is a queue operation and it consumes the swapchain, so
         // device-idle is the correct guard before destroying any of this.
-        device_.raii().waitIdle();
+        device_->raii().waitIdle();
 
         // Order matters and the member declaration order cannot save us here --
         // this is a rebuild, not a destruction. The image views and semaphores
@@ -114,7 +114,7 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
             // Clipped: Happens when windows are in front of others.
             .setClipped(vk::True);
 
-        swapchain_ = device_.raii().createSwapchainKHR(info);
+        swapchain_ = device_->raii().createSwapchainKHR(info);
         format_ = config.surface_format.format;
         extent_ = extent;
 
@@ -141,8 +141,8 @@ void Swapchain::recreate(SwapchainConfig const &config, vk::Extent2D extent)
                                 .b = vk::ComponentSwizzle::eIdentity,
                                 .a = vk::ComponentSwizzle::eIdentity});
 
-            images_[i].view = device_.raii().createImageView(view_info);
-            images_[i].render_finished = device_.raii().createSemaphore(vk::SemaphoreCreateInfo{});
+            images_[i].view = device_->raii().createImageView(view_info);
+            images_[i].render_finished = device_->raii().createSemaphore(vk::SemaphoreCreateInfo{});
         }
 
         std::println("[lc1] swapchain: {}x{}, {} images, {}", extent_.width, extent_.height,

@@ -1,3 +1,4 @@
+import pass_data;
 import shadow_values;
 import lights;
 
@@ -5,9 +6,6 @@ struct LightsData {
     uint count;
     Light lights[10];
 };
-[[vk::binding(1, 0)]] ConstantBuffer<LightsData> lighting;
-[[vk::binding(10, 0)]] Texture2D<uint4> resolved_visibility;
-[[vk::binding(7, 0)]] Texture2D<float4> current_surface;
 
 [shader("vertex")]
 float4 spatialVert(uint id : SV_VertexID) : SV_Position
@@ -19,6 +17,10 @@ float4 spatialVert(uint id : SV_VertexID) : SV_Position
 [shader("fragment")]
 uint4 spatialFrag(float4 position : SV_Position) : SV_Target0
 {
+    ConstantBuffer<LightsData> lighting = ResourceDescriptorHeap[pass_data.lights];
+    Texture2D<uint4> resolved_visibility = ResourceDescriptorHeap[pass_data.resolved_visibility];
+    Texture2D<float4> current_surface = ResourceDescriptorHeap[pass_data.current_surface];
+
     int2 pixel = int2(position.xy);
     uint4 center = resolved_visibility.Load(int3(pixel, 0));
     float4 surface = current_surface.Load(int3(pixel, 0));

@@ -1,0 +1,18 @@
+// Plain data can also be referenced through a typed buffer.
+struct Camera {
+    float4x4 view_projection;
+};
+
+struct Material {
+    float4 base_color_factor;
+    float metallic_factor;
+    float roughness_factor;
+    Texture2D base_color_texture;
+    SamplerState base_color_sampler;
+};
+
+struct FrameBuffer {
+    float4 clear_color;
+    ConstantBuffer<Camera> camera;
+    ConstantBuffer<MaterialData> material;
+};

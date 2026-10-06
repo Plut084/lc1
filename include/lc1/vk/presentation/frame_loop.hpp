@@ -237,7 +237,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
             vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageAspectFlagBits::eColor);
 
         RenderTarget const target{
-            .view = image.view,
+            .view = &image.view,
             .extent = swapchain.extent(),
         };
 

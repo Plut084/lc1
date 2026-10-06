@@ -104,6 +104,8 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 - Prefer `const`/`constexpr`; read-only parameters use values or `const&`. Pass views such as
   `std::string_view`/`std::span`, not new pointer+length interfaces. No C-style casts;
   `reinterpret_cast` needs a comment identifying the C API requirement.
+- Represent non-owning data members with pointers, not references; document required non-null
+  borrows and lifetime constraints. Reference parameters and return values remain appropriate.
 - Use RAII, constructors and destructors, not `init()`/`destroy()`, owning raw pointers or
   `new`/`delete`. Raw handles are documented borrows. `Window` is the explicit exception: it owns
   its GLFW C handle and destroys it once. Its first member, `glfw_lifetime_`, also terminates GLFW
@@ -149,10 +151,11 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 - `FrameLoop<FrameResources>` owns per-slot resources, built by an application-supplied factory.
   It waits for the slot fence before passing resources to the synchronous recording callback;
   it does not interpret them. Renderer takes resources, camera and draws, not a frame index.
-  Draw i uses that slot's model UBO/set i; capacity overflow fails explicitly. Descriptors are
-  initialized at creation, and `GpuBuffer::upload` performs the required VMA flush.
+  Draw i uses that slot's object/material/frame UBOs; capacity overflow fails explicitly.
+  Descriptors are initialized before use, and `GpuBuffer::upload` performs the required VMA flush.
 - `DrawItem`, `scene::Object` and `RenderTarget` borrow resources. Resources precede their users
-  in member order. Material owners keep textures and Renderer alive; Device outlives GPU resources.
+  in member order. Material owners keep textures alive through submitted GPU uses; Device outlives
+  GPU resources.
 - `ResourceManager` is scene-scoped, exclusive and render-thread-only. Typed caches own
   `unique_ptr<Resource>`; repeated loads return stable cached pointers, failures leave no null entry.
   `load<T>` requires a Resource-derived, move-constructible T with `load_from_file(Device const&,
@@ -201,9 +204,17 @@ The following frame-loop invariants must survive refactoring:
 
 ## Rendering contracts
 
-- Descriptor sets: 0 camera/global, 1 object, 2 material. Higher sets normally change more often
-  during binding (including dynamic offsets), not buffer writes. Preserve stable layouts across
-  draw sorting changes. Compatibility for set N requires matching layouts 0..N and push constants.
+- Project passes and GPU tests use `VK_EXT_shader_object`, not `VkPipeline` objects; ImGui's
+  official Vulkan backend is the exception. `ShaderObject` owns executable stages in resources;
+  `GraphicsShaders` binds pass stages and clears unused stages, including fragment for depth-only
+  draws. `set_graphics_state` restores fixed-function state per pass; viewport/scissor use the
+  with-count commands. Preserve the main fragment shader's static SampleId use for full sample
+  shading; shader objects have no dynamic `sampleShadingEnable`. See [shader objects](docs/shader-objects.md).
+- All project rendering passes use native descriptor heaps and push-data indices; no descriptor
+  sets, set layouts or pipeline layouts. `DescriptorSet` has been removed. ImGui's official Vulkan
+  backend is the sole allowed exception and retains its internally managed descriptor pool/sets.
+  Per-frame heaps isolate descriptor updates from in-flight frames. Cache immutable buffer lookups;
+  update explicitly owned image slots only after the owning frame fence.
 - Normal lighting uses metallic-roughness GGX/Smith/Schlick, no ambient term or IBL yet. Material
   factors are linear; base/emissive maps are sRGB, MR/normal are linear (MR G=roughness, B=metal).
   Initialize every texture descriptor. AO textures remain unsupported and must be rejected.
@@ -226,7 +237,7 @@ The following frame-loop invariants must survive refactoring:
   spatially filtered visibility back into temporal history. Object motion vectors are not implemented.
 - `record_shadow_map_preview` is a separate, lazy diagnostic with explicit `ShadowMapRegion`;
   normal `record` and the app have no preview flag/toggle. Preview runs no TLAS update, temporal
-  resolve or main-pass depth/MSAA allocation. Rebind sets across incompatible layouts and invalidate
+  resolve or main-pass depth/MSAA allocation. Push each pass's resource indices and invalidate
   history on returning to normal rendering. See [shadow paths](docs/ray-query-shadows.md).
 
 ## Input contracts

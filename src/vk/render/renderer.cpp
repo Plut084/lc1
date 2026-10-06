@@ -1,9 +1,10 @@
 #include "lc1/vk/render/renderer.hpp"
+#include "draw-validation.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 
 #include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
-#include "lc1/vk/resources/shader-stages.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,33 +20,6 @@ vk::Format single_color_format(std::vector<vk::Format> const &formats)
         fail("renderer requires exactly one color attachment format");
     }
     return formats.front();
-}
-
-// The shader modules only need to live until the pipeline is created, so they
-// stay local to this function.
-Pipeline make_pipeline(Device const &device,
-                       std::vector<vk::Format> const &color_attachment_formats,
-                       vk::Format depth_image_format, vk::SampleCountFlagBits samples)
-{
-    auto const shader_module = ShaderModule::load_from_file(device, "shaders/shader.spv");
-    ShaderStages shader_stages;
-    shader_stages.append(vk::ShaderStageFlagBits::eVertex, shader_module, "vertMain");
-    shader_stages.append(vk::ShaderStageFlagBits::eFragment, shader_module, "fragMain");
-    return Pipeline{device, shader_stages, color_attachment_formats, depth_image_format, samples};
-}
-
-Pipeline make_tone_map_pipeline(Device const &device, vk::Format output_format)
-{
-    auto const shader = ShaderModule::load_from_file(device, "shaders/tone-map.spv");
-    ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, shader, "vertMain");
-    stages.append(vk::ShaderStageFlagBits::eFragment, shader, "fragMain");
-    return {device,
-            stages,
-            {output_format},
-            vk::Format::eUndefined,
-            vk::SampleCountFlagBits::e1,
-            PipelineKind::ToneMap};
 }
 
 vk::SampleCountFlagBits hdr_sample_count(Device const &device, vk::Format depth_format,
@@ -87,31 +61,16 @@ constexpr std::array<std::uint8_t, 4> normal_pixel{128, 128, 255, 255};
 
 Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_attachment_formats,
                    vk::SampleCountFlagBits samples)
-    : device_{device}, color_format_{single_color_format(color_attachment_formats)},
+    : device_{&device}, color_format_{single_color_format(color_attachment_formats)},
       depth_format_{find_depth_format(device)},
       samples_{hdr_sample_count(device, depth_format_, samples)},
-      pipeline_{make_pipeline(device, {hdr_format}, depth_format_, samples_)},
-      tone_map_pipeline_{make_tone_map_pipeline(device, color_format_)},
-      ray_query_shadows_{device, depth_format_}, material_pool_(nullptr), sampler_(device),
+      shaders_{device, "shaders/shader.spv"}, tone_map_shaders_{device, "shaders/tone-map.spv"},
+      ray_query_shadows_{device, depth_format_},
+      default_sampler_info_{Sampler::default_create_info(device)},
       white_srgb_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Srgb),
       white_linear_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Linear),
-      flat_normal_(device, {.width = 1, .height = 1}, normal_pixel, TextureColorSpace::Linear),
-      // TODO: capacities here should be re-considered.
-      descriptor_heap_{device, max_materials, max_materials, 100}
+      flat_normal_(device, {.width = 1, .height = 1}, normal_pixel, TextureColorSpace::Linear)
 {
-    std::array const pool_sizes{
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eCombinedImageSampler,
-                               .descriptorCount = 5 * max_materials},
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eUniformBuffer,
-                               .descriptorCount = max_materials}};
-    vk::DescriptorPoolCreateInfo pool_info{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = max_materials,
-    };
-    pool_info.setPoolSizes(pool_sizes);
-    material_pool_ = device.raii().createDescriptorPool(pool_info);
-
-    descriptor_heap_.probe();
 }
 
 FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) const
@@ -119,93 +78,41 @@ FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) con
     if (object_capacity > 65534U) {
         fail("object capacity exceeds 16-bit temporal surface IDs");
     }
-    // Reserve sets for the lazily created preview and HDR tone mapping.
-    std::array const pool_sizes{
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eUniformBuffer,
-                               .descriptorCount = object_capacity + 5},
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eSampledImage, .descriptorCount = 6},
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eAccelerationStructureKHR,
-                               .descriptorCount = 1},
-        vk::DescriptorPoolSize{.type = vk::DescriptorType::eCombinedImageSampler,
-                               .descriptorCount = 1},
+    auto const make_buffer = [&](vk::DeviceSize size) {
+        return GpuBuffer{*device_, size,
+                         vk::BufferUsageFlagBits2::eUniformBuffer |
+                             vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+                         vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
     };
-    vk::DescriptorPoolCreateInfo pool_info{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = object_capacity + 3,
-    };
-    pool_info.setPoolSizes(pool_sizes);
-    auto frame_descriptor_pool = device_.raii().createDescriptorPool(pool_info);
-
-    DescriptorSet globals{device_, frame_descriptor_pool, pipeline_.frame_set_layout(),
-                          Pipeline::frame_bindings};
-    globals.add_uniform(0, sizeof(CameraData));
-    globals.add_uniform(1, sizeof(LightsData));
-    globals.add_uniform(6, sizeof(TemporalShadowData));
-    std::vector<DescriptorSet> objects;
-    objects.reserve(object_capacity);
+    auto heap =
+        std::make_unique<DescriptorHeap>(*device_, 5ULL * object_capacity + 1,
+                                         5ULL * object_capacity + 8, 3ULL * object_capacity + 6);
+    FrameResources result{std::move(heap), make_buffer(sizeof(CameraData)),
+                          make_buffer(sizeof(LightsData)), make_buffer(sizeof(TemporalShadowData)),
+                          make_buffer(sizeof(ToneMapData))};
+    result.camera_index = result.descriptor_cache->buffer(result.camera_buffer);
+    result.lights_index = result.descriptor_cache->buffer(result.lights_buffer);
+    result.pass_data.camera = result.camera_index;
+    result.pass_data.lights = result.lights_index;
+    result.pass_data.temporal = result.descriptor_cache->buffer(result.temporal_buffer);
+    result.pass_data.tone_map = result.descriptor_cache->buffer(result.tone_map_buffer);
+    result.frame_buffers.reserve(object_capacity);
+    result.object_buffers.reserve(object_capacity);
+    result.material_buffers.reserve(object_capacity);
+    result.material_textures.resize(object_capacity);
     for (std::uint32_t i = 0; i < object_capacity; ++i) {
-        objects.emplace_back(device_, frame_descriptor_pool, pipeline_.object_set_layout(),
-                             Pipeline::object_bindings);
-        objects.back().add_uniform(0, sizeof(ObjectData));
+        result.frame_buffers.push_back(make_buffer(sizeof(FrameResources::FrameBufferObject)));
+        result.object_buffers.push_back(make_buffer(sizeof(FrameResources::ObjectBufferObject)));
+        result.material_buffers.push_back(
+            make_buffer(sizeof(FrameResources::MaterialBufferObject)));
+        result.frame_indices.push_back(
+            result.descriptor_cache->buffer(result.frame_buffers.back()));
+        result.object_indices.push_back(
+            result.descriptor_cache->buffer(result.object_buffers.back()));
+        result.material_indices.push_back(
+            result.descriptor_cache->buffer(result.material_buffers.back()));
     }
-    return FrameResources{std::move(frame_descriptor_pool), std::move(globals), std::move(objects)};
-}
-
-GpuMaterial Renderer::make_material(GpuTexture const &texture)
-{
-    return make_material(
-        MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
-                     .base_color = {.texture = &texture}});
-}
-
-GpuMaterial Renderer::make_material(MaterialInfo const &info)
-{
-    if (live_materials_ >= max_materials)
-        fail("material capacity exhausted ({} live materials)", max_materials);
-    auto const &p = info.parameters;
-    auto unit = [](float value) { return std::isfinite(value) && value >= 0.0F && value <= 1.0F; };
-    if (!unit(p.base_color_factor.r) || !unit(p.base_color_factor.g) ||
-        !unit(p.base_color_factor.b) || !unit(p.base_color_factor.a) || !unit(p.metallic_factor) ||
-        !unit(p.roughness_factor) || !unit(p.occlusion_strength) ||
-        !std::isfinite(p.normal_scale) || p.normal_scale < 0.0F ||
-        !std::isfinite(p.emissive_factor.r) || !std::isfinite(p.emissive_factor.g) ||
-        !std::isfinite(p.emissive_factor.b) ||
-        glm::any(glm::lessThan(p.emissive_factor, glm::vec3{0})))
-        fail("invalid PBR material factors");
-    if (info.occlusion.texture)
-        fail("occlusion textures require the IBL milestone");
-    std::array const textures{info.base_color, info.metallic_roughness, info.normal, info.occlusion,
-                              info.emissive};
-    std::array const fallbacks{&white_srgb_, &white_linear_, &flat_normal_, &white_linear_,
-                               &white_srgb_};
-    // Validate before allocating a descriptor set, including slots not yet sampled.
-    for (std::size_t i = 0; i < textures.size(); ++i)
-        if (textures[i].texture &&
-            textures[i].texture->color_space() != fallbacks[i]->color_space())
-            fail("PBR texture slot {} has the wrong color space", i);
-    try {
-        DescriptorSet set{device_, material_pool_, pipeline_.material_set_layout(),
-                          Pipeline::material_bindings};
-        set.add_uniform(1, sizeof(MaterialData));
-        MaterialData const data{
-            p.base_color_factor,
-            glm::vec4{p.emissive_factor, 0.0F},
-            {p.metallic_factor, p.roughness_factor, p.normal_scale, p.occlusion_strength},
-            {info.normal.texture ? 1U : 0U, 0, 0, 0}};
-        set.upload(1, std::as_bytes(std::span{&data, 1}));
-        constexpr std::array bindings{0U, 2U, 3U, 4U, 5U};
-        for (std::size_t i = 0; i < textures.size(); ++i) {
-            auto const *texture = textures[i].texture ? textures[i].texture : fallbacks[i];
-            auto const *sampler = textures[i].sampler ? textures[i].sampler : &sampler_;
-            set.set_image(bindings[i], {.sampler = *sampler->raii(),
-                                        .imageView = *texture->image().view(),
-                                        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal});
-        }
-        return GpuMaterial{std::move(set), live_materials_, info.normal.texture != nullptr};
-    }
-    catch (vk::SystemError const &error) {
-        fail("material creation failed: {}", error.what());
-    }
+    return result;
 }
 
 void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent) const
@@ -220,31 +127,26 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
             // of a combined format even though only depth is attached.
             depth_aspects |= vk::ImageAspectFlagBits::eStencil;
         }
-        resources.depth_image.emplace(device_, depth_format_, extent, 1, samples_,
+        resources.depth_image.emplace(*device_, depth_format_, extent, 1, samples_,
                                       vk::ImageUsageFlagBits::eDepthStencilAttachment,
                                       depth_aspects);
     }
     if (samples_ != vk::SampleCountFlagBits::e1 &&
         (!resources.color_image || resources.color_image->extent() != extent)) {
-        resources.color_image.emplace(device_, hdr_format, extent, 1, samples_,
+        resources.color_image.emplace(*device_, hdr_format, extent, 1, samples_,
                                       vk::ImageUsageFlagBits::eColorAttachment |
                                           vk::ImageUsageFlagBits::eTransientAttachment,
                                       vk::ImageAspectFlagBits::eColor);
     }
     if (!resources.hdr_image || resources.hdr_image->extent() != extent) {
-        // The caller waited this slot's fence; retire its old set before its image.
-        resources.tone_map.reset();
-        resources.hdr_image.emplace(device_, hdr_format, extent, 1, vk::SampleCountFlagBits::e1,
+        // The caller waited this slot's fence before replacing the image.
+        resources.hdr_image.emplace(*device_, hdr_format, extent, 1, vk::SampleCountFlagBits::e1,
                                     vk::ImageUsageFlagBits::eColorAttachment |
                                         vk::ImageUsageFlagBits::eSampled |
                                         vk::ImageUsageFlagBits::eTransferSrc,
                                     vk::ImageAspectFlagBits::eColor);
-        resources.tone_map.emplace(device_, resources.descriptor_pool,
-                                   tone_map_pipeline_.frame_set_layout(),
-                                   Pipeline::tone_map_bindings);
-        resources.tone_map->add_uniform(0, sizeof(ToneMapData));
-        resources.tone_map->set_image(1, {.imageView = *resources.hdr_image->view(),
-                                          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal});
+        resources.pass_data.hdr_image =
+            resources.image_index(resources.hdr_index, *resources.hdr_image);
     }
 }
 
@@ -255,13 +157,24 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
 {
     auto &command_buffer = command_buffer_1.raii();
 
+    validate_draws(resources, target.extent, draws);
+    if (lights.size() > max_num_lights)
+        fail("light count exceeds supported capacity {}", max_num_lights);
+
     if (!std::isfinite(output.exposure) || output.exposure <= 0.0F)
         fail("exposure must be finite and positive");
     if (output.encoding == OutputEncoding::Srgb && color_format_ != vk::Format::eR8G8B8A8Unorm &&
         color_format_ != vk::Format::eB8G8R8A8Unorm)
         fail("manual sRGB output requires an RGBA8/BGRA8 UNORM target");
-    ray_query_shadows_.record(command_buffer, resources, target.extent, camera, lights, draws);
+    ray_query_shadows_.record(command_buffer_1, resources, target.extent, camera, lights, draws);
     ensure_attachments(resources, target.extent);
+    auto &heap = *resources.descriptor_heap;
+    auto const &visibility = *resources.ray_query.visibility;
+    if (resources.shadow_visibility_index)
+        heap.write_image(*resources.shadow_visibility_index, visibility);
+    else
+        resources.shadow_visibility_index = heap.allocate_image(visibility);
+    command_buffer_1.bind_descriptor_heap(heap);
 
     GpuImage const &depth_image = *resources.depth_image;
 
@@ -329,35 +242,89 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
 
     command_buffer.beginRendering(rendering);
 
-    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_.raii());
-    // Set 0 is shared by every draw; sets 1 and 2 select object and material.
-    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 0,
-                                      *resources.ray_query.globals.raii(), nullptr);
+    shaders_.bind(command_buffer);
+    set_graphics_state(
+        command_buffer,
+        {.vertex_input = VertexInput::Mesh, .samples = samples_, .depth_test = true});
     // Render area, viewport and scissor use the same caller-provided extent.
     vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where
     // Vulkan's points down. y moves to the bottom edge to match: with y = 0,
     // the flipped viewport would cover [-height, 0], entirely off-screen.
-    command_buffer.setViewport(0, vk::Viewport{
-                                      .x = 0.0F,
-                                      .y = static_cast<float>(extent.height),
-                                      .width = static_cast<float>(extent.width),
-                                      .height = -static_cast<float>(extent.height),
-                                      .minDepth = 0.0F,
-                                      .maxDepth = 1.0F,
-                                  });
-    command_buffer.setScissor(0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent});
+    command_buffer.setViewportWithCount(vk::Viewport{
+        .x = 0.0F,
+        .y = static_cast<float>(extent.height),
+        .width = static_cast<float>(extent.width),
+        .height = -static_cast<float>(extent.height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F,
+    });
+    command_buffer.setScissorWithCount(vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent});
 
     for (std::size_t i = 0; i < draws.size(); ++i) {
+        // RayQueryShadows already uploaded these object transforms and receiver IDs.
+        auto const &info = *draws[i].material;
+        auto const &p = info.parameters;
+        std::array const textures{info.base_color, info.metallic_roughness, info.normal,
+                                  info.occlusion, info.emissive};
+        std::array const fallbacks{&white_srgb_, &white_linear_, &flat_normal_, &white_linear_,
+                                   &white_srgb_};
+        std::array<HeapIndex, 5> images;
+        std::array<HeapIndex, 5> samplers;
+        for (std::size_t slot = 0; slot < textures.size(); ++slot) {
+            auto const &texture =
+                textures[slot].texture ? *textures[slot].texture : *fallbacks[slot];
+            auto const sampler_info = textures[slot].sampler ? textures[slot].sampler->create_info()
+                                                             : default_sampler_info_;
+            auto &indices = resources.material_textures[i][slot];
+            if (indices.image)
+                heap.write_image(*indices.image, texture.image());
+            else
+                indices.image = heap.allocate_image(texture.image());
+            if (indices.sampler)
+                heap.write_sampler(*indices.sampler, sampler_info);
+            else
+                indices.sampler = heap.allocate_sampler(sampler_info);
+            images[slot] = *indices.image;
+            samplers[slot] = *indices.sampler;
+        }
+        FrameResources::MaterialBufferObject const material_bo{
+            .base_color_factor = p.base_color_factor,
+            .metallic_factor = p.metallic_factor,
+            .roughtness_factor = p.roughness_factor,
+            .base_color_texture_index = images[0],
+            .base_color_texture_sampler_index = samplers[0],
+            .metallic_roughness_texture_index = images[1],
+            .metallic_roughness_texture_sampler_index = samplers[1],
+            .normal_scale = p.normal_scale,
+            .normal_texture_index = images[2],
+            .normal_texture_sampler_index = samplers[2],
+            .occlusion_strength = p.occlusion_strength,
+            .occlusion_texture_index = images[3],
+            .occlusion_texture_sampler_index = samplers[3],
+            .emissive_factor = p.emissive_factor,
+            .emissive_texture_index = images[4],
+            .emissive_texture_sampler_index = samplers[4],
+            .flags = info.normal.texture ? 1U : 0U,
+        };
+        resources.material_buffers[i].upload(std::as_bytes(std::span{&material_bo, 1}));
+        FrameResources::FrameBufferObject const frame_bo{
+            .clear_color = {},
+            .camera_index = resources.camera_index,
+            .lights_index = resources.lights_index,
+            .object_data_index = resources.object_indices[i],
+            .material_index = resources.material_indices[i],
+            .shadow_visibility_index = *resources.shadow_visibility_index,
+        };
+        resources.frame_buffers[i].upload(std::as_bytes(std::span{&frame_bo, 1}));
+        FrameResources::PushData const push_data{.frame_buffer_index = resources.frame_indices[i]};
+        command_buffer_1.push_data(std::span{&push_data, 1});
+
         DrawItem const &item = draws[i];
         // A reflected model reverses winding; callers never need to flip cull mode.
         command_buffer.setFrontFace(glm::determinant(glm::mat3{item.model}) < 0.0F
                                         ? vk::FrontFace::eClockwise
                                         : vk::FrontFace::eCounterClockwise);
-        command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 1,
-                                          *resources.objects[i].raii(), nullptr);
-        command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_.layout(), 2,
-                                          *item.material->descriptor_set(), nullptr);
         item.mesh->draw(command_buffer);
     }
 
@@ -367,29 +334,27 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderSampledRead);
-    tone_map(command_buffer, resources, target, output);
+    tone_map(command_buffer_1, resources, target, output);
 }
 
 void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,
                       RenderTarget const &target, scene::Scene const &scene, OutputSettings output)
 {
-    command_buffer.bind_descriptor_heap(descriptor_heap_);
-
     auto const *camera = scene.active_camera();
     if (!camera)
         fail("cannot render a scene without an active camera");
     record(command_buffer, resources, target, *camera, scene.lights(), scene.draws(), output);
 }
 
-void Renderer::record_shadow_map_preview(vk::raii::CommandBuffer const &command_buffer,
-                                         FrameResources &resources, RenderTarget const &target,
+void Renderer::record_shadow_map_preview(CommandBuffer &command_buffer, FrameResources &resources,
+                                         RenderTarget const &target,
                                          std::span<scene::Light const> lights,
                                          std::span<DrawItem const> draws,
                                          ShadowMapRegion const &region)
 {
     ray_query_shadows_.invalidate_history();
     if (!shadow_map_preview_)
-        shadow_map_preview_.emplace(device_, color_format_);
+        shadow_map_preview_.emplace(*device_);
     shadow_map_preview_->record(command_buffer, resources, target, lights, draws, region);
 }
 

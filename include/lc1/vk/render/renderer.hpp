@@ -5,9 +5,9 @@
 #include "lc1/scene/scene.hpp"
 #include "lc1/vk/core/common.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
+#include "lc1/vk/render/graphics-shaders.hpp"
 #include "lc1/vk/render/material.hpp"
 #include "lc1/vk/render/output-settings.hpp"
-#include "lc1/vk/render/pipeline.hpp"
 #include "lc1/vk/render/ray-query-shadows.hpp"
 #include "lc1/vk/render/render-data.hpp"
 #include "lc1/vk/render/shadow-map-preview.hpp"
@@ -45,8 +45,6 @@ class FpsCamera;
 // Must not outlive the Device it was constructed from.
 class Renderer {
   public:
-    // Maximum simultaneously live materials; the pool is sized once and cannot grow.
-    static constexpr std::uint32_t max_materials = 64;
     static constexpr vk::Format hdr_format = vk::Format::eR16G16B16A16Sfloat;
 
     // Color/depth images are allocated lazily from the target extent in record.
@@ -57,16 +55,9 @@ class Renderer {
     Renderer(Renderer &&) = delete;
     Renderer &operator=(Renderer &&) = delete;
 
-    // Allocates set 2 from this renderer's pool and points it at `texture`.
-    // Here rather than in Material because only the renderer has the pool, the
-    // sampler, and the pipeline whose layout the set must match. Throws once
-    // max_materials sets are live.
-    GpuMaterial make_material(GpuTexture const &texture);
-    GpuMaterial make_material(MaterialInfo const &info);
-
     vk::SampleCountFlagBits sample_count() const { return samples_; }
 
-    // Creates one set of drawing resources with its own descriptor pool. The
+    // Creates one frame slot with its own descriptor heap and buffer cache. The
     // caller decides how many sets to keep and when each is safe to reuse.
     // Capacity counts draws; it is fixed for the lifetime of this resource set.
     FrameResources make_frame_resources(std::uint32_t object_capacity) const;
@@ -87,36 +78,29 @@ class Renderer {
 
     // Separate diagnostic entry point. No ray queries, TLAS updates or temporal
     // passes run here. Returning to normal rendering starts fresh shadow history.
-    void record_shadow_map_preview(vk::raii::CommandBuffer const &command_buffer,
-                                   FrameResources &resources, RenderTarget const &target,
-                                   std::span<scene::Light const> lights,
+    void record_shadow_map_preview(CommandBuffer &command_buffer, FrameResources &resources,
+                                   RenderTarget const &target, std::span<scene::Light const> lights,
                                    std::span<DrawItem const> draws, ShadowMapRegion const &region);
 
   private:
     // The caller has waited for the resources' previous GPU use.
     void ensure_attachments(FrameResources &resources, vk::Extent2D extent) const;
-    void tone_map(vk::raii::CommandBuffer const &commands, FrameResources &resources,
-                  RenderTarget const &target, OutputSettings output) const;
+    void tone_map(CommandBuffer &commands, FrameResources &resources, RenderTarget const &target,
+                  OutputSettings output) const;
 
-    Device const &device_;
+    Device const *device_; // Non-owning, non-null; the device outlives this object.
     vk::Format color_format_;
     vk::Format depth_format_;
     vk::SampleCountFlagBits samples_;
-    Pipeline pipeline_;
-    Pipeline tone_map_pipeline_;
+    GraphicsShaders shaders_;
+    GraphicsShaders tone_map_shaders_;
     RayQueryShadows ray_query_shadows_;
     std::optional<ShadowMapPreview> shadow_map_preview_;
-    // Material sets free themselves back into this pool: the caller must
-    // destroy Materials before this renderer. FrameResources own separate pools.
-    vk::raii::DescriptorPool material_pool_;
-    // Default sampler and fallback textures are borrowed by materials.
-    Sampler sampler_;
+    vk::SamplerCreateInfo default_sampler_info_;
+    // Fallback textures for omitted material slots.
     GpuTexture white_srgb_;
     GpuTexture white_linear_;
     GpuTexture flat_normal_;
-    std::uint32_t live_materials_ = 0;
-
-    DescriptorHeap descriptor_heap_;
 };
 
 } // namespace lc1

@@ -2,8 +2,6 @@ struct TemporalShadowData {
     float4x4 previous_view_projection;
     uint4 frame_info; // valid, sequence, max history frames, light count
 };
-[[vk::binding(6, 0)]]
-ConstantBuffer<TemporalShadowData> temporal;
 
 // xyz contain ten 8-bit light values. z's high 16 bits contain surface identity;
 // w contains receiver motion (raw pass) or history length (temporal resolve).

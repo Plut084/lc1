@@ -1,8 +1,7 @@
+import pass_data;
 struct ToneMapData {
     float4 output; // Exposure, manual sRGB encoding, reserved, reserved.
 };
-[[vk::binding(0, 0)]] ConstantBuffer<ToneMapData> settings;
-[[vk::binding(1, 0)]] Texture2D<float4> hdr_color;
 
 [shader("vertex")]
 float4 vertMain(uint vertex_id : SV_VertexID) : SV_Position
@@ -20,6 +19,9 @@ float3 linear_to_srgb(float3 value)
 [shader("fragment")]
 float4 fragMain(float4 position : SV_Position) : SV_Target
 {
+    ConstantBuffer<ToneMapData> settings = ResourceDescriptorHeap[pass_data.tone_map];
+    Texture2D<float4> hdr_color = ResourceDescriptorHeap[pass_data.hdr_image];
+
     float3 value = max(hdr_color.Load(int3(int2(position.xy), 0)).rgb, float3(0));
     // Equivalent to x/(1+x), also finite if a very large exposure overflows x.
     float3 mapped = 1.0 - 1.0 / (1.0 + value * settings.output.x);

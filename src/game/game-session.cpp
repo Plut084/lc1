@@ -51,14 +51,15 @@ Model make_player_model()
 
 } // namespace
 
-GameSession::GameSession(Device const &device, Renderer &renderer,
-                         std::filesystem::path const &asset_root, OutputSettings output)
+GameSession::GameSession(Device const &device, std::filesystem::path const &asset_root,
+                         OutputSettings output)
     : white_{device, Image::load_from_file(asset_root / "textures/prototype-white.png")},
       continent_{Continent::make_present(demo::PbrShowcase::spawn_blocks())},
-      continent_view_{device, renderer, white_, continent_},
-      showcase_{device, renderer, continent_.spawn()},
+      continent_view_{device, white_, continent_}, showcase_{device, continent_.spawn()},
       player_mesh_{make_player_model().gen_mesh(device)},
-      player_material_{renderer.make_material(white_)},
+      player_material_{
+          MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
+                       .base_color = {.texture = &white_}}},
       player_{continent_,
               {.transform = {.position = continent_.spawn()},
                .mesh = &player_mesh_,

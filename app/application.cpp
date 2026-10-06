@@ -131,11 +131,15 @@ Device make_device(Instance const &instance, Surface const &surface)
 
                 vk::EXTDescriptorHeapExtensionName,
                 vk::KHRShaderUntypedPointersExtensionName,
+
+                vk::EXTShaderObjectExtensionName,
             },
         .features =
             {
                 &vk::PhysicalDeviceFeatures::sampleRateShading,
                 &vk::PhysicalDeviceFeatures::samplerAnisotropy,
+                // Slang loads heap acceleration-structure addresses as 64-bit integers.
+                &vk::PhysicalDeviceFeatures::shaderInt64,
                 &vk::PhysicalDeviceVulkan11Features::shaderDrawParameters,
                 &vk::PhysicalDeviceVulkan12Features::bufferDeviceAddress,
                 &vk::PhysicalDeviceVulkan13Features::synchronization2,
@@ -143,6 +147,9 @@ Device make_device(Instance const &instance, Surface const &surface)
                 &vk::PhysicalDeviceVulkan14Features::maintenance5,
                 &vk::PhysicalDeviceAccelerationStructureFeaturesKHR::accelerationStructure,
                 &vk::PhysicalDeviceRayQueryFeaturesKHR::rayQuery,
+                &vk::PhysicalDeviceDescriptorHeapFeaturesEXT::descriptorHeap,
+                &vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::shaderUntypedPointers,
+                &vk::PhysicalDeviceShaderObjectFeaturesEXT::shaderObject,
             },
     };
     auto devices = filter_physical_devices(instance, requirements);
@@ -187,7 +194,7 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      game_{device_, renderer_, config.asset_root, output_settings(surface_format_.format)},
+      game_{device_, config.asset_root, output_settings(surface_format_.format)},
       frame_loop_{device_,
                   [this] { return renderer_.make_frame_resources(game_.object_capacity()); }}
 {
@@ -375,7 +382,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         };
         command_buffer.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
         vk::RenderingAttachmentInfo const color{
-            .imageView = *target.view,
+            .imageView = **target.view,
             .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
             .loadOp = vk::AttachmentLoadOp::eLoad,
             .storeOp = vk::AttachmentStoreOp::eStore,
@@ -409,6 +416,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         // Build the UI here.
+        ImGui::Text("fps: %.2f", stopwatch.fps());
         ImGui::Text("position: %.2f, %.2f, %.2f", game_.camera().position().x,
                     game_.camera().position().y, game_.camera().position().z);
         ImGui::Render();

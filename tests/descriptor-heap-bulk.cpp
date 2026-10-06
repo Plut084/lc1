@@ -2,10 +2,11 @@
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
+#include "lc1/vk/render/graphics-shaders.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/resources/descriptor-heap.hpp"
 #include "lc1/vk/resources/gpu-buffer.hpp"
 #include "lc1/vk/resources/gpu-image.hpp"
-#include "lc1/vk/resources/shader-stages.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <numeric>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -56,14 +58,15 @@ lc1::Device make_device(lc1::Instance const &instance)
     lc1::DeviceRequirements const requirements{
         .vulkan_version = vk::ApiVersion14,
         .extensions = {vk::EXTDescriptorHeapExtensionName,
-                       vk::KHRShaderUntypedPointersExtensionName},
+                       vk::KHRShaderUntypedPointersExtensionName, vk::EXTShaderObjectExtensionName},
         .features = {&vk::PhysicalDeviceVulkan11Features::shaderDrawParameters,
                      &vk::PhysicalDeviceVulkan12Features::bufferDeviceAddress,
                      &vk::PhysicalDeviceVulkan13Features::dynamicRendering,
                      &vk::PhysicalDeviceVulkan13Features::synchronization2,
                      &vk::PhysicalDeviceVulkan14Features::maintenance5,
                      &vk::PhysicalDeviceDescriptorHeapFeaturesEXT::descriptorHeap,
-                     &vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::shaderUntypedPointers},
+                     &vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::shaderUntypedPointers,
+                     &vk::PhysicalDeviceShaderObjectFeaturesEXT::shaderObject},
     };
     for (auto &physical : lc1::filter_physical_devices(instance, requirements)) {
         if (physical.getProperties().deviceType == vk::PhysicalDeviceType::eCpu)
@@ -82,51 +85,10 @@ lc1::Device make_device(lc1::Instance const &instance)
     lc1::fail("bulk heap test requires a non-CPU Vulkan 1.4 device with descriptor heap support");
 }
 
-vk::raii::Pipeline make_pipeline(lc1::Device const &device, char const *fragment_entry)
-{
-    auto shader =
-        lc1::ShaderModule::load_from_file(device, "shaders/descriptor-heap-bulk-test.spv");
-    lc1::ShaderStages stages;
-    stages.append(vk::ShaderStageFlagBits::eVertex, shader, "vertMain");
-    stages.append(vk::ShaderStageFlagBits::eFragment, shader, fragment_entry);
-    vk::PipelineVertexInputStateCreateInfo const vertex_input{};
-    vk::PipelineInputAssemblyStateCreateInfo const assembly{
-        .topology = vk::PrimitiveTopology::eTriangleList};
-    vk::PipelineViewportStateCreateInfo const viewport{.viewportCount = 1, .scissorCount = 1};
-    vk::PipelineRasterizationStateCreateInfo const raster{.polygonMode = vk::PolygonMode::eFill,
-                                                          .cullMode = vk::CullModeFlagBits::eNone,
-                                                          .lineWidth = 1};
-    vk::PipelineMultisampleStateCreateInfo const samples{.rasterizationSamples =
-                                                             vk::SampleCountFlagBits::e1};
-    vk::PipelineColorBlendAttachmentState const attachment{
-        .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
-    vk::PipelineColorBlendStateCreateInfo blend;
-    blend.setAttachments(attachment);
-    std::array const dynamic_states{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-    vk::PipelineDynamicStateCreateInfo dynamic;
-    dynamic.setDynamicStates(dynamic_states);
-    vk::PipelineRenderingCreateInfo rendering;
-    rendering.setColorAttachmentFormats(format);
-    vk::PipelineCreateFlags2CreateInfo const flags{
-        .pNext = &rendering, .flags = vk::PipelineCreateFlagBits2::eDescriptorHeapEXT};
-    vk::GraphicsPipelineCreateInfo info{.pNext = &flags,
-                                        .pVertexInputState = &vertex_input,
-                                        .pInputAssemblyState = &assembly,
-                                        .pViewportState = &viewport,
-                                        .pRasterizationState = &raster,
-                                        .pMultisampleState = &samples,
-                                        .pColorBlendState = &blend,
-                                        .pDynamicState = &dynamic,
-                                        .layout = nullptr};
-    info.setStages(stages.value());
-    return device.raii().createGraphicsPipeline(nullptr, info);
-}
-
 // Each call finishes GPU use before returning, including before an assertion fails.
 // The next epoch may therefore update input buffers without touching an in-flight read.
 template <class Bind, class Draw, class Expected>
-void verify_pixels(lc1::Device const &device, vk::raii::Pipeline const &pipeline,
+void verify_pixels(lc1::Device const &device, lc1::GraphicsShaders const &shaders,
                    vk::Extent2D extent, Bind bind, Draw draw, Expected expected,
                    std::string_view label)
 {
@@ -164,12 +126,16 @@ void verify_pixels(lc1::Device const &device, vk::raii::Pipeline const &pipeline
     commands.beginRendering(
         vk::RenderingInfo{.renderArea = {.extent = extent}, .layerCount = 1}.setColorAttachments(
             color));
-    commands.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
-    commands.setViewport(0, vk::Viewport{.width = static_cast<float>(extent.width),
-                                         .height = static_cast<float>(extent.height),
-                                         .maxDepth = 1});
-    commands.setScissor(0, vk::Rect2D{.extent = extent});
-    draw(commands);
+    shaders.bind(commands);
+    lc1::set_graphics_state(commands);
+    commands.setViewportWithCount(vk::Viewport{.width = static_cast<float>(extent.width),
+                                               .height = static_cast<float>(extent.height),
+                                               .maxDepth = 1});
+    commands.setScissorWithCount(vk::Rect2D{.extent = extent});
+    if constexpr (std::is_invocable_v<Draw, lc1::CommandBuffer &>)
+        draw(command_buffer);
+    else
+        draw(commands);
     commands.endRendering();
     output.transition_layout(commands, vk::ImageLayout::eColorAttachmentOptimal,
                              vk::ImageLayout::eTransferSrcOptimal,
@@ -210,7 +176,8 @@ void test_uniform(lc1::Device const &device)
     constexpr vk::DeviceSize uniform_bytes = row_width * sizeof(Record);
     if (device.raii_physical().getProperties().limits.maxUniformBufferRange < uniform_bytes)
         lc1::fail("test requires a 16 KiB uniform buffer range");
-    auto pipeline = make_pipeline(device, "uniformMain");
+    lc1::GraphicsShaders shaders{device, "shaders/descriptor-heap-bulk-test.spv", "vertMain",
+                                 "uniformMain"};
     std::vector<lc1::GpuBuffer> buffers;
     buffers.reserve(buffer_count);
     // Nonzero image capacity exercises the buffer partition's offset as well.
@@ -242,16 +209,17 @@ void test_uniform(lc1::Device const &device)
             buffers[i].upload(std::as_bytes(std::span{records}));
         }
         verify_pixels(
-            device, pipeline, {row_width, buffer_count},
+            device, shaders, {row_width, buffer_count},
             [&](lc1::CommandBuffer &commands) { commands.bind_descriptor_heap(heap); },
-            [&](vk::raii::CommandBuffer &commands) {
+            [&](lc1::CommandBuffer &wrapped) {
+                auto &commands = wrapped.raii();
                 for (std::uint32_t y = 0; y < buffer_count; ++y) {
                     auto const buffer = (y * 73 + 11) & (buffer_count - 1);
                     PushData const push{indices[buffer], (y * 13 + 7) & (row_width - 1),
                                         row_width - 1, row_width};
-                    heap.push_data(commands, std::span{&push, 1});
-                    commands.setScissor(0, vk::Rect2D{.offset = {0, static_cast<std::int32_t>(y)},
-                                                      .extent = {row_width, 1}});
+                    wrapped.push_data(std::span{&push, 1});
+                    commands.setScissorWithCount(vk::Rect2D{
+                        .offset = {0, static_cast<std::int32_t>(y)}, .extent = {row_width, 1}});
                     commands.draw(3, 1, 0, 0);
                 }
             },
@@ -312,7 +280,8 @@ void test_storage(lc1::Device const &device)
                       .size = stride});
         resource_heap.flush(offset, stride);
     }
-    auto pipeline = make_pipeline(device, "storageMain");
+    lc1::GraphicsShaders shaders{device, "shaders/descriptor-heap-bulk-test.spv", "vertMain",
+                                 "storageMain"};
     auto bind = [&](lc1::CommandBuffer &commands) {
         commands.raii().bindResourceHeapEXT(
             {.heapRange = {.address = resource_heap.device_address(), .size = resource_heap.size()},
@@ -337,7 +306,7 @@ void test_storage(lc1::Device const &device)
             auto const base = view == 0 ? 0U : record_count / 2;
             PushData const push{shader_index(first_slot + view), 137, count - 1, row_width};
             verify_pixels(
-                device, pipeline, {row_width, count / row_width}, bind,
+                device, shaders, {row_width, count / row_width}, bind,
                 [&](vk::raii::CommandBuffer &commands) {
                     commands.pushDataEXT({.data = {.address = &push, .size = sizeof(push)}});
                     commands.draw(3, 1, 0, 0);

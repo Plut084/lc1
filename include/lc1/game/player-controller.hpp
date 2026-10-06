@@ -16,21 +16,23 @@ struct PlayerInput {
 
 class FirstPersonCharacterController {
   public:
-    explicit FirstPersonCharacterController(Continent const &continent) : continent_(continent) {}
+    explicit FirstPersonCharacterController(Continent const &continent) : continent_(&continent) {}
+
     void update(float delta_seconds, PlayerInput const &input, Character &character) const;
 
   private:
-    Continent const &continent_; // Borrowed; the world outlives this controller.
+    Continent const *continent_; // Borrowed; the world outlives this controller.
 };
 
 class ThirdPersonCharacterController {
   public:
-    explicit ThirdPersonCharacterController(Continent const &continent) : continent_(continent) {}
+    explicit ThirdPersonCharacterController(Continent const &continent) : continent_(&continent) {}
+
     void update(float delta_seconds, PlayerInput const &input, glm::vec3 view_heading,
                 Character &character) const;
 
   private:
-    Continent const &continent_; // Borrowed; the world outlives this controller.
+    Continent const *continent_; // Borrowed; the world outlives this controller.
 };
 
 } // namespace lc1

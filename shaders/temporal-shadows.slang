@@ -1,9 +1,6 @@
+import pass_data;
 import shadow_values;
 
-[[vk::binding(5, 0)]] Texture2D<uint4> current_visibility;
-[[vk::binding(7, 0)]] Texture2D<float4> current_surface;
-[[vk::binding(8, 0)]] Texture2D<uint4> history_visibility;
-[[vk::binding(9, 0)]] Texture2D<float4> history_surface;
 
 [shader("vertex")]
 float4 temporalVert(uint id : SV_VertexID) : SV_Position
@@ -15,6 +12,12 @@ float4 temporalVert(uint id : SV_VertexID) : SV_Position
 [shader("fragment")]
 ShadowOutput temporalFrag(float4 position : SV_Position)
 {
+    ConstantBuffer<TemporalShadowData> temporal = ResourceDescriptorHeap[pass_data.temporal];
+    Texture2D<uint4> current_visibility = ResourceDescriptorHeap[pass_data.current_visibility];
+    Texture2D<float4> current_surface = ResourceDescriptorHeap[pass_data.current_surface];
+    Texture2D<uint4> history_visibility = ResourceDescriptorHeap[pass_data.history_visibility];
+    Texture2D<float4> history_surface = ResourceDescriptorHeap[pass_data.history_surface];
+
     int2 pixel = int2(position.xy);
     uint4 current = current_visibility.Load(int3(pixel, 0));
     float4 surface = current_surface.Load(int3(pixel, 0));
@@ -31,7 +34,7 @@ ShadowOutput temporalFrag(float4 position : SV_Position)
     uint width, height;
     current_visibility.GetDimensions(width, height);
     int2 dimensions = int2(width, height);
-    float4 clip = mul(temporal.previous_view_projection, float4(surface.xyz, 1));
+    float4 clip = (temporal.previous_view_projection[0] * surface.x + temporal.previous_view_projection[1] * surface.y + temporal.previous_view_projection[2] * surface.z + temporal.previous_view_projection[3]);
     if (clip.w <= 0.0)
         return output;
     float3 projected = clip.xyz / clip.w;

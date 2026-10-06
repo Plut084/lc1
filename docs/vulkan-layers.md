@@ -6,9 +6,9 @@ Vulkan 调用继续使用 `vk::raii`；目录分层不改变资源所有权、�
 | 目录 | 职责 | 代表类型与文件 |
 |---|---|---|
 | `core/` | Vulkan 绑定配置、loader、实例与设备创建、分配器、一次性提交 | `VulkanLoader`、`Instance`、`Device`、`memory.hpp` |
-| `resources/` | GPU 存储、上传、描述符、shader module 与图像屏障 | `GpuBuffer`、`GpuImage`、`GpuTexture`、`GpuMesh`、`AccelerationStructure`、`DescriptorSet`、`RenderTarget` |
+| `resources/` | GPU 存储、上传、描述符、shader object 与图像屏障 | `GpuBuffer`、`GpuImage`、`GpuTexture`、`GpuMesh`、`AccelerationStructure`、`DescriptorHeap` / `DescriptorHeapCache`、`ShaderObject`、`RenderTarget` |
 | `presentation/` | 窗口表面、交换链策略、acquire/submit/present、帧槽同步 | `Surface`、`Swapchain`、`FrameLoop`、`swapchain-policy.hpp` |
-| `render/` | 具体渲染算法、shader 接口、材质和绘制数据 | `Renderer`、`Pipeline`、`GpuMaterial`、`DrawItem`、`FrameResources`、阴影与色调映射 |
+| `render/` | 具体渲染算法、shader 接口、材质和绘制数据 | `Renderer`、`GraphicsShaders`、`GraphicsState`、`MaterialInfo`、`DrawItem`、`FrameResources`、阴影与色调映射 |
 
 ## 依赖方向
 
@@ -44,8 +44,10 @@ flowchart TD
 两者共享的 `RenderTarget` 只是非拥有的输出 image view 与 extent，放在 `resources`；
 曝光和输出编码策略单独放在 `render/output-settings.hpp`。
 
-`Pipeline` 包含 Lit、Shadow、ToneMap 等路径及固定 descriptor 布局，属于具体渲染层。
-通用 `ShaderModule` 和 `ShaderStages` 属于资源层。shader 文件读取留在资源实现内部。
+`Pipeline`、`ShaderModule` 和 `ShaderStages` 已删除。通用 `ShaderObject` 在资源层读取
+SPIR-V 并持有 `vk::raii::ShaderEXT`；渲染层的 `GraphicsShaders` 管理各 pass 的顶点/可选
+片元阶段，`set_graphics_state` 记录固定功能的动态状态。shader 的 GPU 使用结束后才能销毁。
+具体状态与逐采样约定见 [shader object](shader-objects.md)。
 交换链 extent 选择位于 `presentation/swapchain-policy.*`，图像屏障位于
 `resources/image-barrier.*`，`core/common.*` 只保留绑定配置与通用 Vulkan 诊断。
 

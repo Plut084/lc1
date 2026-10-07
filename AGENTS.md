@@ -115,7 +115,9 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   define `VULKAN_HPP_NO_SETTERS`.
 - Use `fail()`/`lc1::Error` for project diagnostics; add no subclasses or parallel error-code/out-param
   scheme. Let `vk::SystemError` carry Vulkan diagnostics; wrapping every call is unnecessary.
-  `main` catches both `lc1::Error` and `std::exception`; no exception may escape it.
+  `main` catches both `lc1::Error` and `std::exception`. Preserve the user's intentional Debug
+  `throw;` in both handlers after logging; Release returns `EXIT_FAILURE`. Do not remove these
+  rethrows to suppress `terminate` diagnostics.
 - World space is right-handed, Y up. glTF needs no axis conversion; Z-up tutorial/OBJ data does
   (the tutorial room needs −90° about X). Use negative viewport height with `y = height` for Vulkan
   clip Y. Keep back-face culling: dynamic front face is clockwise for negative model determinant,
@@ -228,17 +230,15 @@ The following frame-loop invariants must survive refactoring:
   Shadows, temporal history and filtering use the unperturbed surface normal.
 - Meshes own BLASes; each frame slot owns TLAS/build inputs/scratch, updated only after its fence
   and reused when unchanged. Copy GLM transforms into Vulkan's row-major 3×4 layout correctly.
-  Off-camera casters still participate. Both shadow paths honor `casts_shadow`; labels opt out.
+  Off-camera casters still participate. Ray-query shadows honor `casts_shadow`; labels opt out.
 - Shadow rays run in a separate single-sample pass, not once per MSAA sample. Local lights use
   unbounded inverse-square attenuation; do not add range/cutoff. Sphere lights use a receiver-facing
   disk approximation (radius zero is point light), normally one ray/frame and up to 32 history frames.
 - Temporal history belongs to Renderer-owned `RayQueryShadows` and spans submissions; resizing
   waits for all GPU work, not just a slot fence. Reject moving/disoccluded receivers. Never feed
   spatially filtered visibility back into temporal history. Object motion vectors are not implemented.
-- `record_shadow_map_preview` is a separate, lazy diagnostic with explicit `ShadowMapRegion`;
-  normal `record` and the app have no preview flag/toggle. Preview runs no TLAS update, temporal
-  resolve or main-pass depth/MSAA allocation. Push each pass's resource indices and invalidate
-  history on returning to normal rendering. See [shadow paths](docs/ray-query-shadows.md).
+- Push each pass's resource indices explicitly. The renderer uses ray-query shadows; the old
+  shadow-map preview diagnostic has been removed. See [ray-query shadows](docs/ray-query-shadows.md).
 
 ## Input contracts
 

@@ -4,10 +4,9 @@
 
 #include <spdlog/spdlog.h>
 
-namespace lc1 {
-
-vk::Format find_supported_format(Device const &device, std::vector<vk::Format> const &candidates,
-                                 vk::ImageTiling tiling, vk::FormatFeatureFlags features)
+vk::Format lc1::find_supported_format(Device const &device,
+                                      std::vector<vk::Format> const &candidates,
+                                      vk::ImageTiling tiling, vk::FormatFeatureFlags features)
 {
     for (auto const format : candidates) {
         vk::FormatProperties props = device.raii_physical().getFormatProperties(format);
@@ -22,6 +21,8 @@ vk::Format find_supported_format(Device const &device, std::vector<vk::Format> c
 
     fail("failed to find supported format");
 }
+
+namespace lc1 {
 
 vk::Format find_depth_format(Device const &device)
 {

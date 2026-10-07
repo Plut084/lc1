@@ -9,9 +9,6 @@ struct PassData {
     uint history_visibility;
     uint history_surface;
     uint resolved_visibility;
-    uint shadow;
-    uint shadow_image;
-    uint sampler;
     uint tone_map;
     uint hdr_image;
 };

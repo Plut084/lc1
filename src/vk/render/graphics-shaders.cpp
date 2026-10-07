@@ -1,5 +1,7 @@
 #include "lc1/vk/render/graphics-shaders.hpp"
 
+#include "lc1/vk/resources/command-buffer.hpp"
+
 #include <array>
 
 namespace lc1 {
@@ -15,7 +17,7 @@ GraphicsShaders::GraphicsShaders(Device const &device, std::filesystem::path con
                                                        vk::ShaderStageFlagBits::eFragment));
 }
 
-void GraphicsShaders::bind(vk::raii::CommandBuffer const &commands) const
+void GraphicsShaders::bind_to_command_buffer(CommandBuffer &commands) const
 {
     // Explicitly clear unused stages on every pass switch, including fragment
     // for depth-only rendering. No mesh/task shader features are enabled.
@@ -25,7 +27,7 @@ void GraphicsShaders::bind(vk::raii::CommandBuffer const &commands) const
         vk::ShaderStageFlagBits::eFragment};
     std::array<vk::ShaderEXT, 5> const shaders{
         *vertex_.raii(), {}, {}, {}, fragment_ ? *fragment_->raii() : vk::ShaderEXT{}};
-    commands.bindShadersEXT(stages, shaders);
+    commands.bind_shaders(stages, shaders);
 }
 
 } // namespace lc1

@@ -4,24 +4,6 @@
 
 namespace lc1 {
 
-GpuBuffer::GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags usage,
-                     vma::AllocationCreateFlags allocation_flags)
-    : buffer_{device.allocator().createBuffer(
-          {
-              .size = size,
-              .usage = usage,
-              .sharingMode = vk::SharingMode::eExclusive,
-          },
-          {
-              .flags = allocation_flags,
-              // VMA picks the memory type from usage and flags: DEVICE_LOCAL
-              // for GPU-only buffers, HOST_VISIBLE when the CPU writes.
-              .usage = vma::MemoryUsage::eAuto,
-          })},
-      size_{size}
-{
-}
-
 GpuBuffer::GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags2 usage,
                      vma::AllocationCreateFlags allocation_flags, vk::DeviceSize min_alignment)
     : buffer_{[&] {

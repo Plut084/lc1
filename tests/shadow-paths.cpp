@@ -1,13 +1,15 @@
+#include "render-device.hpp"
+
 #include "lc1/image.hpp"
 #include "lc1/scene/camera.hpp"
 #include "lc1/scene/lights/directional-light.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/presentation/surface.hpp"
 #include "lc1/vk/render/renderer.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 #include "lc1/window.hpp"
 
 #include <algorithm>
@@ -23,13 +25,11 @@ void check(bool condition, char const *message)
         throw std::runtime_error(message);
 }
 
-enum class View { Lit, ShadowMapDepth };
-
 // Exercise actual draw calls and shader reads, not just pipeline construction.
 std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &renderer,
                                  lc1::FrameResources &frame, lc1::scene::FpsCamera &camera,
                                  std::span<lc1::scene::Light const> lights,
-                                 std::span<lc1::DrawItem const> draws, View view,
+                                 std::span<lc1::DrawItem const> draws,
                                  vk::Extent2D extent = {64, 64})
 {
     lc1::GpuImage output{device,
@@ -53,11 +53,7 @@ std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &rende
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                  vk::AccessFlagBits2::eColorAttachmentWrite);
         lc1::RenderTarget const target{&output.view(), extent};
-        if (view == View::Lit)
-            renderer.record(wrapped, frame, target, camera, lights, draws);
-        else
-            renderer.record_shadow_map_preview(wrapped, frame, target, lights, draws,
-                                               {.center = {0, 0, 0}, .half_extent = 4.0F});
+        renderer.record(wrapped, frame, target, camera, lights, draws);
         output.transition_layout(commands, vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::ImageLayout::eTransferSrcOptimal,
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -107,53 +103,37 @@ void exercise(lc1::Device const &device)
     camera.set_position({0, 4, 5});
     camera.look_at({0, 0, 0});
     auto normal_frame = renderer.make_frame_resources(1);
-    auto preview_frame = renderer.make_frame_resources(1);
+    auto second_frame = renderer.make_frame_resources(1);
 
-    // A fresh preview slot must bind only its own descriptors. Starting here
-    // catches accidental dependence on a previous ray-query frame's setup.
-    auto const preview =
-        render(device, renderer, preview_frame, camera, lights, draws, View::ShadowMapDepth);
-    check(preview_frame.shadow_map.has_value(), "preview did not allocate its depth map");
-    check(!preview_frame.ray_query.scene && !preview_frame.ray_query.visibility &&
-              !preview_frame.depth_image && !preview_frame.color_image,
-          "preview allocated ray-query or main-pass attachments");
-    auto const [dark, bright] = std::minmax_element(preview.begin(), preview.end());
-    check(*dark < 200 && *bright == 255, "depth preview contains no rendered geometry");
-    for (std::size_t i = 0; i < preview.size(); i += 4)
-        check(preview[i] == preview[i + 1] && preview[i] == preview[i + 2],
-              "depth preview must be grayscale");
-
-    auto const first_lit = render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
-    check(!normal_frame.shadow_map, "normal rendering allocated the legacy depth map");
+    auto const first_lit = render(device, renderer, normal_frame, camera, lights, draws);
     check(normal_frame.ray_query.scene && normal_frame.ray_query.visibility,
           "normal rendering did not prepare ray-query resources");
-    check(first_lit != preview, "normal rendering still displays the legacy preview");
+    check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
+          "fresh frame slot changed a static hard-lit scene");
 
-    // Switch both ways on both slots, resize while previewing, then return to
-    // ray-query rendering. Validation checks descriptors, layouts and lifetimes.
-    render(device, renderer, preview_frame, camera, lights, draws, View::Lit);
-    render(device, renderer, normal_frame, camera, lights, draws, View::ShadowMapDepth, {96, 48});
-    auto const resumed = render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
-    check(resumed == first_lit, "returning from preview changed a static hard-lit scene");
-    // Printed labels can render without entering either shadow-caster path.
-    // Also exercise an empty TLAS and invalidate history when caster membership changes.
+    // Printed labels remain visible without entering the shadow-caster path.
+    // Exercise an empty TLAS and invalidate history when caster membership changes.
     draws[0].casts_shadow = false;
-    auto const no_caster = render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
+    auto const no_caster = render(device, renderer, normal_frame, camera, lights, draws);
     check(no_caster == first_lit && normal_frame.ray_query.built_instances.empty(),
           "non-caster must remain visible without entering the TLAS");
-    auto const empty_preview =
-        render(device, renderer, preview_frame, camera, lights, draws, View::ShadowMapDepth);
-    check(std::ranges::all_of(empty_preview, [](auto value) { return value == 255; }),
-          "non-caster must not appear in the depth preview");
     draws[0].casts_shadow = true;
-    render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
+    render(device, renderer, normal_frame, camera, lights, draws);
     check(normal_frame.ray_query.built_instances.size() == 1, "caster must rejoin the TLAS");
-    render(device, renderer, preview_frame, camera, lights, draws, View::Lit, {96, 48});
-    render(device, renderer, normal_frame, camera, lights, draws, View::Lit, {96, 48});
-    render(device, renderer, preview_frame, camera, {}, draws, View::ShadowMapDepth);
+
+    // Resize both slots, then restore the original extent. Each render waits for
+    // completion, so shared temporal resources are idle before resizing.
+    auto const resized = render(device, renderer, second_frame, camera, lights, draws, {96, 48});
+    check(render(device, renderer, normal_frame, camera, lights, draws, {96, 48}) == resized,
+          "resized frame slots produced different static images");
+    check(render(device, renderer, normal_frame, camera, lights, draws) == first_lit,
+          "resizing changed a static hard-lit scene");
+    check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
+          "restoring the second frame slot changed a static hard-lit scene");
+
+    // Reflect the symmetric ground plane to exercise winding and BLAS transforms.
     draws[0].model = glm::scale(glm::mat4{1}, glm::vec3{-1, 1, 1});
-    render(device, renderer, normal_frame, camera, lights, draws, View::ShadowMapDepth);
-    render(device, renderer, normal_frame, camera, lights, draws, View::Lit);
+    render(device, renderer, normal_frame, camera, lights, draws);
 
     // An elevated patch casts a visible shadow on the ground. Toggling only its
     // caster membership must change pixels, catching a missing/incorrect TLAS lookup.
@@ -167,10 +147,10 @@ void exercise(lc1::Device const &device)
             .casts_shadow = false},
     };
     auto const unshadowed =
-        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit);
+        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws);
     occlusion_draws[1].casts_shadow = true;
     auto const shadowed =
-        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit);
+        render(device, renderer, occlusion_frame, camera, lights, occlusion_draws);
     std::size_t darker_pixels = 0;
     for (std::size_t i = 0; i < shadowed.size(); i += 4) {
         int const before = unshadowed[i] + unshadowed[i + 1] + unshadowed[i + 2];
@@ -180,8 +160,7 @@ void exercise(lc1::Device const &device)
     }
     check(darker_pixels > 10, "TLAS occluder did not produce a visible ray-query shadow");
     occlusion_draws[1].casts_shadow = false;
-    check(render(device, renderer, occlusion_frame, camera, lights, occlusion_draws, View::Lit) ==
-              unshadowed,
+    check(render(device, renderer, occlusion_frame, camera, lights, occlusion_draws) == unshadowed,
           "removing the TLAS occluder did not restore the unshadowed image");
     device.wait_idle();
 }
@@ -199,9 +178,9 @@ int main()
         lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, *surface.raii()};
+        auto device = lc1::test::make_render_device(instance, *surface.raii());
         exercise(device);
-        std::cout << "shadow path isolation, switching, resize and rendering passed\n";
+        std::cout << "ray-query caster changes, frame slots, resize and rendering passed\n";
     }
     catch (std::exception const &error) {
         std::cerr << error.what() << '\n';

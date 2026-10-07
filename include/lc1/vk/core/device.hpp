@@ -5,21 +5,16 @@
 #include "lc1/vk/core/physical-device.hpp"
 
 #include <cstdint>
-#include <map>
-#include <span>
 
 namespace lc1 {
 
 class Instance;
 
-// Selected GPU, logical device, allocator and the single graphics+present queue.
-// Instance must outlive this object. The surface handle is non-owning and must
-// remain valid during construction; it is neither retained nor destroyed here.
+// Selected GPU, logical device, allocator and queue.
+// Instance must outlive this object. The caller selects the physical device and
+// queue family and verifies support for the requested features and extensions.
 class Device {
   public:
-    Device(Instance const &instance, vk::SurfaceKHR surface,
-           std::span<char const *const> required_extensions = {});
-
     Device(Instance const &instance, vk::raii::PhysicalDevice physical, std::uint32_t queue_family,
            DeviceRequirements const &requirements);
 
@@ -31,8 +26,11 @@ class Device {
 
     // Non-owning; valid only while this Device is.
     vk::raii::PhysicalDevice const &raii_physical() const { return physical_; }
+
     vk::raii::Device const &raii() const { return device_; }
+
     MemoryAllocator const &allocator() const { return alloc_; }
+
     vk::raii::Queue const &raii_queue() const { return queue_; }
 
     vk::SampleCountFlagBits max_sample_count() const;

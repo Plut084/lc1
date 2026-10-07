@@ -1,14 +1,14 @@
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/render/graphics-shaders.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include "lc1/vk/resources/descriptor-heap-cache.hpp"
 #include "lc1/vk/resources/gpu-buffer.hpp"
 #include "lc1/vk/resources/gpu-image.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -180,7 +180,7 @@ void run(lc1::Device const &device)
             .clearValue = vk::ClearValue{vk::ClearColorValue{std::array{0.F, 0.F, 0.F, 1.F}}}};
         commands.beginRendering(vk::RenderingInfo{.renderArea = {.extent = extent}, .layerCount = 1}
                                     .setColorAttachments(color));
-        shaders.bind(commands);
+        shaders.bind_to_command_buffer(command_buffer);
         lc1::set_graphics_state(commands);
         commands.setViewportWithCount(vk::Viewport{.width = 256, .height = 256, .maxDepth = 1});
         commands.setScissorWithCount(vk::Rect2D{.extent = extent});
@@ -326,7 +326,7 @@ void sample_shading_test(lc1::Device const &device)
                                                     : vk::SampleCountFlagBits::e1);
             commands.setSampleMaskEXT(samples, vk::SampleMask{0});
             commands.setColorWriteMaskEXT(0, vk::ColorComponentFlags{});
-            shaders.bind(commands);
+            shaders.bind_to_command_buffer(wrapped);
             lc1::set_graphics_state(commands, {.samples = samples});
             commands.setViewportWithCount(vk::Viewport{.width = 8, .height = 8, .maxDepth = 1});
             commands.setScissorWithCount(vk::Rect2D{.extent = size});

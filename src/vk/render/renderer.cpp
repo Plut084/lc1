@@ -2,8 +2,8 @@
 #include "draw-validation.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
 
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
 
 #include <algorithm>
@@ -63,7 +63,9 @@ Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_at
                    vk::SampleCountFlagBits samples)
     : device_{&device}, color_format_{single_color_format(color_attachment_formats)},
       depth_format_{find_depth_format(device)},
-      samples_{hdr_sample_count(device, depth_format_, samples)},
+      main_state_{.vertex_input = VertexInput::Mesh,
+                  .samples = hdr_sample_count(device, depth_format_, samples),
+                  .depth_test = true},
       shaders_{device, "shaders/shader.spv"}, tone_map_shaders_{device, "shaders/tone-map.spv"},
       ray_query_shadows_{device, depth_format_},
       default_sampler_info_{Sampler::default_create_info(device)},
@@ -127,13 +129,13 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
             // of a combined format even though only depth is attached.
             depth_aspects |= vk::ImageAspectFlagBits::eStencil;
         }
-        resources.depth_image.emplace(*device_, depth_format_, extent, 1, samples_,
+        resources.depth_image.emplace(*device_, depth_format_, extent, 1, main_state_.samples,
                                       vk::ImageUsageFlagBits::eDepthStencilAttachment,
                                       depth_aspects);
     }
-    if (samples_ != vk::SampleCountFlagBits::e1 &&
+    if (main_state_.samples != vk::SampleCountFlagBits::e1 &&
         (!resources.color_image || resources.color_image->extent() != extent)) {
-        resources.color_image.emplace(*device_, hdr_format, extent, 1, samples_,
+        resources.color_image.emplace(*device_, hdr_format, extent, 1, main_state_.samples,
                                       vk::ImageUsageFlagBits::eColorAttachment |
                                           vk::ImageUsageFlagBits::eTransientAttachment,
                                       vk::ImageAspectFlagBits::eColor);
@@ -150,12 +152,11 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
     }
 }
 
-void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources,
-                      RenderTarget const &target, scene::FpsCamera const &camera,
-                      std::span<scene::Light const> lights, std::span<DrawItem const> draws,
-                      OutputSettings output)
+void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarget const &target,
+                      scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                      std::span<DrawItem const> draws, OutputSettings output)
 {
-    auto &command_buffer = command_buffer_1.raii();
+    auto &command_buffer = cmd.raii();
 
     validate_draws(resources, target.extent, draws);
     if (lights.size() > max_num_lights)
@@ -166,7 +167,8 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
     if (output.encoding == OutputEncoding::Srgb && color_format_ != vk::Format::eR8G8B8A8Unorm &&
         color_format_ != vk::Format::eB8G8R8A8Unorm)
         fail("manual sRGB output requires an RGBA8/BGRA8 UNORM target");
-    ray_query_shadows_.record(command_buffer_1, resources, target.extent, camera, lights, draws);
+
+    ray_query_shadows_.record(cmd, resources, target.extent, camera, lights, draws);
     ensure_attachments(resources, target.extent);
     auto &heap = *resources.descriptor_heap;
     auto const &visibility = *resources.ray_query.visibility;
@@ -174,7 +176,7 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
         heap.write_image(*resources.shadow_visibility_index, visibility);
     else
         resources.shadow_visibility_index = heap.allocate_image(visibility);
-    command_buffer_1.bind_descriptor_heap(heap);
+    cmd.bind_descriptor_heap(heap);
 
     GpuImage const &depth_image = *resources.depth_image;
 
@@ -242,10 +244,8 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
 
     command_buffer.beginRendering(rendering);
 
-    shaders_.bind(command_buffer);
-    set_graphics_state(
-        command_buffer,
-        {.vertex_input = VertexInput::Mesh, .samples = samples_, .depth_test = true});
+    shaders_.bind_to_command_buffer(cmd);
+    set_graphics_state(command_buffer, main_state_);
     // Render area, viewport and scissor use the same caller-provided extent.
     vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where
@@ -318,7 +318,7 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
         };
         resources.frame_buffers[i].upload(std::as_bytes(std::span{&frame_bo, 1}));
         FrameResources::PushData const push_data{.frame_buffer_index = resources.frame_indices[i]};
-        command_buffer_1.push_data(std::span{&push_data, 1});
+        cmd.push_data(std::span{&push_data, 1});
 
         DrawItem const &item = draws[i];
         // A reflected model reverses winding; callers never need to flip cull mode.
@@ -334,7 +334,7 @@ void Renderer::record(CommandBuffer &command_buffer_1, FrameResources &resources
         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderSampledRead);
-    tone_map(command_buffer_1, resources, target, output);
+    tone_map(cmd, resources, target, output);
 }
 
 void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,
@@ -344,18 +344,6 @@ void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,
     if (!camera)
         fail("cannot render a scene without an active camera");
     record(command_buffer, resources, target, *camera, scene.lights(), scene.draws(), output);
-}
-
-void Renderer::record_shadow_map_preview(CommandBuffer &command_buffer, FrameResources &resources,
-                                         RenderTarget const &target,
-                                         std::span<scene::Light const> lights,
-                                         std::span<DrawItem const> draws,
-                                         ShadowMapRegion const &region)
-{
-    ray_query_shadows_.invalidate_history();
-    if (!shadow_map_preview_)
-        shadow_map_preview_.emplace(*device_);
-    shadow_map_preview_->record(command_buffer, resources, target, lights, draws, region);
 }
 
 } // namespace lc1

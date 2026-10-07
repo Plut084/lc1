@@ -60,6 +60,17 @@ Instance::Instance(VulkanLoader const &loader, std::vector<char const *> extensi
         if (context.enumerateInstanceVersion() < vk::ApiVersion14)
             fail("Vulkan loader version 1.4 or newer is required");
 
+        auto const available_layers = context.enumerateInstanceLayerProperties();
+        for (auto const *layer : layers) {
+            if (std::ranges::none_of(available_layers, [layer](auto const &available_layer) {
+                    return std::string_view{available_layer.layerName.data()} == layer;
+                }))
+                fail("required Vulkan layer '{}' is not available; install the layer and ensure "
+                     "its manifest is discoverable through VK_LAYER_PATH (for Conan dependencies, "
+                     "run with the generated conanrun environment)",
+                     layer);
+        }
+
         vk::InstanceCreateInfo info;
 
         constexpr vk::ApplicationInfo app_info{.pApplicationName = "lc1",

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/common.hpp"
 #include "lc1/vk/core/device.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include <type_traits>
 
 #include <limits>

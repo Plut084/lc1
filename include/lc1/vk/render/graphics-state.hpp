@@ -8,6 +8,7 @@ namespace lc1 {
 
 enum class VertexInput { Empty, Mesh, Position };
 
+// Pass-owned fixed-function configuration, not the command buffer's current state.
 struct GraphicsState {
     VertexInput vertex_input = VertexInput::Empty;
     vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;

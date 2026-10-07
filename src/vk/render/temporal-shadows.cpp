@@ -1,8 +1,8 @@
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/ray-query-shadows.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 
 namespace lc1 {
 
@@ -80,8 +80,8 @@ void RayQueryShadows::resolve_history(CommandBuffer &wrapped, FrameResources &re
     };
     rendering.setColorAttachments(attachments);
     commands.beginRendering(rendering);
-    temporal_shaders_.bind(commands);
-    set_graphics_state(commands, {.color_attachment_count = 2});
+    temporal_shaders_.bind_to_command_buffer(wrapped);
+    set_graphics_state(commands, temporal_state_);
     commands.setViewportWithCount(vk::Viewport{.y = static_cast<float>(extent.height),
                                                .width = static_cast<float>(extent.width),
                                                .height = -static_cast<float>(extent.height),
@@ -122,8 +122,8 @@ void RayQueryShadows::filter_history(CommandBuffer &wrapped, FrameResources &res
     commands.beginRendering(
         vk::RenderingInfo{.renderArea = {.extent = extent}, .layerCount = 1}.setColorAttachments(
             attachment));
-    spatial_shaders_.bind(commands);
-    set_graphics_state(commands);
+    spatial_shaders_.bind_to_command_buffer(wrapped);
+    set_graphics_state(commands, spatial_state_);
     commands.setViewportWithCount(vk::Viewport{.y = static_cast<float>(extent.height),
                                                .width = static_cast<float>(extent.width),
                                                .height = -static_cast<float>(extent.height),

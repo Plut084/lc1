@@ -6,6 +6,8 @@
 
 namespace lc1 {
 
+class CommandBuffer;
+
 // A pass owns its stages through completion of all submitted GPU uses.
 // An empty fragment entry selects a vertex-only depth pass.
 class GraphicsShaders {
@@ -14,7 +16,7 @@ class GraphicsShaders {
                     std::string const &vertex_entry = "vertMain",
                     std::string const &fragment_entry = "fragMain");
 
-    void bind(vk::raii::CommandBuffer const &commands) const;
+    void bind_to_command_buffer(CommandBuffer &commands) const;
 
   private:
     ShaderObject vertex_;

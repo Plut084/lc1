@@ -51,7 +51,7 @@ visibility = 未被遮挡的射线数 / shadow_sample_count
 3×3 邻域的可见度范围内，减轻移动遮挡物留下的阴影尾迹。
 
 历史长度逐帧增加到 32，之后以 1/32 的当前帧权重滚动更新。初次显示、窗口尺寸变化、
-调用独立深度预览、灯光参数/数量变化和场景拓扑变化会使历史失效。移动接收物体不复用历史，
+灯光参数/数量变化和场景拓扑变化会使历史失效。移动接收物体不复用历史，
 静态表面上的移动投影由邻域限制响应；这不是物体运动矢量重投影。
 因此移动物体、新露出的表面仍可能暂时带噪，快速变化的半影也可能有短暂拖影。
 半影需要几帧到几十帧收敛，8 位可见度缓存也带来量化误差。
@@ -73,27 +73,20 @@ visibility = 未被遮挡的射线数 / shadow_sample_count
 
 所有几何体按不透明、双面遮挡处理，未实现透明贴图裁剪或半透明阴影。
 需要支持 ray query、acceleration structure 和 buffer device address 的 GPU，未提供硬件回退。
-渲染器保留原方向光深度图诊断接口，不参与正常阴影；没有方向光时显示清空后的白色深度图。
+旧方向光深度图诊断接口已删除，渲染器只保留正常 ray-query 阴影路径。
 
 ## 模块边界
 
 - `Renderer::record()` 只执行正常光照，输入为相机、灯光和绘制列表。
 - `RayQueryShadows` 管理 TLAS 更新、单采样可见度、时间累积和空间滤波；历史缓冲属于该模块。
-- `ShadowMapPreview` 管理旧方向光深度贴图与全屏预览，通过独立的
-  `Renderer::record_shadow_map_preview()` 调用。`ShadowMapRegion` 显式指定覆盖中心与半范围，
-  由调用方选择覆盖区域；这些参数不会传给 ray query 路径。
-- 主程序只调用正常光照入口；独立深度预览由 GPU 测试等显式调用。
 
-两条路径的帧资源在 `FrameResources` 中分组。预览 shader object 在首次调用时创建，每个帧槽的
-贴图与描述符也延迟至该槽首次预览时分配。所有通道均使用 native descriptor heap，
-`PassData` 的 push data 选择 camera/lights/object、TLAS、当前与历史图片，以及预览资源。
-每个 draw 在命令流中记录自己的 object 索引；各通道不创建 descriptor set 或 pipeline layout。
-预览深度图片使用显式 `DepthStencilReadOnlyOptimal` 描述符布局。切换路径时提交相应索引，
-不为预览建立 TLAS，也不清除仍将由阴影通道读取的 receiver ID。
+所有通道均使用 native descriptor heap，`PassData` 的 push data 选择 camera/lights/object、
+TLAS 以及当前与历史图片。每个 draw 在命令流中记录自己的 object 索引；
+各通道不创建 descriptor set 或 pipeline layout。
 
-所有绘制通道使用 `GraphicsShaders` 和显式动态状态，不创建 graphics pipeline。深度图
-通道只绑定顶点 shader 并解除片元阶段；正常通道、双附件时间累积、单附件空间滤波与预览
-各自重设状态，避免 depth bias、采样数或颜色写入设置串到下一通道。见 [shader object](shader-objects.md)。
+所有绘制通道使用 `GraphicsShaders` 和显式动态状态，不创建 graphics pipeline。
+主通道、可见度、双附件时间累积、单附件空间滤波与色调映射各自重设状态，
+避免采样数或颜色写入设置串到下一通道。见 [shader object](shader-objects.md)。
 
 ### TLAS 地址的 heap 读取（2026-10-06）
 
@@ -120,10 +113,6 @@ Linux Debug 的 PBR、阴影切换/resize、时间累积/空间过滤 GPU 测试
 验证记录。新增遮挡回归固定可见几何，仅切换高处物体的 `casts_shadow`：加入 TLAS 必须
 产生可见阴影，移除后必须恢复原图，避免仅凭“没有崩溃”认定查询正确。
 
-
-预览直接输出到单采样目标，不创建主光照的深度/MSAA 附件，不更新 TLAS，也不运行时间累积。
-返回正常画面时重置历史有效性；已分配资源留待后续复用，退出前仍须等待 GPU 完成。
-此处拆分保留了旧深度图诊断，并未实现 shadow map 正常光照后端或不支持 ray query 的硬件回退。
 
 ## 性能比较
 
@@ -162,10 +151,10 @@ cd build/linux-x86_64/Debug
 `lc1_temporal_shadow_tests` 是需要真实 GPU 和 Conan 运行环境的显式测试目标，验证时间累积、
 空间噪声抑制、表面 ID/法线/深度边缘隔离、硬阴影与背景保留，以及稳定阴影对比度。
 
-## 路径隔离与切换验证
+## Ray-query 渲染验证
 
-`lc1_shadow_path_tests` 使用真实 GPU 绘制和像素回读，覆盖首次预览不分配 TLAS/可见度附件、
-首次正常渲染无需旧贴图、两个帧槽来回切换、预览期间缩放后返回正常画面、空灯光与镜像物体。
+`lc1_shadow_path_tests` 使用真实 GPU 绘制和像素回读，覆盖首次渲染创建 ray-query 资源、
+两个帧槽的一致性、缩放及恢复尺寸、投影资格变化与空 TLAS、镜像物体和真实遮挡效果。
 该目标同样不加入 CPU CTest，运行时开启验证层及同步验证：
 
 ```sh

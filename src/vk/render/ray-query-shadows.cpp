@@ -3,9 +3,9 @@
 
 #include "draw-validation.hpp"
 #include "lc1/scene/camera.hpp"
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -132,10 +132,8 @@ void RayQueryShadows::record_visibility(CommandBuffer &wrapped, FrameResources &
     std::array const attachments{color_attachment, surface_attachment};
     rendering.setColorAttachments(attachments);
     commands.beginRendering(rendering);
-    visibility_shaders_.bind(commands);
-    set_graphics_state(
-        commands,
-        {.vertex_input = VertexInput::Mesh, .color_attachment_count = 2, .depth_test = true});
+    visibility_shaders_.bind_to_command_buffer(wrapped);
+    set_graphics_state(commands, visibility_state_);
     commands.setViewportWithCount(vk::Viewport{
         .y = static_cast<float>(extent.height),
         .width = static_cast<float>(extent.width),
@@ -243,12 +241,12 @@ void RayQueryShadows::update_acceleration_structure(vk::raii::CommandBuffer cons
     }
 }
 
-void RayQueryShadows::record(CommandBuffer &wrapped, FrameResources &resources, vk::Extent2D extent,
+void RayQueryShadows::record(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
                              scene::FpsCamera const &camera, std::span<scene::Light const> lights,
                              std::span<DrawItem const> draws)
 {
-    auto const &command_buffer = wrapped.raii();
-    wrapped.bind_descriptor_heap(*resources.descriptor_heap);
+    auto const &command_buffer = cmd.raii();
+    cmd.bind_descriptor_heap(*resources.descriptor_heap);
     validate_draws(resources, extent, draws);
     for (std::size_t i = 0; i < draws.size(); ++i) {
         ObjectData const object_data{
@@ -308,9 +306,9 @@ void RayQueryShadows::record(CommandBuffer &wrapped, FrameResources &resources, 
                        sequence_++, 32U, lights_data.count},
     };
     resources.temporal_buffer.upload(std::as_bytes(std::span{&temporal, 1}));
-    record_visibility(wrapped, resources, extent, draws);
-    resolve_history(wrapped, resources, extent);
-    filter_history(wrapped, resources, extent);
+    record_visibility(cmd, resources, extent, draws);
+    resolve_history(cmd, resources, extent);
+    filter_history(cmd, resources, extent);
     history_write_index_ ^= 1U;
     history_valid_ = true;
     previous_view_projection_ = ubo.proj * ubo.view;

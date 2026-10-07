@@ -3,9 +3,9 @@
 #include "lc1/tangent-space.hpp"
 #include "lc1/vertex.hpp"
 #include "lc1/vk/core/common.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/resources/acceleration-structure.hpp"
 #include "lc1/vk/resources/gpu-buffer.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 #include <algorithm>
 #include <optional>
 

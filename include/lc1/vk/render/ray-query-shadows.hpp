@@ -3,6 +3,7 @@
 #include "lc1/vk/render/draw-item.hpp"
 
 #include "lc1/vk/render/graphics-shaders.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/render-data.hpp"
 #include "lc1/vk/resources/gpu-image.hpp"
 #include "lc1/vk/resources/gpu-mesh.hpp"
@@ -37,11 +38,9 @@ class RayQueryShadows {
 
     // Called after the slot fence. Uploads camera/light/object data shared with
     // the subsequent material pass, and leaves visibility ready for sampling.
-    void record(CommandBuffer &commands, FrameResources &resources, vk::Extent2D extent,
+    void record(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
                 scene::FpsCamera const &camera, std::span<scene::Light const> lights,
                 std::span<DrawItem const> draws);
-
-    void invalidate_history() { history_valid_ = false; }
 
   private:
     void ensure_attachments(FrameResources &resources, vk::Extent2D extent) const;
@@ -59,8 +58,12 @@ class RayQueryShadows {
 
     Device const *device_; // Non-owning, non-null; the device outlives this object.
     vk::Format depth_format_;
+    GraphicsState visibility_state_{
+        .vertex_input = VertexInput::Mesh, .color_attachment_count = 2, .depth_test = true};
     GraphicsShaders visibility_shaders_;
+    GraphicsState temporal_state_{.color_attachment_count = 2};
     GraphicsShaders temporal_shaders_;
+    GraphicsState spatial_state_{};
     GraphicsShaders spatial_shaders_;
 
     struct HistoryFrame {

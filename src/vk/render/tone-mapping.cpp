@@ -1,6 +1,6 @@
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/renderer.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 
 namespace lc1 {
 
@@ -23,8 +23,8 @@ void Renderer::tone_map(CommandBuffer &wrapped, FrameResources &resources,
                                 .layerCount = 1};
     rendering.setColorAttachments(attachment);
     commands.beginRendering(rendering);
-    tone_map_shaders_.bind(commands);
-    set_graphics_state(commands);
+    tone_map_shaders_.bind_to_command_buffer(wrapped);
+    set_graphics_state(commands, tone_map_state_);
     commands.setViewportWithCount(vk::Viewport{.x = 0.0F,
                                                .y = 0.0F,
                                                .width = static_cast<float>(target.extent.width),

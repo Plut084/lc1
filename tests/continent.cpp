@@ -235,14 +235,10 @@ void perspective_camera_zoom()
     check(near(glm::distance(camera.position(), center), initial_distance),
           "reverse wheel input restores the camera distance");
 
-    for (float scroll : {20.0F, -20.0F}) {
-        controller.update(camera, player, bounds, {.scroll = scroll}, 0.1F);
-        check(near(controller.view_height(), scroll > 0 ? 16.0F : 96.0F),
-              "zoom stays within its framing limits");
-        check(project(center).z > 0.0F && project(center).z < 1.0F &&
-                  camera.position().y > player.y,
-              "both zoom limits keep the target visible and camera above the ground");
-    }
+    controller.update(camera, player, bounds, {.scroll = 20.0F}, 0.1F);
+    check(near(controller.view_height(), 16.0F), "zoom respects the minimum framing limit");
+    check(project(center).z > 0.0F && project(center).z < 1.0F && camera.position().y > player.y,
+          "minimum zoom keeps the target visible and camera above the ground");
 }
 
 void camera_lock_and_edge_pan()

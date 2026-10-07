@@ -5,8 +5,8 @@ Vulkan 调用继续使用 `vk::raii`；目录分层不改变资源所有权、�
 
 | 目录 | 职责 | 代表类型与文件 |
 |---|---|---|
-| `core/` | Vulkan 绑定配置、loader、实例与设备创建、分配器、一次性提交 | `VulkanLoader`、`Instance`、`Device`、`memory.hpp` |
-| `resources/` | GPU 存储、上传、描述符、shader object 与图像屏障 | `GpuBuffer`、`GpuImage`、`GpuTexture`、`GpuMesh`、`AccelerationStructure`、`DescriptorHeap` / `DescriptorHeapCache`、`ShaderObject`、`RenderTarget` |
+| `core/` | Vulkan 绑定配置、loader、实例与设备创建、分配器 | `VulkanLoader`、`Instance`、`Device`、`memory.hpp` |
+| `resources/` | GPU 存储、上传、命令录制、描述符、shader object 与图像屏障 | `CommandBuffer`、`one-time-submit.hpp`、`GpuBuffer`、`GpuImage`、`GpuTexture`、`GpuMesh`、`AccelerationStructure`、`DescriptorHeap` / `DescriptorHeapCache`、`ShaderObject`、`RenderTarget` |
 | `presentation/` | 窗口表面、交换链策略、acquire/submit/present、帧槽同步 | `Surface`、`Swapchain`、`FrameLoop`、`swapchain-policy.hpp` |
 | `render/` | 具体渲染算法、shader 接口、材质和绘制数据 | `Renderer`、`GraphicsShaders`、`GraphicsState`、`MaterialInfo`、`DrawItem`、`FrameResources`、阴影与色调映射 |
 
@@ -35,9 +35,16 @@ flowchart TD
 
 ## 边界上的几个约定
 
-`Device` 接收非拥有的 `vk::SurfaceKHR`，只在构造期间查询队列的呈现支持，不保存或销毁它。
-调用者通过 `*surface.raii()` 传入表面。这样设备选择保留原来的呈现约束，同时无需依赖
-呈现层的 `lc1::Surface` 包装。
+`Device` 接收调用者选择的物理设备、队列族和 `DeviceRequirements`，负责创建设备与分配器。
+应用在选择物理设备时查询表面的呈现支持；`Device` 本身不接收或保存表面。GPU 渲染测试
+通过测试辅助函数完成设备筛选，再调用同一显式构造函数。
+
+`CommandBuffer` 与 `one-time-submit.hpp` 位于 `resources/`，由呈现与渲染层共同使用。
+`CommandBuffer` 拥有命令缓冲并维护当前录制的 heap 绑定缓存；绑定 heap 和 reset 统一经过它，
+`DescriptorHeap` 的底层绑定入口仅供它调用。通过原生句柄改写 heap 绑定后，必须调用
+`invalidate_bindings()`，再使用包装层的绑定与 push-data 接口。
+`GraphicsShaders` 留在 `render/`，决定各 pass 绑定和清空哪些 shader 阶段，再调用
+`CommandBuffer::bind_shaders`。资源层只接收 Vulkan 阶段与句柄，不依赖渲染层类型。
 
 `FrameLoop<T>` 管理帧槽、命令缓冲和同步，通过回调调用渲染；模板参数由应用选择。
 具体灯光、阴影、HDR 附件和描述符集合组成的 `FrameResources` 属于 `render`。

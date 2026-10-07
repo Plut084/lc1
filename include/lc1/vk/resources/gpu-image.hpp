@@ -8,8 +8,8 @@ namespace lc1 {
 
 class Device;
 
-vk::Format find_supported_format(std::vector<vk::Format> const &candidates, vk::ImageTiling tiling,
-                                 vk::FormatFeatureFlags features);
+vk::Format find_supported_format(Device const &device, std::vector<vk::Format> const &candidates,
+                                 vk::ImageTiling tiling, vk::FormatFeatureFlags features);
 
 vk::Format find_depth_format(Device const &device);
 
@@ -24,9 +24,13 @@ class GpuImage {
              vk::ImageAspectFlags aspect);
 
     vk::raii::Image const &raii() const { return image_; }
+
     vk::raii::ImageView const &view() const { return view_; }
+
     vk::Extent2D extent() const { return extent_; }
+
     vk::Format format() const { return format_; }
+
     vk::ImageViewCreateInfo view_create_info() const;
 
     void transition_layout(vk::raii::CommandBuffer const &command_buffer,

@@ -38,7 +38,7 @@ resize 不持续消耗新槽位，也不修改其他在途帧的描述符。buff
 直接持有索引，不与缓存的资源身份混用。帧容量仍由 `make_frame_resources` 指定，
 超限在上传前明确失败，不自动扩容。
 
-阴影、时间累积、空间滤波、tone mapping 和深度预览也都使用 native descriptor heap。
+阴影、时间累积、空间滤波和 tone mapping 也都使用 native descriptor heap。
 `PassData` 将各通道所需的资源索引作为 push data 记录，每个 draw 的 object 索引独立。
 相机、灯光与物体 buffer 在 ray-query 准备阶段上传一次，随后主材质通道复用；不能在提交前
 清除阴影接收面 ID 或覆盖其他通道要读取的数据。各通道使用 shader object，不创建 graphics
@@ -91,9 +91,6 @@ occlusion 仍待 IBL 接入，非空贴图目前明确报未支持。
 光照衰减仍按 MSAA 采样点计算，但阴影射线数量不随 MSAA 倍增。
 采样、缓冲布局和已知限制见 [Ray query 阴影](ray-query-shadows.md)。
 
-渲染器保留独立的 2048×2048 方向光深度图诊断接口，供 GPU 测试等显式调用，主程序不提供预览切换。
-它不是 ray query 的阴影缓冲，也不参与正常光照；深度图越近越黑、越远越白。
-
 ## 主场景展示区与验证
 
 `make run` 进入游戏后，出生点道路两侧就是 PBR 展示区，直接由 `src/game/game-session.cpp` 装配。
@@ -113,7 +110,7 @@ occlusion 仍待 IBL 接入，非空贴图目前明确报未支持。
 展区使用共享网格、共享贴图及创建后不变的材质，动画只更新对象矩阵。
 强波纹仅用于 NORMAL OFF／x1／x2 对照台；普通变换展品采用低幅度的细节法线，避免像深褶皱或穿孔。
 标牌文字作为印刷内容，通过 `DrawItem::casts_shadow = false` 保持可见并取消投影；
-ray-query 与独立深度预览都遵守此标志，切换投影资格时会重置阴影历史。
+ray-query 遵守此标志，切换投影资格时会重置阴影历史。
 
 沿用 WASD 移动、滚轮缩放、M 切换斜视／第一人称、Y 解锁镜头、Space 回到玩家。
 新增调试操作也经 Gameplay 输入路由：

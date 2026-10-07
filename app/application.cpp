@@ -188,7 +188,6 @@ Application::Application(ApplicationConfig const &config)
     : window_{1280, 720, "lc1"},
       instance_{make_instance(loader_, window_, config.enable_validation)},
       surface_{instance_, window_}, device_{make_device(instance_, surface_)},
-      // device_{instance_, *surface_.raii(), std::array{vk::KHRSwapchainExtensionName}},
       surface_format_{
           pick_surface_format(device_.raii_physical().getSurfaceFormatsKHR(surface_.raii()))},
       renderer_{device_,

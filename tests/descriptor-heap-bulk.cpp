@@ -1,9 +1,9 @@
-#include "lc1/vk/core/command-buffer.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
 #include "lc1/vk/render/graphics-shaders.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include "lc1/vk/resources/descriptor-heap.hpp"
 #include "lc1/vk/resources/gpu-buffer.hpp"
 #include "lc1/vk/resources/gpu-image.hpp"
@@ -126,7 +126,7 @@ void verify_pixels(lc1::Device const &device, lc1::GraphicsShaders const &shader
     commands.beginRendering(
         vk::RenderingInfo{.renderArea = {.extent = extent}, .layerCount = 1}.setColorAttachments(
             color));
-    shaders.bind(commands);
+    shaders.bind_to_command_buffer(command_buffer);
     lc1::set_graphics_state(commands);
     commands.setViewportWithCount(vk::Viewport{.width = static_cast<float>(extent.width),
                                                .height = static_cast<float>(extent.height),

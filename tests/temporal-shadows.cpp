@@ -1,12 +1,14 @@
+#include "render-device.hpp"
+
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/presentation/surface.hpp"
 #include "lc1/vk/render/graphics-shaders.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/ray-query-shadows.hpp"
 #include "lc1/vk/render/renderer.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 #include "lc1/window.hpp"
 
 #include <array>
@@ -176,7 +178,7 @@ glm::uvec4 run_case(lc1::Device const &device, lc1::GraphicsShaders const &shade
         auto const active_attachments = std::span{attachments}.first(test.spatial ? 1 : 2);
         commands.beginRendering(vk::RenderingInfo{.renderArea = {.extent = extent}, .layerCount = 1}
                                     .setColorAttachments(active_attachments));
-        shaders.bind(commands);
+        shaders.bind_to_command_buffer(wrapped);
         lc1::set_graphics_state(commands, {.color_attachment_count = test.spatial ? 1U : 2U});
         commands.setViewportWithCount(
             vk::Viewport{.y = 4, .width = 4, .height = -4, .maxDepth = 1});
@@ -214,7 +216,7 @@ int main()
         lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, *surface.raii()};
+        auto device = lc1::test::make_render_device(instance, *surface.raii());
         lc1::GraphicsShaders shaders{device, "shaders/temporal-shadows.spv", "temporalVert",
                                      "temporalFrag"};
         auto check = [&](char const *name, Case test, unsigned expected, unsigned count) {

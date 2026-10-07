@@ -1,3 +1,5 @@
+#include "render-device.hpp"
+
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/vk/render/renderer.hpp"
 
@@ -6,8 +8,8 @@
 
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/presentation/surface.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 #include "lc1/window.hpp"
 
 #include <glm/gtc/packing.hpp>
@@ -516,7 +518,7 @@ int main()
         lc1::Instance instance{loader, std::move(extensions), {"VK_LAYER_KHRONOS_validation"}};
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
-        lc1::Device device{instance, *surface.raii()};
+        auto device = lc1::test::make_render_device(instance, *surface.raii());
         mutable_material_tests(device);
         material_tests(device, vk::SampleCountFlagBits::e1);
         material_tests(device, vk::SampleCountFlagBits::e4);

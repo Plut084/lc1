@@ -6,11 +6,11 @@
 #include "lc1/vk/core/common.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
 #include "lc1/vk/render/graphics-shaders.hpp"
+#include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/material.hpp"
 #include "lc1/vk/render/output-settings.hpp"
 #include "lc1/vk/render/ray-query-shadows.hpp"
 #include "lc1/vk/render/render-data.hpp"
-#include "lc1/vk/render/shadow-map-preview.hpp"
 #include "lc1/vk/resources/descriptor-heap.hpp"
 #include "lc1/vk/resources/gpu-mesh.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
@@ -20,7 +20,6 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -34,7 +33,7 @@ namespace scene {
 class FpsCamera;
 } // namespace scene
 
-// Owns material rendering, ray-query shadows and an optional depth-map diagnostic.
+// Owns material rendering and ray-query shadows.
 // Records using one
 // caller-owned set of FrameResources; neither resource counts nor frame-slot
 // indices are part of this interface.
@@ -55,7 +54,7 @@ class Renderer {
     Renderer(Renderer &&) = delete;
     Renderer &operator=(Renderer &&) = delete;
 
-    vk::SampleCountFlagBits sample_count() const { return samples_; }
+    vk::SampleCountFlagBits sample_count() const { return main_state_.samples; }
 
     // Creates one frame slot with its own descriptor heap and buffer cache. The
     // caller decides how many sets to keep and when each is safe to reuse.
@@ -68,19 +67,12 @@ class Renderer {
     // outside any rendering pass. The caller owns begin/end and the target's
     // layout transitions; record leaves it in COLOR_ATTACHMENT_OPTIMAL.
     // `target.extent` must be nonzero and fit the attachment.
-    void record(CommandBuffer &command_buffer_1, FrameResources &resources,
-                RenderTarget const &target, scene::FpsCamera const &camera,
-                std::span<scene::Light const> lights, std::span<DrawItem const> draws,
-                OutputSettings output = {});
+    void record(CommandBuffer &cmd, FrameResources &resources, RenderTarget const &target,
+                scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                std::span<DrawItem const> draws, OutputSettings output = {});
 
-    void record(CommandBuffer &command_buffer_1, FrameResources &resources,
-                RenderTarget const &target, scene::Scene const &scene, OutputSettings output = {});
-
-    // Separate diagnostic entry point. No ray queries, TLAS updates or temporal
-    // passes run here. Returning to normal rendering starts fresh shadow history.
-    void record_shadow_map_preview(CommandBuffer &command_buffer, FrameResources &resources,
-                                   RenderTarget const &target, std::span<scene::Light const> lights,
-                                   std::span<DrawItem const> draws, ShadowMapRegion const &region);
+    void record(CommandBuffer &cmd, FrameResources &resources, RenderTarget const &target,
+                scene::Scene const &scene, OutputSettings output = {});
 
   private:
     // The caller has waited for the resources' previous GPU use.
@@ -91,11 +83,11 @@ class Renderer {
     Device const *device_; // Non-owning, non-null; the device outlives this object.
     vk::Format color_format_;
     vk::Format depth_format_;
-    vk::SampleCountFlagBits samples_;
+    GraphicsState main_state_;
     GraphicsShaders shaders_;
+    GraphicsState tone_map_state_{};
     GraphicsShaders tone_map_shaders_;
     RayQueryShadows ray_query_shadows_;
-    std::optional<ShadowMapPreview> shadow_map_preview_;
     vk::SamplerCreateInfo default_sampler_info_;
     // Fallback textures for omitted material slots.
     GpuTexture white_srgb_;

@@ -1,5 +1,5 @@
 #include "lc1/vk/resources/descriptor-heap.hpp"
-#include "lc1/vk/core/command-buffer.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include "lc1/vk/resources/sampler.hpp"
 
 #include <spdlog/spdlog.h>
@@ -381,7 +381,7 @@ void DescriptorHeap::probe() const
     }
 }
 
-void DescriptorHeap::bind_to_command_buffer(CommandBuffer &command_buffer)
+void DescriptorHeap::bind_to_command_buffer(CommandBuffer &command_buffer) const
 {
     command_buffer.raii().bindSamplerHeapEXT(vk::BindHeapInfoEXT{
         .heapRange =

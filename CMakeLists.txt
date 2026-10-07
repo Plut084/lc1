@@ -132,7 +132,6 @@ add_library(lc1_engine STATIC
     src/vk/render/material.cpp
     src/vk/render/ray-query-shadows.cpp
     src/vk/render/renderer.cpp
-    src/vk/render/shadow-map-preview.cpp
     src/vk/render/temporal-shadows.cpp
     src/vk/render/tone-mapping.cpp
 
@@ -247,9 +246,7 @@ if(BUILD_TESTING)
             "${PROJECT_BINARY_DIR}/shaders/visibility.spv"
             "${PROJECT_BINARY_DIR}/shaders/temporal-shadows.spv"
             "${PROJECT_BINARY_DIR}/shaders/spatial-shadows.spv"
-            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv"
-            "${PROJECT_BINARY_DIR}/shaders/shadow.spv"
-            "${PROJECT_BINARY_DIR}/shaders/shadow-preview.spv")
+            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv")
     add_test(NAME heap_struct_generator
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"

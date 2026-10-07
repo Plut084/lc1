@@ -98,8 +98,6 @@ class DescriptorHeap {
     // Physical-device support does not imply that a feature was enabled on the logical device.
     void probe() const;
 
-    void bind_to_command_buffer(CommandBuffer &command_buffer);
-
     // Returns an index relative to the whole heap, in units of the descriptor
     // type's size, ready for ResourceDescriptorHeap / SamplerDescriptorHeap.
     // Referenced resources must outlive all GPU submissions reading these slots.
@@ -118,6 +116,9 @@ class DescriptorHeap {
     HeapIndex allocate_acceleration_structure(vk::DeviceAddress address);
 
   private:
+    // CommandBuffer is the only binding entry point, keeping its cache in sync.
+    void bind_to_command_buffer(CommandBuffer &command_buffer) const;
+
     Device const *device_;
 
     vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties_;

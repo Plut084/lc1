@@ -38,12 +38,6 @@ class GpuBuffer {
     vk::DeviceSize size() const { return size_; }
 
   private:
-    // TODO: DEPRECATED
-    // `allocation_flags` is empty for GPU-only buffers. Buffers the CPU writes
-    // pass vma::AllocationCreateFlagBits::eHostAccessSequentialWrite.
-    GpuBuffer(Device const &device, vk::DeviceSize size, vk::BufferUsageFlags usage,
-              vma::AllocationCreateFlags allocation_flags = {});
-
     // Owns both the VkBuffer and the VmaAllocation, and frees them together.
     vma::raii::Buffer buffer_{nullptr};
     vk::DeviceSize size_;

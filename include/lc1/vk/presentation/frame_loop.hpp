@@ -1,5 +1,5 @@
 #pragma once
-#include "lc1/vk/core/command-buffer.hpp"
+#include "lc1/vk/resources/command-buffer.hpp"
 #include "lc1/vk/resources/image-barrier.hpp"
 #include <chrono>
 #include <cstdio>
@@ -123,13 +123,6 @@ FrameLoop<GpuResource>::FrameLoop(Device const &device,
             .level = vk::CommandBufferLevel::ePrimary,
             .commandBufferCount = max_frames_in_flight,
         });
-        // The count is ours, so this cannot fail unless the driver lies -- but
-        // the loop below indexes with it, and a short vector would be an
-        // out-of-bounds read rather than an error message.
-        if (command_buffers.size() != max_frames_in_flight) {
-            fail("vkAllocateCommandBuffers returned {} command buffers, expected {}",
-                 command_buffers.size(), max_frames_in_flight);
-        }
 
         frames_.reserve(max_frames_in_flight);
         for (auto &command_buffer : command_buffers) {
@@ -179,9 +172,8 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         auto const probe_fence = ProbeClock::now();
         auto const acquired =
             swapchain.raii().acquireNextImage(acquire_timeout_ns, *frame.image_available, nullptr);
-        auto const acquire_result = acquired.result;
 
-        if (acquire_result == vk::Result::eErrorOutOfDateKHR) {
+        if (acquired.result == vk::Result::eErrorOutOfDateKHR) {
             // No image was acquired and both the semaphore and the fence are
             // left unaffected, so skipping the frame is safe. The fence stays
             // signaled; it gets reset on the next use of this slot, immediately
@@ -191,9 +183,9 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         // SURFACE_LOST is not in this list because it never gets here: it is
         // not among hpp's success codes for this call, so it arrives as a
         // vk::SurfaceLostKHRError and is caught below.
-        if (acquire_result != vk::Result::eSuccess &&
-            acquire_result != vk::Result::eSuboptimalKHR) {
-            fail("vkAcquireNextImageKHR failed: {}", result_string(acquire_result));
+        if (acquired.result != vk::Result::eSuccess &&
+            acquired.result != vk::Result::eSuboptimalKHR) {
+            fail("vkAcquireNextImageKHR failed: {}", result_string(acquired.result));
         }
         auto const image_index = acquired.value;
         auto const probe_acquire = ProbeClock::now();
@@ -204,7 +196,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         // acquire handed that same handle trips
         // VUID-vkAcquireNextImageKHR-semaphore-01286. Recreate after
         // presenting.
-        bool const recreate_after_present = (acquire_result == vk::Result::eSuboptimalKHR);
+        bool const recreate_after_present = (acquired.result == vk::Result::eSuboptimalKHR);
 
         // Reset THIS slot's command buffer, never the whole pool.
         // vkResetCommandPool resets every buffer allocated from the pool,
@@ -215,9 +207,7 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
         // exactly why the pool is created with
         // VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT.
         frame.command_buffer.reset();
-        frame.command_buffer.raii().begin({
-            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-        });
+        frame.command_buffer.begin(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
         SwapchainImage const &image = swapchain.images()[image_index];
 
@@ -256,48 +246,42 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
             vk::AccessFlags2{},           // VK_ACCESS_2_NONE
             vk::ImageAspectFlagBits::eColor);
 
-        frame.command_buffer.raii().end();
+        frame.command_buffer.end();
 
-        // One dereference to the C handle: vk::raii::Semaphore -> VkSemaphore
-        // would be two user-defined conversions, and those do not chain.
-        vk::Semaphore const render_finished = *image.render_finished;
-
-        vk::SemaphoreSubmitInfo wait_semaphore;
-        wait_semaphore
-            .setSemaphore(*frame.image_available)
-            // The first thing that touches the image is the layout transition
-            // and the attachment write, both in the color-attachment-output
-            // scope.
-            .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-
-        vk::SemaphoreSubmitInfo signal_semaphore;
-        signal_semaphore.setSemaphore(render_finished)
-            .setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
-
-        vk::CommandBufferSubmitInfo command_info;
-        command_info.setCommandBuffer(*frame.command_buffer.raii());
-
-        vk::SubmitInfo2 submit;
-        submit.setWaitSemaphoreInfos(wait_semaphore)
-            .setCommandBufferInfos(command_info)
-            .setSignalSemaphoreInfos(signal_semaphore);
+        vk::SemaphoreSubmitInfo wait_info{
+            .semaphore = frame.image_available,
+            // The first thing that touches the image is the layout transition and the attachment
+            // write, both in the color-attachment-output scope.
+            .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        };
+        vk::SemaphoreSubmitInfo signal_info{
+            .semaphore = image.render_finished,
+            .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        };
+        vk::CommandBufferSubmitInfo command_info{
+            .commandBuffer = frame.command_buffer.raii(),
+        };
 
         // Reset only after recording succeeds, immediately before submitting.
         // An early return or a throwing callback must not leave an unsignaled
         // fence with no submission to signal it.
         device.resetFences(*frame.in_flight);
-        queue.submit2(submit, *frame.in_flight);
+        queue.submit2(vk::SubmitInfo2{}
+                          .setWaitSemaphoreInfos(wait_info)
+                          .setCommandBufferInfos(command_info)
+                          .setSignalSemaphoreInfos(signal_info),
+                      *frame.in_flight);
+
+        auto const probe_submit = ProbeClock::now();
 
         // Never present without the submit above: the wait semaphore must
         // reference a signal operation that was actually submitted.
-        vk::SwapchainKHR const swapchain_handle = *swapchain.raii();
-        vk::PresentInfoKHR present;
-        present.setWaitSemaphores(render_finished)
-            .setSwapchains(swapchain_handle)
-            .setImageIndices(image_index);
-
-        auto const probe_submit = ProbeClock::now();
-        vk::Result const presented = queue.presentKHR(present);
+        auto wait_semaphores = std::array{*image.render_finished};
+        auto swapchains = std::array{*swapchain.raii()};
+        auto const presented = queue.presentKHR(vk::PresentInfoKHR{}
+                                                    .setWaitSemaphores(wait_semaphores)
+                                                    .setSwapchains(swapchains)
+                                                    .setImageIndices(image_index));
         auto const probe_present = ProbeClock::now();
         static unsigned probe_count = 0;
         static double probe_sums[4]{};

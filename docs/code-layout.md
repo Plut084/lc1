@@ -2,6 +2,7 @@
 
 目录按职责划分，CMake 目标按依赖方向连接：`lc1` → `lc1_game` → `lc1_engine`。
 游戏类型沿用现有 `lc1` 命名空间；渲染场景类型使用 `lc1::scene`，应用入口使用 `lc1::app`。
+完整模块索引及 Mermaid 依赖图见 [模块依赖图](module-dependencies.md)。
 
 | 位置 | CMake 目标 | 职责 |
 |---|---|---|

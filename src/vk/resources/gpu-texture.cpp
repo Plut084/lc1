@@ -2,8 +2,8 @@
 
 #include "lc1/image.hpp"
 #include "lc1/vk/core/device.hpp"
-#include "lc1/vk/core/one-time-submit.hpp"
 #include "lc1/vk/resources/gpu-buffer.hpp"
+#include "lc1/vk/resources/one-time-submit.hpp"
 
 #include <spdlog/spdlog.h>
 

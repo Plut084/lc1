@@ -55,6 +55,8 @@ class Application {
     vk::SurfaceFormatKHR const surface_format_;
     std::optional<Swapchain> swapchain_;
     Renderer renderer_;
+    // The frame factory reads the session's completed draw list during construction.
+    // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
     InputRouter router_{default_bindings(), InputContext::Gameplay};

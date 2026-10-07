@@ -26,14 +26,6 @@ struct RayQueryShadowFrameResources {
     std::optional<GpuImage> depth;
 };
 
-struct ShadowMapFrameResources {
-    GpuImage depth;
-    GpuBuffer uniform;
-    HeapIndex uniform_index;
-    HeapIndex image_index;
-    HeapIndex sampler_index;
-};
-
 // One independently reusable set of drawing resources. The caller must wait
 // for its previous GPU use before recording, replacing or destroying it.
 // Device and Renderer must outlive these resources.
@@ -55,8 +47,6 @@ struct FrameResources {
     FrameResources &operator=(FrameResources &&) = delete;
 
     RayQueryShadowFrameResources ray_query;
-    // Allocated only when this slot first records the legacy diagnostic.
-    std::optional<ShadowMapFrameResources> shadow_map;
     // Main material pass attachments; created lazily from the output extent.
     std::optional<GpuImage> depth_image;
     std::optional<GpuImage> color_image;

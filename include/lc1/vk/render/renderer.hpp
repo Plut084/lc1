@@ -11,6 +11,7 @@
 #include "lc1/vk/render/output-settings.hpp"
 #include "lc1/vk/render/ray-query-shadows.hpp"
 #include "lc1/vk/render/render-data.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 #include "lc1/vk/resources/descriptor-heap.hpp"
 #include "lc1/vk/resources/gpu-mesh.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
@@ -93,6 +94,8 @@ class Renderer {
     GpuTexture white_srgb_;
     GpuTexture white_linear_;
     GpuTexture flat_normal_;
+
+    RenderGraph graph_;
 };
 
 } // namespace lc1

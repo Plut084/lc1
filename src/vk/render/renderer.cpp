@@ -73,6 +73,7 @@ Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_at
       white_linear_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Linear),
       flat_normal_(device, {.width = 1, .height = 1}, normal_pixel, TextureColorSpace::Linear)
 {
+    graph_.add_pass("triangle", {}, {"result"}, [&](CommandBuffer &cmd) {});
 }
 
 FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) const

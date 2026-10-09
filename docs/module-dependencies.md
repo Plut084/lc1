@@ -237,12 +237,17 @@ flowchart TB
     stages --> shader["resources/ShaderObject"]
     stages --> command["resources/CommandBuffer"]
     frame --> resources["GPU 存储、加速结构与描述符"]
-    graph["RenderGraph<br/>草稿，未接入"]
+    renderer --> graph["RenderGraph<br/>当帧依赖编译与 pass 调度"]
+    ray --> graph
 ```
 
-正常渲染顺序是 TLAS／visibility → 时间累积 → 空间滤波 → 主 PBR／HDR／MSAA resolve → 色调映射。
+正常渲染由当帧 `RenderGraph` 按资源依赖调度：场景准备／TLAS → visibility → 时间累积 →
+空间滤波 → 主 PBR／HDR／MSAA resolve → 色调映射 → 应用层 ImGui overlay。
 `temporal-shadows.cpp` 是 `RayQueryShadows` 的成员实现，`tone-mapping.cpp` 是 Renderer 的成员实现，
-并不存在独立的 TemporalShadows 或 ToneMapper 公共类；RenderGraph 也没有调度当前 pass。
+并不存在独立的 TemporalShadows 或 ToneMapper 公共类。`RayQueryShadows::add_passes()` 注册前四个
+节点，`Renderer::add_passes()` 注册后两个场景节点，应用追加 UI 并同步编译、执行。
+离屏测试使用 `Renderer::record()` 创建只含场景节点的图；资源所有权与 Vulkan 屏障仍留在各 pass。
+图的逻辑资源版本与回调生命周期见 [RenderGraph](render-graph.md)。
 
 ### 4.4 Vulkan 文件索引
 
@@ -264,7 +269,7 @@ flowchart TB
 | render | shader 阶段与动态固定功能状态 | `graphics-shaders.hpp`、`graphics-state.hpp` |
 | render | 阴影 | `ray-query-shadows.hpp`、私有 `temporal-shadows.cpp` |
 | render | 色调映射与绘制辅助 | 私有 `tone-mapping.cpp`、`draw-validation.hpp`、`vertex-input.hpp` |
-| render | 渲染图草稿 | `render-graph.hpp`，未接入 |
+| render | 当帧渲染依赖与调度 | `render-graph.hpp` |
 
 ## 5. Slang shader 模块
 

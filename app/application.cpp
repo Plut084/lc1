@@ -3,6 +3,7 @@
 #include "lc1/error.hpp"
 #include "lc1/game-clock.hpp"
 #include "lc1/vk/presentation/swapchain-policy.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -368,32 +369,38 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
-        renderer_.record(command_buffer, resources, target, game_.camera(), game_.lights(),
-                         game_.draws(), game_.output());
-
-        // Make tone mapping's writes visible to the UI attachment load and blending.
-        vk::MemoryBarrier2 const barrier{
-            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
-                             vk::AccessFlagBits2::eColorAttachmentWrite,
-        };
-        command_buffer.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
-        vk::RenderingAttachmentInfo const color{
-            .imageView = **target.view,
-            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .loadOp = vk::AttachmentLoadOp::eLoad,
-            .storeOp = vk::AttachmentStoreOp::eStore,
-        };
-        vk::RenderingInfo rendering{
-            .renderArea = {.offset = {.x = 0, .y = 0}, .extent = target.extent},
-            .layerCount = 1,
-        };
-        rendering.setColorAttachments(color);
-        command_buffer.raii().beginRendering(rendering);
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *command_buffer.raii());
-        command_buffer.raii().endRendering();
+        RenderGraph graph;
+        renderer_.add_passes(graph, resources, target, game_.camera(), game_.lights(),
+                             game_.draws(), game_.output());
+        graph.add_pass(
+            "ImGui overlay", {"output.color"}, {"output.ui"}, [target](CommandBuffer &commands) {
+                // Make tone mapping's writes visible to the UI attachment load and blending.
+                vk::MemoryBarrier2 const barrier{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
+                                     vk::AccessFlagBits2::eColorAttachmentWrite,
+                };
+                commands.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
+                vk::RenderingAttachmentInfo const color{
+                    .imageView = **target.view,
+                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                    .loadOp = vk::AttachmentLoadOp::eLoad,
+                    .storeOp = vk::AttachmentStoreOp::eStore,
+                };
+                vk::RenderingInfo rendering{
+                    .renderArea = {.offset = {.x = 0, .y = 0}, .extent = target.extent},
+                    .layerCount = 1,
+                };
+                rendering.setColorAttachments(color);
+                commands.raii().beginRendering(rendering);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commands.raii());
+                commands.raii().endRendering();
+            });
+        if (auto result = graph.compile(); !result)
+            fail("Cannot compile frame render graph: {}", result.error());
+        graph.execute(command_buffer);
     };
 
     while (!window_.should_close() && !stop_requested()) {

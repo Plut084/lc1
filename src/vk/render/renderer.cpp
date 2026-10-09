@@ -1,6 +1,7 @@
 #include "lc1/vk/render/renderer.hpp"
 #include "draw-validation.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/resources/command-buffer.hpp"
@@ -73,7 +74,6 @@ Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_at
       white_linear_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Linear),
       flat_normal_(device, {.width = 1, .height = 1}, normal_pixel, TextureColorSpace::Linear)
 {
-    graph_.add_pass("triangle", {}, {"result"}, [&](CommandBuffer &cmd) {});
 }
 
 FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) const
@@ -157,8 +157,18 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
                       scene::FpsCamera const &camera, std::span<scene::Light const> lights,
                       std::span<DrawItem const> draws, OutputSettings output)
 {
-    auto &command_buffer = cmd.raii();
+    // Callbacks borrow this invocation's inputs and are destroyed before it returns.
+    RenderGraph graph;
+    add_passes(graph, resources, target, camera, lights, draws, output);
+    if (auto result = graph.compile(); !result)
+        fail("Cannot compile render graph: {}", result.error());
+    graph.execute(cmd);
+}
 
+void Renderer::add_passes(RenderGraph &graph, FrameResources &resources, RenderTarget const &target,
+                          scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                          std::span<DrawItem const> draws, OutputSettings output)
+{
     validate_draws(resources, target.extent, draws);
     if (lights.size() > max_num_lights)
         fail("light count exceeds supported capacity {}", max_num_lights);
@@ -169,8 +179,24 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         color_format_ != vk::Format::eB8G8R8A8Unorm)
         fail("manual sRGB output requires an RGBA8/BGRA8 UNORM target");
 
-    ray_query_shadows_.record(cmd, resources, target.extent, camera, lights, draws);
-    ensure_attachments(resources, target.extent);
+    graph.import_resource("frame.inputs");
+    graph.import_resource("output.target");
+    ray_query_shadows_.add_passes(graph, resources, target.extent, camera, lights, draws);
+    graph.add_pass("HDR lighting", {"shadow.frame", "shadow.filtered_visibility"}, {"hdr.color"},
+                   [this, &resources, extent = target.extent, draws](CommandBuffer &commands) {
+                       record_hdr(commands, resources, extent, draws);
+                   });
+    graph.add_pass("Tone mapping", {"hdr.color", "output.target"}, {"output.color"},
+                   [this, &resources, target, output](CommandBuffer &commands) {
+                       tone_map(commands, resources, target, output);
+                   });
+}
+
+void Renderer::record_hdr(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
+                          std::span<DrawItem const> draws) const
+{
+    auto &command_buffer = cmd.raii();
+    ensure_attachments(resources, extent);
     auto &heap = *resources.descriptor_heap;
     auto const &visibility = *resources.ray_query.visibility;
     if (resources.shadow_visibility_index)
@@ -195,7 +221,7 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         .renderArea =
             {
                 .offset = vk::Offset2D{.x = 0, .y = 0},
-                .extent = target.extent,
+                .extent = extent,
             },
         // must not be 0: VUID-VkRenderingInfo-viewMask-06069
         .layerCount = 1,
@@ -248,7 +274,6 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
     shaders_.bind_to_command_buffer(cmd);
     set_graphics_state(command_buffer, main_state_);
     // Render area, viewport and scissor use the same caller-provided extent.
-    vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where
     // Vulkan's points down. y moves to the bottom edge to match: with y = 0,
     // the flipped viewport would cover [-height, 0], entirely off-screen.
@@ -335,7 +360,6 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderSampledRead);
-    tone_map(cmd, resources, target, output);
 }
 
 void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,

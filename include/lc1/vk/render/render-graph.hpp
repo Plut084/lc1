@@ -50,17 +50,19 @@ class RenderGraph {
         for (std::size_t pass_index = 0; pass_index < passes_.size(); ++pass_index) {
             auto const &pass = passes_[pass_index];
             if (pass.name.empty())
-                return std::unexpected(std::format("Render graph pass {} has no name.", pass_index));
+                return std::unexpected(
+                    std::format("Render graph pass {} has no name.", pass_index));
             if (!pass_names.insert(pass.name).second)
-                return std::unexpected(std::format("Render graph has duplicate pass name '{}'.",
-                                                   pass.name));
+                return std::unexpected(
+                    std::format("Render graph has duplicate pass name '{}'.", pass.name));
             if (!pass.record_commands)
-                return std::unexpected(std::format("Pass '{}' has no recording callback.", pass.name));
+                return std::unexpected(
+                    std::format("Pass '{}' has no recording callback.", pass.name));
 
             for (auto const &output : pass.outputs) {
                 if (output.empty())
-                    return std::unexpected(std::format("Pass '{}' declares an empty output resource.",
-                                                       pass.name));
+                    return std::unexpected(
+                        std::format("Pass '{}' declares an empty output resource.", pass.name));
                 if (imports_.contains(output))
                     return std::unexpected(std::format(
                         "Pass '{}' writes imported resource '{}'; use a distinct name for its new "
@@ -82,15 +84,15 @@ class RenderGraph {
             std::unordered_set<std::size_t> dependencies;
             for (auto const &input : pass.inputs) {
                 if (input.empty())
-                    return std::unexpected(std::format("Pass '{}' declares an empty input resource.",
-                                                       pass.name));
+                    return std::unexpected(
+                        std::format("Pass '{}' declares an empty input resource.", pass.name));
                 auto const writer = resource_writer.find(input);
                 if (writer == resource_writer.end()) {
                     if (imports_.contains(input))
                         continue;
                     return std::unexpected(std::format(
-                        "Pass '{}' reads resource '{}' with no producing pass or import.", pass.name,
-                        input));
+                        "Pass '{}' reads resource '{}' with no producing pass or import.",
+                        pass.name, input));
                 }
                 if (writer->second == pass_index)
                     return std::unexpected(std::format(
@@ -131,9 +133,9 @@ class RenderGraph {
                 for (auto const &input : passes_[pass_index].inputs) {
                     auto const writer = resource_writer.find(input);
                     if (writer != resource_writer.end() && in_degree[writer->second] != 0)
-                        error += std::format("\n  Pass '{}' waits for resource '{}' from pass '{}'.",
-                                             passes_[pass_index].name, input,
-                                             passes_[writer->second].name);
+                        error += std::format(
+                            "\n  Pass '{}' waits for resource '{}' from pass '{}'.",
+                            passes_[pass_index].name, input, passes_[writer->second].name);
                 }
             }
             return std::unexpected(std::move(error));
@@ -149,7 +151,8 @@ class RenderGraph {
     void execute(CommandBuffer &commands) const
     {
         if (!compiled_)
-            fail("RenderGraph::execute requires successful compile() after the last graph mutation");
+            fail(
+                "RenderGraph::execute requires successful compile() after the last graph mutation");
         for (auto const index : pass_order_)
             passes_[index].record_commands(commands);
     }

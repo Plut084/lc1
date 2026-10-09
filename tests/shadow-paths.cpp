@@ -77,9 +77,8 @@ std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &rende
     return pixels;
 }
 
-void exercise(lc1::Device const &device)
+void exercise(lc1::Device const &device, vk::SampleCountFlagBits samples)
 {
-    auto const samples = std::min(device.max_sample_count(), vk::SampleCountFlagBits::e4);
     lc1::Renderer renderer{device, {vk::Format::eR8G8B8A8Unorm}, samples};
     lc1::GpuTexture texture{device,
                             lc1::Image::load_from_file("assets/textures/prototype-white.png")};
@@ -110,6 +109,30 @@ void exercise(lc1::Device const &device)
           "normal rendering did not prepare ray-query resources");
     check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
           "fresh frame slot changed a static hard-lit scene");
+
+    // Rebuild the frame with empty input spans, then restore them on both slots.
+    // Stale callbacks must not retain the previous draws or skip clearing/tone mapping.
+    auto const empty = render(device, renderer, normal_frame, camera, {}, {});
+    check(normal_frame.ray_query.built_instances.empty(), "empty frame retained shadow casters");
+    check(empty != first_lit, "empty draw list retained the lit scene");
+    // The first pixel lies outside this fixture's ground plane and supplies its
+    // tone-mapped background color without depending on UNORM rounding.
+    for (std::size_t i = 0; i < empty.size(); ++i)
+        check(empty[i] == first_lit[i % 4], "empty frame did not clear the entire output");
+
+    constexpr vk::Extent2D unlit_extent{64, 64};
+    auto const unlit = render(device, renderer, second_frame, camera, {}, draws, unlit_extent);
+    constexpr auto center =
+        (unlit_extent.height / 2 * unlit_extent.width + unlit_extent.width / 2) * 4;
+    check(unlit[center] == 0 && unlit[center + 1] == 0 && unlit[center + 2] == 0 &&
+              unlit[center + 3] == 255,
+          "frame without lights retained stale lighting or skipped geometry");
+    check(render(device, renderer, normal_frame, camera, lights, draws) == first_lit,
+          "restoring geometry after an empty frame changed the lit scene");
+    check(normal_frame.ray_query.built_instances.size() == 1,
+          "restoring geometry after an empty frame did not rebuild the TLAS");
+    check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
+          "restoring lights changed the lit scene");
 
     // Printed labels remain visible without entering the shadow-caster path.
     // Exercise an empty TLAS and invalidate history when caster membership changes.
@@ -179,8 +202,12 @@ int main()
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
         auto device = lc1::test::make_render_device(instance, *surface.raii());
-        exercise(device);
-        std::cout << "ray-query caster changes, frame slots, resize and rendering passed\n";
+        exercise(device, vk::SampleCountFlagBits::e1);
+        auto const samples = std::min(device.max_sample_count(), vk::SampleCountFlagBits::e4);
+        if (samples != vk::SampleCountFlagBits::e1)
+            exercise(device, samples);
+        std::cout
+            << "ray-query empty frames, caster changes, frame slots, resize and rendering passed\n";
     }
     catch (std::exception const &error) {
         std::cerr << error.what() << '\n';

@@ -1,0 +1,5 @@
+# Session state, not world data: which character this save is played as, and which one an
+# AI demonstration drives. Both are ordinary records in characters.yaml; keyid 0 means the
+# save has no example. Nothing in the game code hard-codes these numbers.
+- player: 1
+  example: 2

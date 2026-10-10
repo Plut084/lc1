@@ -1,0 +1,13 @@
+# A party stores character keyids, not troops: it is a container and a map entity.
+# leader 0 means the party has no leader yet. Every listed character must exist in
+# characters.yaml, and every character's own party must exist here.
+- keyid: 1
+  faction: 1
+  leader: 1
+  members: [1, 2]
+  captives: []
+- keyid: 3
+  faction: 1
+  leader: 100024
+  members: [100024, 100025, 100026, 100027, 100028]
+  captives: []

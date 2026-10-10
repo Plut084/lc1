@@ -1,5 +1,10 @@
 #include "lc1/game/game-session.hpp"
 
+#include "lc1/error.hpp"
+#include "lc1/game/equipment.hpp"
+#include "lc1/game/faction.hpp"
+#include "lc1/game/party.hpp"
+#include "lc1/game/weapon.hpp"
 #include "lc1/image.hpp"
 #include "lc1/model.hpp"
 #include "lc1/scene/lights/directional-light.hpp"
@@ -11,7 +16,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <memory>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace lc1 {
 namespace {
@@ -19,8 +28,12 @@ namespace {
 constexpr std::array lighting_names{"All",  "Directional", "Point",
                                     "Spot", "Sphere",      "Emission Only"};
 
+// The player's body. The placeholder mesh below and the collision body are built from the
+// same numbers, so the two cannot silently disagree.
+constexpr CharacterBody player_body{};
+
 // A visible, body-sized placeholder for the player now that the camera is above them.
-Model make_player_model()
+Model make_player_model(CharacterBody const &body)
 {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -38,41 +51,41 @@ Model make_player_model()
             auto const normal = glm::normalize(
                 glm::cross(points[face[1]] - points[face[0]], points[face[2]] - points[face[0]]));
             for (auto const index : face)
-                vertices.push_back({points[index], normal, color, {0.5F, 0.5F}});
+                vertices.push_back({.position = points[index],
+                                    .normal = normal,
+                                    .color = color,
+                                    .uv = {0.5F, 0.5F}});
             for (auto const index : {0U, 1U, 2U, 0U, 2U, 3U})
                 indices.push_back(base + index);
         }
     };
-    constexpr CharacterConfig config;
-    box(config.half_width, 0.0F, 1.2F, {0.06F, 0.25F, 0.8F});
-    box(0.22F, 1.2F, config.height, {0.95F, 0.65F, 0.15F});
+    box(body.half_width, 0.0F, 1.2F, {0.06F, 0.25F, 0.8F});
+    box(0.22F, 1.2F, body.height, {0.95F, 0.65F, 0.15F});
     return Model{std::move(vertices), std::move(indices)};
+}
+
+// A runtime object must not collide with another of its kind: a duplicate keyid would make
+// every reference to it ambiguous.
+template <typename Map, typename Value>
+void insert_unique(Map &map, std::uint32_t keyid, Value value, std::string_view kind)
+{
+    if (!map.try_emplace(keyid, std::move(value)).second)
+        fail("duplicate {} keyid {}", kind, keyid);
 }
 
 } // namespace
 
 GameSession::GameSession(Device const &device, std::filesystem::path const &asset_root,
-                         OutputSettings output)
+                         Save const &save, OutputSettings output)
     : white_{device, Image::load_from_file(asset_root / "textures/prototype-white.png")},
       continent_{Continent::make_present(demo::PbrShowcase::spawn_blocks())},
       continent_view_{device, white_, continent_}, showcase_{device, continent_.spawn()},
-      player_mesh_{make_player_model().gen_mesh(device)},
+      player_mesh_{make_player_model(player_body).gen_mesh(device)},
       player_material_{
           MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
                        .base_color = {.texture = &white_}}},
-      player_{continent_,
-              {.transform = {.position = continent_.spawn()},
-               .mesh = &player_mesh_,
-               .material = &player_material_}},
-      player_view_{continent_, player_.position()}, output_{output}
+      output_{output}
 {
-    auto const terrain_draws = continent_view_.draw_items();
-    draws_.assign(terrain_draws.begin(), terrain_draws.end());
-    showcase_offset_ = draws_.size();
-    draws_.insert(draws_.end(), showcase_.draws().begin(), showcase_.draws().end());
-    player_offset_ = draws_.size();
-    draws_.push_back(player_.draw_item());
-
     scene::DirectionalLight const sun{
         .base = {.color = glm::vec3{1.0F, 0.95F, 0.9F}, .intensity = 0.3F},
         .direction = glm::normalize(glm::vec3{-1.0F, -1.0F, -1.0F})};
@@ -92,22 +105,129 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
     lights_.push_back(to_light(spotlight));
     active_lights_ = lights_;
 
-    characters_.push_back(std::make_unique<Character>(
-        continent_,
-        scene::Object{.transform = {.position = continent_.spawn() + glm::vec3{0.0F, 0.0F, 5.0F}},
-                      .mesh = &player_mesh_,
-                      .material = &player_material_}));
-    controllers_.push_back(std::make_unique<AiCharacterController>(
-        continent_, continent_.spawn() + glm::vec3{2.0F, 0.0F, 0.0F},
-        continent_.spawn() + glm::vec3{5.0F, 0.0F, 8.0F}));
+    build_world(save);
 
-    ch_index_ = draws_.size();
-    draws_.push_back(DrawItem{.mesh = &player_mesh_, .material = &player_material_});
+    // Which character is the player comes from the save, so no keyid is special here. The
+    // view needs the player's starting position, hence it is built after the world that
+    // owns the character.
+    player_ = character_by_id(save.player(), "player");
+    player_view_ = std::make_unique<PlayerView>(continent_, player_->position());
+    if (save.has_example()) {
+        example_ = character_by_id(save.example(), "AI example");
+        example_->set_controller(std::make_unique<AiCharacterController>(
+            continent_, continent_.spawn() + glm::vec3{-2.0F, 0.0F, 0.0F},
+            continent_.spawn() + glm::vec3{-5.0F, 0.0F, -8.0F}));
+    }
 
     spdlog::info(
         "[world] {} regions, {} locations, {} roads, {} terrain chunks; fixed oblique view",
         continent_.regions().size(), continent_.locations().size(), continent_.roads().size(),
-        terrain_draws.size());
+        continent_view_.draw_items().size());
+    spdlog::info("[save] {}: {} factions, {} parties, {} characters, {} equipment, {} weapons",
+                 save.directory().string(), save.factions().size(), save.parties().size(),
+                 save.characters().size(), save.equipments().size(), save.weapons().size());
+}
+
+void GameSession::build_world(Save const &save)
+{
+    // Save already proved every reference resolves, so the lookups below cannot miss: a
+    // dangling keyid fails the load before this runs.
+    for (auto const &entry : save.factions()) {
+        auto const &record = entry.second;
+        insert_unique(factions_, record.keyid, std::make_unique<Faction>(record.keyid, record.name),
+                      "faction");
+    }
+    for (auto const &entry : save.equipments()) {
+        auto const &record = entry.second;
+        insert_unique(equipments_, record.keyid,
+                      std::make_unique<Equipment>(record.keyid, record.type,
+                                                  EquipmentProperty{.armor = record.armor}),
+                      "equipment");
+    }
+    for (auto const &entry : save.weapons()) {
+        auto const &record = entry.second;
+        insert_unique(weapons_, record.keyid,
+                      std::make_unique<Weapon>(
+                          record.keyid, record.type,
+                          WeaponProperty{.attack = record.attack, .range = record.range}),
+                      "weapon");
+    }
+
+    // Parties precede characters because a character record names the party it belongs to.
+    for (auto const &entry : save.parties()) {
+        auto const &record = entry.second;
+        insert_unique(parties_, record.keyid,
+                      std::make_unique<Party>(record.keyid, factions_.at(record.faction).get()),
+                      "party");
+    }
+
+    // Save records carry no pose yet, so every one of them uses the prototype's transform
+    // and drawable.
+    scene::Object const prototype{.transform = {.position = continent_.spawn()},
+                                  .mesh = &player_mesh_,
+                                  .material = &player_material_};
+    for (auto const &entry : save.characters()) {
+        auto const &record = entry.second;
+        CharacterConfig config{
+            .keyid = record.keyid,
+            .name = record.name,
+            .sex = record.sex,
+            .age = record.age,
+            .party = parties_.at(record.party).get(),
+            .level = record.level,
+            .equipment = {},
+            .weapon = {},
+        };
+        for (auto const &slot : record.equipment)
+            config.equipment[slot.first] = equipments_.at(slot.second).get();
+        for (auto const &slot : record.weapon)
+            config.weapon[slot.first] = weapons_.at(slot.second).get();
+        insert_unique(characters_, record.keyid,
+                      std::make_unique<Character>(continent_, prototype, std::move(config)),
+                      "character");
+    }
+
+    link_party_members(save);
+}
+
+void GameSession::link_party_members(Save const &save)
+{
+    for (auto const &entry : save.parties()) {
+        auto const &record = entry.second;
+        Party *const party = parties_.at(record.keyid).get();
+        // keyid 0 is "no leader": a party may exist before anyone leads it.
+        if (record.leader != 0)
+            party->set_leader(character_by_id(record.leader, "party leader"));
+        for (auto const member : record.members)
+            party->add_member(character_by_id(member, "party member"));
+        for (auto const captive : record.captives)
+            party->add_captive(character_by_id(captive, "party captive"));
+    }
+}
+
+Character *GameSession::character_by_id(std::uint32_t keyid, std::string_view what) const
+{
+    auto const character = characters_.find(keyid);
+    if (character == characters_.end())
+        fail("{} refers to unknown character {}", what, keyid);
+    return character->second.get();
+}
+
+std::vector<DrawItem> GameSession::draws() const
+{
+    std::vector<DrawItem> items;
+    items.reserve(object_capacity());
+    items.append_range(continent_view_.draw_items());
+    items.append_range(showcase_.draws());
+    for (auto const &entry : characters_)
+        items.push_back(entry.second->draw_item());
+    return items;
+}
+
+std::uint32_t GameSession::object_capacity() const
+{
+    return static_cast<std::uint32_t>(continent_view_.draw_items().size() +
+                                      showcase_.draws().size() + characters_.size());
 }
 
 void GameSession::update_showcase(GameInput const &input, float delta_seconds)
@@ -122,16 +242,14 @@ void GameSession::update_showcase(GameInput const &input, float delta_seconds)
     if (showcase_animated_)
         showcase_time_ += std::clamp(delta_seconds, 0.0F, 0.1F);
     showcase_.update(showcase_time_);
-    std::copy(showcase_.draws().begin(), showcase_.draws().end(),
-              draws_.begin() + showcase_offset_);
 }
 
 void GameSession::update_lighting()
 {
     // Hold the flashlight above ground and outside the mesh, on the aiming side.
-    lights_[flashlight_index_].position = player_.position() + glm::vec3{0.0F, 1.3F, 0.0F} +
-                                          player_.heading() * 0.5F + player_.right() * 0.5F;
-    lights_[flashlight_index_].direction = player_.heading();
+    lights_[flashlight_index_].position = player_->position() + glm::vec3{0.0F, 1.3F, 0.0F} +
+                                          player_->heading() * 0.5F + player_->right() * 0.5F;
+    lights_[flashlight_index_].direction = player_->heading();
     active_lights_.clear();
     for (auto const &light : lights_)
         if (lighting_mode_ == 0 || (lighting_mode_ <= 4 && light.type == lighting_mode_ - 1))
@@ -141,11 +259,11 @@ void GameSession::update_lighting()
 GameLocation GameSession::location() const
 {
     // Location follows the character even while the camera is panned elsewhere.
-    glm::vec2 const position{player_.position().x, player_.position().z};
+    glm::vec2 const position{player_->position().x, player_->position().z};
     auto const *region = continent_.region_at(position);
     auto const *place = continent_.location_at(position);
     auto const *road = continent_.road_at(position);
-    auto const local = player_.position() - continent_.spawn();
+    auto const local = player_->position() - continent_.spawn();
     bool const in_showcase = std::abs(local.x) < 24 && std::abs(local.z) < 23;
     return {.region = region->name,
             .place = in_showcase ? "Material Showcase"
@@ -161,13 +279,15 @@ std::string_view GameSession::lighting_name() const
 
 void GameSession::update(GameInput const &input, float delta_seconds)
 {
+    assert(player_);
+    assert(player_view_);
+
     update_showcase(input, delta_seconds);
-    player_view_.update(player_, input.player, input.camera, delta_seconds);
-    draws_[player_offset_] = player_.draw_item();
+    player_view_->update(*player_, input.player, input.camera, delta_seconds);
     update_lighting();
 
-    controllers_[0]->update(delta_seconds, *characters_[0]);
-    draws_[ch_index_] = characters_[0]->draw_item();
+    for (auto const &entry : characters_)
+        entry.second->update(delta_seconds);
 }
 
 } // namespace lc1

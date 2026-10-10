@@ -1,0 +1,9 @@
+# WeaponType is one of MeleeWeapon, RangedWeapon. Range is in metres.
+- keyid: 1
+  type: MeleeWeapon
+  attack: 12.0
+  range: 1.5
+- keyid: 2
+  type: RangedWeapon
+  attack: 9.0
+  range: 40.0

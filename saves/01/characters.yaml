@@ -1,0 +1,76 @@
+# One record per concrete person, every one with its own keyid and data; a troop template
+# is not a runtime entity. No keyid is special: session.yaml names the player and the AI
+# demonstration character, and both are ordinary records here.
+#
+# equipment and weapon are maps keyed by an enum. An enum cannot be a YAML mapping key,
+# so reflect-cpp writes each entry as a [key, value] pair.
+- keyid: 1
+  name: player
+  sex: true
+  age: 30
+  party: 1
+  level: 1
+  equipment: []
+  weapon: []
+- keyid: 2
+  name: example
+  sex: true
+  age: 25
+  party: 1
+  level: 1
+  equipment: []
+  weapon: []
+- keyid: 100024
+  name: Ed
+  sex: true
+  age: 24
+  party: 3
+  level: 4
+  equipment:
+    - [Head, 1]
+    - [Body, 2]
+    - [Foot, 3]
+  weapon:
+    - [MeleeWeapon, 1]
+- keyid: 100025
+  name: Ron
+  sex: true
+  age: 21
+  party: 3
+  level: 2
+  equipment:
+    - [Body, 2]
+  weapon:
+    - [MeleeWeapon, 1]
+- keyid: 100026
+  name: Martin
+  sex: true
+  age: 30
+  party: 3
+  level: 3
+  equipment:
+    - [Head, 1]
+    - [Body, 2]
+  weapon:
+    - [RangedWeapon, 2]
+- keyid: 100027
+  name: Thomas
+  sex: true
+  age: 19
+  party: 3
+  level: 1
+  equipment:
+    - [Foot, 3]
+  weapon:
+    - [MeleeWeapon, 1]
+- keyid: 100028
+  name: Anna
+  sex: false
+  age: 27
+  party: 3
+  level: 5
+  equipment:
+    - [Head, 1]
+    - [Foot, 3]
+  weapon:
+    - [RangedWeapon, 2]

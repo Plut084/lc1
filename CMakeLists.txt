@@ -91,6 +91,7 @@ find_package(TinyGLTF CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(reflectcpp CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -154,6 +155,7 @@ target_link_libraries(lc1_engine PUBLIC
     tinyobjloader::tinyobjloader
     TinyGLTF::TinyGLTF
     KTX::ktx
+    reflectcpp::reflectcpp
 )
 target_link_libraries(lc1_engine PRIVATE
     mikktspace::mikktspace
@@ -194,6 +196,8 @@ add_library(lc1_game STATIC
     src/game/continent-present.cpp
     src/game/continent-layout.cpp
     src/game/character.cpp
+    src/game/party.cpp
+    src/game/save.cpp
     src/game/player-controller.cpp
     src/game/map-camera-controller.cpp
     src/game/continent-view.cpp
@@ -234,7 +238,15 @@ add_custom_target(copy_assets
         "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_BINARY_DIR}/assets"
     VERBATIM
 )
-add_dependencies(lc1 shaders copy_assets)
+# Save data is opened relative to the working directory, like shaders/. Nothing writes
+# saves yet, so the repository seed is refreshed on each build; once the game writes its
+# own saves, this must stop overwriting files that already exist.
+add_custom_target(copy_saves
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/saves" "${CMAKE_CURRENT_BINARY_DIR}/saves"
+    VERBATIM
+)
+add_dependencies(lc1 shaders copy_assets copy_saves)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -260,6 +272,15 @@ if(BUILD_TESTING)
     add_executable(lc1_character_tests tests/character.cpp)
     target_link_libraries(lc1_character_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_character_tests)
+    # The save tests open saves/01 from the working directory, exactly like the game, so
+    # they need the build tree that copy_saves filled in.
+    add_executable(lc1_save_tests tests/save.cpp)
+    target_link_libraries(lc1_save_tests PRIVATE lc1_game)
+    lc1_enable_warnings(lc1_save_tests)
+    add_test(NAME save_data
+        COMMAND lc1_save_tests
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_dependencies(lc1_save_tests copy_saves)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_tangent_tests)
@@ -273,6 +294,7 @@ if(BUILD_TESTING)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
         target_link_options(lc1_character_tests PRIVATE -static)
+        target_link_options(lc1_save_tests PRIVATE -static)
         target_link_options(lc1_tangent_tests PRIVATE -static)
         target_link_options(lc1_player_view_tests PRIVATE -static)
         target_link_options(lc1_render_graph_tests PRIVATE -static)

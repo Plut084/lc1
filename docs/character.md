@@ -13,7 +13,7 @@
 |---|---|
 | 世界位置与身体朝向 | `Character` 内部的 `Object::transform`，只保存一份 |
 | 相对身体的观察角度 | `Character` |
-| 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterConfig` |
+| 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterBody` |
 | 模型原点、单位、坐标轴的校正 | `Model`，在上传 GPU 前统一处理 |
 | CPU 顶点和索引 | `Model` |
 | GPU 顶点、索引和 BLAS | `GpuMesh`，多个角色可以借用同一份 |
@@ -42,7 +42,9 @@ lc1::Character character{
     continent,
     {.transform = {.position = continent.spawn()},
      .mesh = &mesh,
-     .material = &material}};
+     .material = &material},
+    lc1::CharacterConfig{},
+    lc1::CharacterBody{}};
 
 character.set_body_yaw(90.0F);
 character.set_look_angles(0.0F, 20.0F);
@@ -53,9 +55,11 @@ auto const draw = character.draw_item();
 −90° 的校正仅是 Z-up 模型转为 Y-up 的示例；已经符合坐标约定的资源不需要它。
 
 构造时校验出生点、身体参数、世界变换以及网格/材质配对。世界变换保持直立、单位缩放；
-模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterConfig` 设置，避免视觉缩放
-悄悄改变身体大小。`Character(continent)` 还可以创建没有可绘制资源的模拟角色，方便
-CPU 测试；对这种角色调用 `draw_item()` 会明确报错。
+模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterBody` 设置，避免视觉缩放
+悄悄改变身体大小。构造时显式传入 `Object` 和 `CharacterConfig`，`CharacterBody` 可省略，
+默认值同时用于占位网格和碰撞体，两者不会悄悄对不上；将出生位置设为
+`continent.spawn()`、网格和材质留空即可创建供 CPU 测试使用的模拟角色。
+对这种角色调用 `draw_item()` 会明确报错。
 
 `move(continent, displacement)` 接受以米为单位的 `vec3` 世界位移，当前要求 y 为零。
 它借用大陆的碰撞查询，让身体沿障碍滑动，并把结果写回同一份世界位置。

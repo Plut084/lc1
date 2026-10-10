@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace lc1 {
 namespace {
@@ -22,26 +23,22 @@ glm::vec3 horizontal_direction(float degrees)
 
 } // namespace
 
-Character::Character(Continent const &continent)
-    : Character(continent, scene::Object{.transform = {.position = continent.spawn()}})
+Character::Character(Continent const &continent, scene::Object object, CharacterConfig config,
+                     CharacterBody body)
+    : config_(std::move(config)), body_(body), object_(object)
 {
-}
-
-Character::Character(Continent const &continent, scene::Object object, CharacterConfig config)
-    : config_(config), object_(object)
-{
-    if (!std::isfinite(config.half_width) || config.half_width <= 0.0F ||
-        !std::isfinite(config.height) || config.height <= 0.0F ||
-        !std::isfinite(config.eye_height) || config.eye_height < 0.0F ||
-        config.eye_height > config.height || !std::isfinite(config.walk_speed) ||
-        config.walk_speed < 0.0F || !std::isfinite(config.run_speed) || config.run_speed < 0.0F)
-        fail("invalid character configuration");
+    if (!std::isfinite(body_.half_width) || body_.half_width <= 0.0F ||
+        !std::isfinite(body_.height) || body_.height <= 0.0F || !std::isfinite(body_.eye_height) ||
+        body_.eye_height < 0.0F || body_.eye_height > body_.height ||
+        !std::isfinite(body_.walk_speed) || body_.walk_speed < 0.0F ||
+        !std::isfinite(body_.run_speed) || body_.run_speed < 0.0F)
+        fail("invalid character body");
 
     auto const &pose = object_.transform;
     if (!finite(pose.position) || !finite(pose.rotation) || pose.rotation.x != 0.0F ||
         pose.rotation.z != 0.0F || pose.scale != glm::vec3{1.0F})
         fail("ground character needs an upright, unscaled world transform");
-    if (!continent.can_stand(position(), config_.half_width, config_.height))
+    if (!continent.can_stand(position(), body_.half_width, body_.height))
         fail("character spawn is obstructed or outside the continent");
     if ((object_.mesh == nullptr) != (object_.material == nullptr))
         fail("character drawable needs both a mesh and a material");
@@ -53,7 +50,7 @@ void Character::move(Continent const &continent, glm::vec3 displacement)
     if (!finite(displacement) || displacement.y != 0.0F)
         fail("ground character displacement must be finite and horizontal");
     object_.transform.position = continent.move(position(), {displacement.x, displacement.z},
-                                                config_.half_width, config_.height);
+                                                body_.half_width, body_.height);
 }
 
 void Character::walk(Continent const &continent, glm::vec3 direction, float delta_seconds,
@@ -68,7 +65,7 @@ void Character::walk(Continent const &continent, glm::vec3 direction, float delt
     if (length == 0.0)
         return;
     direction *= static_cast<float>(1.0 / std::max(length, 1.0));
-    float const speed = running ? config_.run_speed : config_.walk_speed;
+    float const speed = running ? body_.run_speed : body_.walk_speed;
     // A resize or debugger stall must not teleport the character.
     float const elapsed = std::min(delta_seconds, 0.1F);
     move(continent, direction * speed * elapsed);
@@ -122,7 +119,7 @@ glm::vec3 Character::right() const
 glm::vec3 Character::eye_position() const
 {
     // Character-space metres; independent of the source model's origin and units.
-    return position() + glm::vec3{0.0F, config_.eye_height, 0.0F};
+    return position() + glm::vec3{0.0F, body_.eye_height, 0.0F};
 }
 
 DrawItem Character::draw_item() const

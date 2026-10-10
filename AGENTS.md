@@ -132,7 +132,9 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   Presentation/render may also use core but never depend on each other. Core has no Window,
   scene or game dependency. See [Vulkan layers](docs/vulkan-layers.md).
 - `main` owns process setup and exception handling. `Application` owns window/Vulkan lifetime,
-  input routing, cursor capture, titles, swapchain recreation and scheduling. `GameSession` owns
+  input routing, cursor capture, titles, swapchain recreation and scheduling. `Application` also
+  owns the loaded `Save` (world data) as a peer of `GameSession`; `GameSession` consumes it once to
+  build its runtime world and keeps no reference to it. `GameSession` owns
   world/resources/player/lighting and consumes `GameInput`; `PlayerView` owns view modes and
   remembered look. Neither game class reads Window or InputRouter.
 - `Window`/`input.hpp` include no Vulkan headers; input also includes no GLFW headers. `Surface`
@@ -288,6 +290,7 @@ The following frame-loop invariants must survive refactoring:
 - Game design: [core systems](docs/content.md), [world/lore](docs/mind.md),
   [continent and cameras](docs/continent.md), [regions/roads](docs/world-map.md).
 - Map data/export: [outline conventions](docs/continent-outline.md), [map tools](docs/map/README.md).
+- Save data: [save files and load order](docs/save-data.md).
 - Rendering investigations: [performance](docs/render-performance.md),
   [Vulkan primer](docs/vulkan-minimal.md), [dated semantics review](docs/engine-semantics-review.md).
   Historical findings/plans are context; check current implementation before treating them as status.

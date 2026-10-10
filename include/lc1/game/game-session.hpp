@@ -6,12 +6,20 @@
 #include "lc1/game/character.hpp"
 #include "lc1/game/continent-view.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
+#include "lc1/game/faction.hpp"
+#include "lc1/game/party.hpp"
 #include "lc1/game/player-view.hpp"
+#include "lc1/game/save.hpp"
 #include "lc1/vk/render/output-settings.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <span>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace lc1 {
 
@@ -33,43 +41,45 @@ struct GameLocation {
 // Device must outlive the session; wait for rendering before teardown.
 class GameSession {
   public:
-    GameSession(Device const &device, std::filesystem::path const &asset_root,
+    GameSession(Device const &device, std::filesystem::path const &asset_root, Save const &save,
                 OutputSettings output);
     GameSession(GameSession const &) = delete;
     GameSession &operator=(GameSession const &) = delete;
     GameSession(GameSession &&) = delete;
     GameSession &operator=(GameSession &&) = delete;
+    ~GameSession() = default;
 
     void update(GameInput const &input, float delta_seconds);
 
     // Apply cursor capture after toggling, before collecting this frame's look delta.
-    void toggle_camera_view() { player_view_.toggle(player_); }
+    void toggle_camera_view() { player_view_->toggle(*player_); }
 
-    bool first_person() const { return !player_view_.oblique(); }
+    bool first_person() const { return !player_view_->oblique(); }
 
-    void set_aspect_ratio(float aspect_ratio) { player_view_.set_aspect_ratio(aspect_ratio); }
+    void set_aspect_ratio(float aspect_ratio) { player_view_->set_aspect_ratio(aspect_ratio); }
 
     GameLocation location() const;
     std::string_view lighting_name() const;
 
-    scene::FpsCamera const &camera() const { return player_view_.camera(); }
+    scene::FpsCamera const &camera() const { return player_view_->camera(); }
 
-    std::span<DrawItem const> draws() const { return draws_; }
+    // Build a frame snapshot from the current world, showcase and character state.
+    std::vector<DrawItem> draws() const;
 
     std::span<scene::Light const> lights() const { return active_lights_; }
 
     OutputSettings const &output() const { return output_; }
 
-    std::uint32_t object_capacity() const { return static_cast<std::uint32_t>(draws_.size()); }
-
-    // std::vector<DrawItem> draws() const
-    // {
-    //     std::vector<DrawItem> items;
-    //
-    //     return items;
-    // }
+    std::uint32_t object_capacity() const;
 
   private:
+    // The runtime world is built once, from the save data. Factions, equipment and weapons
+    // come first because parties and characters borrow them; a character names its party,
+    // and party membership names characters, so it is linked last.
+    void build_world(Save const &save);
+    void link_party_members(Save const &save);
+    Character *character_by_id(std::uint32_t keyid, std::string_view what) const;
+
     void update_showcase(GameInput const &input, float delta_seconds);
     void update_lighting();
 
@@ -81,17 +91,8 @@ class GameSession {
     demo::PbrShowcase showcase_;
     GpuMesh const player_mesh_;
     MaterialInfo const player_material_;
-    Character player_;
-    PlayerView player_view_;
-    std::vector<DrawItem> draws_;
-    // Slots inside draws_, written where the constructor appends. Both are
-    // rewritten in place every frame: DrawItem bakes a model matrix, so the
-    // player's copy goes stale as it moves. Named offsets rather than back() --
-    // an append after them would silently overwrite the wrong draw.
-    std::size_t showcase_offset_ = 0;
-    std::size_t player_offset_ = 0;
     std::vector<scene::Light> lights_;
-    // The flashlight follows the player; same refresh-in-place contract.
+    // Slot of the light that follows the player.
     std::size_t flashlight_index_ = 0;
     std::vector<scene::Light> active_lights_;
     OutputSettings output_;
@@ -99,10 +100,19 @@ class GameSession {
     bool showcase_animated_ = true;
     float showcase_time_ = 0.0F;
 
-    std::vector<std::unique_ptr<Character>> characters_;
-    std::vector<std::unique_ptr<AiCharacterController>> controllers_;
-    std::size_t ch_index_;
-    // std::vector;
+    std::unordered_map<std::uint32_t, std::unique_ptr<Faction>> factions_;
+    std::unordered_map<std::uint32_t, std::unique_ptr<Equipment>> equipments_;
+    std::unordered_map<std::uint32_t, std::unique_ptr<Weapon>> weapons_;
+    std::unordered_map<std::uint32_t, std::unique_ptr<Character>> characters_;
+    std::unordered_map<std::uint32_t, std::unique_ptr<Party>> parties_;
+
+    // Borrowed from the character table once the world is built: every character, the
+    // player included, comes from save data. The view is built at the same point, because
+    // it needs the player's start position.
+    Character *player_ = nullptr;
+    std::unique_ptr<PlayerView> player_view_;
+
+    Character *example_ = nullptr;
 };
 
 } // namespace lc1

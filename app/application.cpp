@@ -194,7 +194,8 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      game_{device_, config.asset_root, output_settings(surface_format_.format)},
+      save_{config.save_root},
+      game_{device_, config.asset_root, save_, output_settings(surface_format_.format)},
       frame_loop_{device_,
                   [this] { return renderer_.make_frame_resources(game_.object_capacity()); }}
 {
@@ -369,9 +370,11 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
+        // The graph borrows this frame's computed draws until execute() returns.
+        auto const draws = game_.draws();
         RenderGraph graph;
-        renderer_.add_passes(graph, resources, target, game_.camera(), game_.lights(),
-                             game_.draws(), game_.output());
+        renderer_.add_passes(graph, resources, target, game_.camera(), game_.lights(), draws,
+                             game_.output());
         graph.add_pass(
             "ImGui overlay", {"output.color"}, {"output.ui"}, [target](CommandBuffer &commands) {
                 // Make tone mapping's writes visible to the UI attachment load and blending.

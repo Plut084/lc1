@@ -1,17 +1,18 @@
 #pragma once
 
+#include "lc1/game/character-controller.hpp"
 #include "lc1/game/character.hpp"
 
 namespace lc1 {
 
-class AiCharacterController {
+class AiCharacterController : public CharacterController {
   public:
     AiCharacterController(Continent const &continent, glm::vec3 pos_a, glm::vec3 pos_b)
         : continent_(&continent), current_source_(pos_a), current_target_(pos_b)
     {
     }
 
-    void update(float delta_seconds, Character &character)
+    void update(float delta_seconds, Character &character) override
     {
         if (glm::distance(character.position(), current_target_) <= 0.5) {
             std::swap(current_target_, current_source_);

@@ -3,6 +3,7 @@
 #include "lc1/vk/render/renderer.hpp"
 
 #include "lc1/game/game-session.hpp"
+#include "lc1/game/save.hpp"
 
 #include "lc1/input.hpp"
 #include "lc1/vk/core/device.hpp"
@@ -23,6 +24,7 @@ namespace lc1::app {
 struct ApplicationConfig {
     bool enable_validation = true;
     std::filesystem::path asset_root = "assets";
+    std::filesystem::path save_root = "saves/01";
 };
 
 // Owns the graphics lifetime and presentation loop. GameSession owns gameplay.
@@ -55,7 +57,10 @@ class Application {
     vk::SurfaceFormatKHR const surface_format_;
     std::optional<Swapchain> swapchain_;
     Renderer renderer_;
-    // The frame factory reads the session's completed draw list during construction.
+    // The saved world and the session are peers: the session builds its runtime world from
+    // the save data and keeps no reference to it afterwards.
+    Save save_;
+    // The frame factory sizes GPU resources from the session's current draw count.
     // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;

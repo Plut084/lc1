@@ -34,8 +34,8 @@ void utf8_decoding()
     using lc1::text::decode_utf8;
     check(decode_utf8("") == U"", "empty input decodes to nothing");
     check(decode_utf8("ABC") == U"ABC", "ascii round trip");
-    check(decode_utf8("\xC3\xA9") == U"é", "two-byte sequence");
-    check(decode_utf8("\xE2\x82\xAC") == U"€", "three-byte sequence");
+    check(decode_utf8("\xC3\xA9") == U"\u00E9", "two-byte sequence");
+    check(decode_utf8("\xE2\x82\xAC") == U"\u20AC", "three-byte sequence");
     check(decode_utf8("\xF0\x9F\x99\x82") == U"\U0001F642", "four-byte sequence");
     // Malformed input loses only the offending byte: a stray continuation byte,
     // an overlong encoding, a surrogate and a truncated lead all disappear while
@@ -73,7 +73,7 @@ void atlas_contents(lc1::text::GlyphAtlas const &atlas)
 
     auto const *space = atlas.glyph(U' ');
     check(space != nullptr && space->advance > 0.0F, "a space advances the pen");
-    check(atlas.glyph(U'中') == nullptr, "codepoints outside the set are absent");
+    check(atlas.glyph(U'\u4E2D') == nullptr, "codepoints outside the set are absent");
 
     // Coverage lives in alpha; rgb stays white so the shader only has to tint.
     auto const extent = atlas.extent();

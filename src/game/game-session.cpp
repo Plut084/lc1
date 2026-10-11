@@ -232,6 +232,25 @@ std::vector<DrawItem> GameSession::draws() const
     return items;
 }
 
+std::vector<WorldTextItem> GameSession::world_labels() const
+{
+    std::vector<WorldTextItem> labels;
+    labels.append_range(showcase_.labels());
+
+    for (auto const &[_, character] : characters_)
+        labels.push_back(WorldTextItem{
+            .text = std::format("{} from {}", character->config().name,
+                                character->config().party->faction()->name()),
+            .center = character->position() + glm::vec3{0, character->height() + 0.5, 0},
+            .height = 0.3F,
+            .normal = camera().position() -
+                      (character->position() +
+                       glm::vec3{0, character->height() + 0.5, 0}), // from center to cam
+        });
+
+    return labels;
+}
+
 std::uint32_t GameSession::object_capacity() const
 {
     return static_cast<std::uint32_t>(continent_view_.draw_items().size() +

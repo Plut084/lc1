@@ -2,7 +2,10 @@
 
 #include "lc1/text/utf8.hpp"
 
+#include "lc1/error.hpp"
+
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -65,7 +68,18 @@ void append_text(std::vector<Vertex> &vertices, GlyphAtlas const &atlas, std::st
     auto const scale = placement.scale;
     // The quad's front must agree with the rest of the project: the same vertex
     // order as Geometry::quad, whose normal is cross(right, up).
-    constexpr glm::vec3 plane_normal{0.0F, 0.0F, 1.0F};
+    auto const normal = placement.normal;
+    if (!std::isfinite(normal.x) || !std::isfinite(normal.y) || !std::isfinite(normal.z))
+        fail("text normal must be finite and nonzero");
+    // Rescale first to avoid overflow/underflow for finite non-unit directions.
+    auto const largest = std::max({std::abs(normal.x), std::abs(normal.y), std::abs(normal.z)});
+    if (largest == 0.0F)
+        fail("text normal must be finite and nonzero");
+    auto const plane_normal = glm::normalize(normal / largest);
+    auto const reference_up = std::abs(plane_normal.y) > 0.999F ? glm::vec3{0.0F, 0.0F, 1.0F}
+                                                                : glm::vec3{0.0F, 1.0F, 0.0F};
+    auto const plane_right = glm::normalize(glm::cross(reference_up, plane_normal));
+    auto const plane_up = glm::cross(plane_normal, plane_right);
 
     float baseline = first_baseline(atlas);
     for (auto const &line : lines) {
@@ -84,7 +98,7 @@ void append_text(std::vector<Vertex> &vertices, GlyphAtlas const &atlas, std::st
             auto const left = pen + glyph->bearing.x;
             auto const top = baseline + glyph->bearing.y;
             auto const place = [&](float x, float y) {
-                return placement.origin + glm::vec3{x * scale, y * scale, 0.0F};
+                return placement.origin + (plane_right * x + plane_up * y) * scale;
             };
             if (glyph->size.x > 0.0F && glyph->size.y > 0.0F) {
                 auto const bottom_left = place(left, top - glyph->size.y);

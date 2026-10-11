@@ -1,6 +1,6 @@
 # 存档数据读取
 
-角色、队伍、势力、装备和武器从 `saves/01/` 下的 YAML 读取。大陆地形、区域、地点和道路
+角色、队伍、势力、装备和武器从 `runtime/saves/01/` 下的 YAML 读取。大陆地形、区域、地点和道路
 仍由 `Continent` 生成，不属于存档数据。文件相对工作目录打开，和 `shaders/` 一致；
 CMake 目标 `copy_saves` 把仓库里的种子数据复制进运行树，所以 `make run` 直接可用。
 
@@ -22,7 +22,8 @@ CMake 目标 `copy_saves` 把仓库里的种子数据复制进运行树，所以
 | `characters.yaml` | `SerializedCharacterConfig` | 队伍、`session.yaml` |
 | `session.yaml` | `SerializedSession` | 角色 |
 
-每个文件是一个 YAML 序列，每条记录一项。字段必须写全：读取使用
+世界数据文件是 YAML 序列，每条记录一项；`session.yaml` 是单个 YAML 映射。
+字段必须写全：读取使用
 `rfl::NoOptionals`，缺少任何字段都会解析失败，空列表要显式写成 `[]`。
 
 `keyid` 是身份，名称只是显示。同类编号非零、在本文件内唯一；重排文件或改名不影响引用。
@@ -78,7 +79,7 @@ CMake 目标 `copy_saves` 把仓库里的种子数据复制进运行树，所以
 | `weapon` | 武器槽位，每项为 `[武器类型, 武器编号]` 对 |
 
 编号 `1` 和 `2` 不是特殊编号。谁是玩家由 `session.yaml` 决定，`GameSession` 不再写死任何
-编号：玩家可以是任意一条角色记录，也可以整支队伍换人。种子数据里 `saves/01/session.yaml`
+编号：玩家可以是任意一条角色记录，也可以整支队伍换人。种子数据里 `runtime/saves/01/session.yaml`
 把 1 号定为玩家、2 号定为 AI 示例。
 
 ### 会话 `session.yaml`
@@ -92,11 +93,11 @@ CMake 目标 `copy_saves` 把仓库里的种子数据复制进运行树，所以
 身份之所以放在这里而不是当作角色记录的布尔标记，是因为它是存档槽的状态，而不是角色自身的
 属性；放成标记就必须反复校验“有且仅有一个 true”。
 
-因为它只有一条记录，所以写成一个序列、只含一项：
+这个文件是单个映射，而不是世界数据文件使用的序列：
 
 ```yaml
-- player: 1
-  example: 2
+player: 1
+example: 2
 ```
 
 ## 读取、校验与装配
@@ -138,8 +139,14 @@ CMake 目标 `copy_saves` 把仓库里的种子数据复制进运行树，所以
 
 - 只读：还没有把运行中的世界写回 YAML。写回时由 `GameSession` 生成记录、`Save` 负责写出，
   方向与现在相反。
-- 存档目录目前固定在 `ApplicationConfig::save_root`（默认 `saves/01`），没有存档槽位选择；
+- 存档目录目前固定在 `ApplicationConfig::save_root`（默认 `runtime/saves/01`），没有存档槽位选择；
   玩家身份已经由 `session.yaml` 提供，切换槽位只需改这个路径。
 - 角色记录不含位置、朝向、控制器和存活状态。
 - `copy_saves` 每次构建都会覆盖运行树里的存档；等游戏开始写存档后，必须改成不覆盖
   已经存在的文件。
+
+## 测试数据
+
+`tests/fixtures/saves/01/` 保存固定的测试世界，不依赖可编辑的运行存档。
+`save_data` 校验这些夹具和错误情况；`runtime_save_data` 另行检查构建树中的
+`runtime/saves/01/` 能否完整加载。

@@ -74,7 +74,7 @@ class GameSession {
     // The world's face, shared by panel labels and the application's HUD text.
     GpuFont const &font() const { return font_; }
 
-    std::span<WorldTextItem const> world_labels() const { return showcase_.labels(); }
+    std::vector<WorldTextItem> world_labels() const;
 
     std::string_view player_name() const { return player_->config().name; }
 

@@ -23,8 +23,8 @@ namespace lc1::app {
 
 struct ApplicationConfig {
     bool enable_validation = true;
-    std::filesystem::path asset_root = "assets";
-    std::filesystem::path save_root = "saves/01";
+    std::filesystem::path asset_root = "runtime/assets";
+    std::filesystem::path save_root = "runtime/saves/01";
 };
 
 // Owns the graphics lifetime and presentation loop. GameSession owns gameplay.

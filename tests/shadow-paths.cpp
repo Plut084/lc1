@@ -80,8 +80,8 @@ std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &rende
 void exercise(lc1::Device const &device, vk::SampleCountFlagBits samples)
 {
     lc1::Renderer renderer{device, {vk::Format::eR8G8B8A8Unorm}, samples};
-    lc1::GpuTexture texture{device,
-                            lc1::Image::load_from_file("assets/textures/prototype-white.png")};
+    lc1::GpuTexture texture{
+        device, lc1::Image::load_from_file("runtime/assets/textures/prototype-white.png")};
     auto material =
         lc1::MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
                           .base_color = {.texture = &texture}};

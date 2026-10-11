@@ -58,6 +58,7 @@ void TextPass::draw_world(CommandBuffer &commands, FrameResources &resources, Gp
                               .scale = scale,
                               .color = item.color,
                               .center_x = true,
+                              .normal = item.normal,
                           });
     }
     upload_and_draw(commands, resources, resources.world_text_vertices, font, view_projection,

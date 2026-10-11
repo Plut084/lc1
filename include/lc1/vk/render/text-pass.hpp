@@ -20,24 +20,27 @@ class Device;
 class GpuFont;
 struct FrameResources;
 
-// One line of text standing in the world: centred horizontally on `center.x`,
-// with its first line's top (the ascent line) at `center.y`, `height` units tall
+// Text standing in the world: `center` is the horizontal centre of the first
+// line's top (the ascent line) in its oriented plane, `height` units tall
 // from ascent to descent, and squeezed to `max_width` when the line would
-// otherwise be wider than that. The plane faces +z; the caller keeps it clear of
+// otherwise be wider than that. The plane faces `normal`; the caller keeps it clear of
 // the surface it belongs to so the depth test does not eat the glyphs.
 struct WorldTextItem {
-    std::string_view text;
+    std::string text;
     glm::vec3 center{};
     float height = 1.0F;
     float max_width = 0.0F; // Zero means no cap.
     glm::vec3 color{1.0F};
+    // Finite, nonzero front direction; normalized during layout. Up follows world
+    // +Y projected onto the plane, or +Z when nearly parallel to +Y.
+    glm::vec3 normal{0.0F, 0.0F, 1.0F};
 };
 
 // One line of screen text. `position` is the top-left corner of the first line in
 // pixels from the bottom-left corner, which is the corner the screen transform
 // treats as the origin.
 struct ScreenTextItem {
-    std::string_view text;
+    std::string text;
     glm::vec2 position{};
     float pixel_height = 16.0F;
     glm::vec3 color{1.0F};
@@ -49,8 +52,8 @@ struct ScreenTextItem {
 // rather than merely undocumented.
 struct TextFrameInput {
     GpuFont const *font = nullptr;
-    std::span<WorldTextItem const> world;
-    std::span<ScreenTextItem const> screen;
+    std::vector<WorldTextItem> world;
+    std::vector<ScreenTextItem> screen;
 };
 
 // Text drawing, shared by the scene pass (world text, depth-tested, blended into

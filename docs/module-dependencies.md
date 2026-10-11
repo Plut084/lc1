@@ -364,7 +364,7 @@ flowchart TB
     slang --> source["生产与测试 .slang"]
     slang -.-> spirv["构建目录 shaders/*.spv"]
     runtime["ShaderObject"] --> spirv
-    copy["copy_assets"] --> assets["assets/textures / assets/lc-res"]
+    copy["copy_assets"] --> assets["runtime/assets/textures / runtime/assets/lc-res"]
     copy -.-> copied["构建目录 assets/"]
     game["GameSession / Model / Image"] --> copied
 ```
@@ -376,7 +376,7 @@ flowchart LR
     export -.-> land["src/game/continent-land.generated.hpp"]
     continent["Continent::make_present"] --> land
     raster["ImageMagick<br/>手动栅格化"] --> svg
-    raster -.-> texture["assets/textures/continent-present.png"]
+    raster -.-> texture["runtime/assets/textures/continent-present.png"]
     old["docs/map/generate_map.py"] -.-> world["world-map.svg"]
     world -.-> png["ImageMagick 产物<br/>world-map.png"]
 ```

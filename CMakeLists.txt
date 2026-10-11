@@ -244,7 +244,7 @@ endif()
 # Keep the runtime tree relocatable. Copy on each build so edited assets are refreshed.
 add_custom_target(copy_assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_BINARY_DIR}/assets"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/assets" "${CMAKE_CURRENT_BINARY_DIR}/runtime/assets"
     VERBATIM
 )
 # Save data is opened relative to the working directory, like shaders/. Nothing writes
@@ -252,7 +252,7 @@ add_custom_target(copy_assets
 # own saves, this must stop overwriting files that already exist.
 add_custom_target(copy_saves
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/saves" "${CMAKE_CURRENT_BINARY_DIR}/saves"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/saves" "${CMAKE_CURRENT_BINARY_DIR}/runtime/saves"
     VERBATIM
 )
 add_dependencies(lc1 shaders copy_assets copy_saves)
@@ -282,13 +282,15 @@ if(BUILD_TESTING)
     add_executable(lc1_character_tests tests/character.cpp)
     target_link_libraries(lc1_character_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_character_tests)
-    # The save tests open saves/01 from the working directory, exactly like the game, so
-    # they need the build tree that copy_saves filled in.
+    # Save tests use immutable fixtures, independent of the editable runtime saves.
     add_executable(lc1_save_tests tests/save.cpp)
     target_link_libraries(lc1_save_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_save_tests)
     add_test(NAME save_data
         COMMAND lc1_save_tests
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME runtime_save_data
+        COMMAND lc1_save_tests runtime/saves/01
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     add_dependencies(lc1_save_tests copy_saves)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
@@ -300,8 +302,8 @@ if(BUILD_TESTING)
     add_executable(lc1_render_graph_tests tests/render-graph.cpp)
     target_link_libraries(lc1_render_graph_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_render_graph_tests)
-    # The font test reads assets/fonts like the game does, and skips when the
-    # face is absent (assets/ is not tracked in this repository).
+    # The font test reads runtime/assets/fonts like the game does, and skips when the
+    # face is absent (runtime/assets/ is not tracked in this repository).
     add_executable(lc1_font_tests tests/font.cpp)
     target_link_libraries(lc1_font_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_font_tests)

@@ -378,8 +378,9 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         auto const location = game_.location();
         std::string const hud =
             std::format("{} | {} / {}", game_.player_name(), location.region, location.place);
-        std::array const hud_items{
-            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .pixel_height = 22.0F}};
+        std::vector const hud_items{
+            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .pixel_height = 22.0F},
+        };
         TextFrameInput const text{
             .font = &game_.font(), .world = game_.world_labels(), .screen = hud_items};
         RenderGraph graph;

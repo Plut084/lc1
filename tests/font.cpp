@@ -1,3 +1,4 @@
+#include "lc1/error.hpp"
 #include "lc1/text/glyph-atlas.hpp"
 #include "lc1/text/text-layout.hpp"
 #include "lc1/text/utf8.hpp"
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -19,7 +21,7 @@ namespace {
 
 // The same path the game loads, relative to the build tree. assets/ is not tracked
 // in this repository, so the checks below are skipped when the face is absent.
-constexpr char const *font_path = "assets/fonts/LiberationSans-Regular.ttf";
+constexpr char const *font_path = "runtime/assets/fonts/LiberationSans-Regular.ttf";
 
 void check(bool condition, std::string const &message)
 {
@@ -190,6 +192,49 @@ void placement(lc1::text::GlyphAtlas const &atlas)
           "scale multiplies the quad's extent");
 }
 
+void oriented_placement(lc1::text::GlyphAtlas const &atlas)
+{
+    glm::vec3 const origin{3.0F, 5.0F, 7.0F};
+    for (auto const normal :
+         {glm::vec3{0, 0, 1}, glm::vec3{0, 0, -1}, glm::vec3{1, 0, 0}, glm::vec3{0, 1, 0},
+          glm::vec3{0, -1, 0}, glm::vec3{2, 3, 4}, glm::vec3{0, 1, 0.0001F}, glm::vec3{0, 0, 1e30F},
+          glm::vec3{0, 0, 1e-30F}}) {
+        std::vector<lc1::Vertex> vertices;
+        lc1::text::append_text(
+            vertices, atlas, "A\nB",
+            {.origin = origin, .scale = 0.1F, .center_x = true, .normal = normal});
+        check(vertices.size() == 12, "oriented text retains all glyphs");
+        auto const direction = vertices.front().normal;
+        check(std::abs(glm::length(direction) - 1.0F) < 1e-5F, "text normal is normalized");
+        for (auto const &vertex : vertices)
+            check(std::abs(glm::dot(vertex.position - origin, direction)) < 1e-4F,
+                  "every glyph stays in the requested plane");
+        auto const winding =
+            glm::normalize(glm::cross(vertices[1].position - vertices[0].position,
+                                      vertices[2].position - vertices[0].position));
+        check(glm::dot(winding, direction) > 0.999F, "front winding follows the normal");
+        auto const across = glm::normalize(vertices[1].position - vertices[0].position);
+        auto const up = glm::normalize(vertices[5].position - vertices[0].position);
+        auto const reference =
+            std::abs(direction.y) > 0.999F ? glm::vec3{0, 0, 1} : glm::vec3{0, 1, 0};
+        auto const expected_right = glm::normalize(glm::cross(reference, direction));
+        check(glm::dot(across, expected_right) > 0.999F, "text right uses the upright basis");
+        check(glm::dot(up, reference) > 0.0F, "text up follows the reference up");
+    }
+    for (auto const normal : {glm::vec3{0}, glm::vec3{std::numeric_limits<float>::infinity(), 0, 1},
+                              glm::vec3{0, std::numeric_limits<float>::quiet_NaN(), 1}}) {
+        bool rejected = false;
+        try {
+            std::vector<lc1::Vertex> vertices;
+            lc1::text::append_text(vertices, atlas, "A", {.normal = normal});
+        }
+        catch (lc1::Error const &) {
+            rejected = true;
+        }
+        check(rejected, "zero and non-finite normals are rejected");
+    }
+}
+
 } // namespace
 
 int main()
@@ -207,6 +252,7 @@ int main()
         single_line(atlas);
         multiple_lines(atlas);
         placement(atlas);
+        oriented_placement(atlas);
         std::cout << "font atlas, metrics and layout passed\n";
     }
     catch (std::exception const &error) {

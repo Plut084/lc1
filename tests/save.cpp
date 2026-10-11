@@ -20,13 +20,12 @@ void check(bool condition, std::string_view message)
         throw std::runtime_error{std::string{message}};
 }
 
-// The seed directory as the build tree sees it: ctest runs from the build tree, where
-// copy_saves reproduced saves/01.
+// CTest runs from tests/fixtures, independently of the editable runtime saves.
 std::filesystem::path seed_directory()
 {
     auto const directory = std::filesystem::current_path() / "saves/01";
     if (!std::filesystem::exists(directory / "session.yaml"))
-        throw std::runtime_error{"run this test from the build tree: " + directory.string()};
+        throw std::runtime_error{"run this test from tests/fixtures: " + directory.string()};
     return directory;
 }
 
@@ -127,7 +126,7 @@ void seed_names_the_player()
 void an_existing_character_can_be_the_player()
 {
     ScratchSave scratch{"any-character"};
-    scratch.write("session.yaml", "- player: 100024\n  example: 0\n");
+    scratch.write("session.yaml", "player: 100024\nexample: 0\n");
     lc1::Save const save{scratch.directory()};
     check(save.player() == 100024, "the player keyid comes from the session file");
     check(!save.has_example(), "example 0 means the save has no AI demonstration");
@@ -137,7 +136,7 @@ void an_existing_character_can_be_the_player()
 void a_save_without_an_example_loads()
 {
     ScratchSave scratch{"no-example"};
-    scratch.write("session.yaml", "- player: 100024\n  example: 0\n");
+    scratch.write("session.yaml", "player: 100024\nexample: 0\n");
     lc1::Save const save{scratch.directory()};
     check(save.player() == 100024 && !save.has_example(), "an omitted example is not required");
 }
@@ -147,18 +146,19 @@ void invalid_sessions_are_rejected()
     // The expected substrings are the diagnostics save.cpp prints, or the parser's message
     // where the record itself is malformed: a bare "did it throw" check would also pass if
     // the rule under test never ran.
-    check_rejected("missing-player", "session.yaml", "- example: 2\n",
+    check_rejected("missing-player", "session.yaml", "example: 2\n",
                    "Field named 'player' not found");
-    check_rejected("zero-player", "session.yaml", "- player: 0\n  example: 2\n",
+    check_rejected("zero-player", "session.yaml", "player: 0\nexample: 2\n",
                    "session.yaml must name the player");
-    check_rejected("unknown-player", "session.yaml", "- player: 4711\n  example: 2\n",
+    check_rejected("unknown-player", "session.yaml", "player: 4711\nexample: 2\n",
                    "session player refers to unknown character 4711");
-    check_rejected("unknown-example", "session.yaml", "- player: 1\n  example: 4711\n",
+    check_rejected("unknown-example", "session.yaml", "player: 1\nexample: 4711\n",
                    "session example refers to unknown character 4711");
-    check_rejected("example-is-player", "session.yaml", "- player: 1\n  example: 1\n",
+    check_rejected("example-is-player", "session.yaml", "player: 1\nexample: 1\n",
                    "session example 1 is also the player");
-    check_rejected("two-sessions", "session.yaml",
-                   "- player: 1\n  example: 2\n- player: 2\n  example: 0\n", "exactly one record");
+    check_rejected("sequence-session", "session.yaml",
+                   "- player: 1\n  example: 2\n- player: 2\n  example: 0\n",
+                   "cannot read save file");
     check_rejected("missing-session-file", "session.yaml", "", "cannot open save file");
 }
 
@@ -189,9 +189,16 @@ void dangling_world_references_are_rejected()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
     try {
+        if (argc == 2) {
+            lc1::Save const save{argv[1]};
+            check(save.characters().contains(save.player()),
+                  "the runtime player must be a character record");
+            std::cout << "runtime save checks passed\n";
+            return EXIT_SUCCESS;
+        }
         seed_names_the_player();
         an_existing_character_can_be_the_player();
         a_save_without_an_example_loads();

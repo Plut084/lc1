@@ -70,7 +70,7 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 - `JOBS` defaults to 8 in Make to protect this 15 GB desktop during dependency builds. It limits
   both Conan and CMake; override when appropriate. CI uses tool defaults, not this local cap.
 - Use `make run`: it sources `generators/conanrun.sh` (including `VK_LAYER_PATH`) and runs from
-  the build tree, where relative `shaders/` and copied `assets/` live. `LC1_ASSET_ROOT` overrides
+  the build tree, where relative `shaders/` and copied `runtime/assets/` and `runtime/saves/` live. `LC1_ASSET_ROOT` overrides
   the asset root. Release still needs the correct working directory.
 - Windows runs through Wine in `build/wine-prefix`, not `~/.wine`. MinGW omits validation layers;
   if the target environment has none, explicitly use `LC1_NO_VALIDATION=1 make run

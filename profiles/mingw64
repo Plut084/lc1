@@ -38,6 +38,9 @@ compiler.libcxx=libstdc++
 lc1/*:with_validation_layers=False
 
 [conf]
+# reflect-cpp Debug objects can exceed the ordinary PE/COFF section limit.
+# Pass big-obj to the MinGW assembler, including dependency builds in Conan.
+reflect-cpp/*:tools.build:cxxflags=["-Wa,-mbig-obj"]
 # The rc entry is not optional: CMake passes .rc files through windres on Windows, and
 # the unprefixed name does not exist on a Linux host.
 tools.build:compiler_executables={"c": "x86_64-w64-mingw32-gcc", "cpp": "x86_64-w64-mingw32-g++", "rc": "x86_64-w64-mingw32-windres"}

@@ -92,6 +92,7 @@ find_package(Ktx CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
+find_package(freetype CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -103,6 +104,11 @@ add_library(lc1_engine STATIC
     src/input.cpp
     src/tangent-space.cpp
     src/resource-manager.cpp
+
+    # Text rasterization and layout; FreeType only, no Vulkan.
+    src/text/glyph-atlas.cpp
+    src/text/text-layout.cpp
+    src/text/utf8.cpp
 
     # Vulkan setup and dispatch.
     src/vk/core/common.cpp
@@ -116,6 +122,7 @@ add_library(lc1_engine STATIC
     src/vk/resources/descriptor-heap.cpp
     src/vk/resources/descriptor-heap-cache.cpp
     src/vk/resources/gpu-buffer.cpp
+    src/vk/resources/gpu-font.cpp
     src/vk/resources/gpu-image.cpp
     src/vk/resources/gpu-mesh.cpp
     src/vk/resources/gpu-texture.cpp
@@ -134,6 +141,7 @@ add_library(lc1_engine STATIC
     src/vk/render/ray-query-shadows.cpp
     src/vk/render/renderer.cpp
     src/vk/render/temporal-shadows.cpp
+    src/vk/render/text-pass.cpp
     src/vk/render/tone-mapping.cpp
 
     src/stb-image.cpp
@@ -156,6 +164,7 @@ target_link_libraries(lc1_engine PUBLIC
     TinyGLTF::TinyGLTF
     KTX::ktx
     reflectcpp::reflectcpp
+    Freetype::Freetype
 )
 target_link_libraries(lc1_engine PRIVATE
     mikktspace::mikktspace
@@ -258,7 +267,8 @@ if(BUILD_TESTING)
             "${PROJECT_BINARY_DIR}/shaders/visibility.spv"
             "${PROJECT_BINARY_DIR}/shaders/temporal-shadows.spv"
             "${PROJECT_BINARY_DIR}/shaders/spatial-shadows.spv"
-            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv")
+            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv"
+            "${PROJECT_BINARY_DIR}/shaders/text.spv")
     add_test(NAME heap_struct_generator
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"
@@ -290,6 +300,15 @@ if(BUILD_TESTING)
     add_executable(lc1_render_graph_tests tests/render-graph.cpp)
     target_link_libraries(lc1_render_graph_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_render_graph_tests)
+    # The font test reads assets/fonts like the game does, and skips when the
+    # face is absent (assets/ is not tracked in this repository).
+    add_executable(lc1_font_tests tests/font.cpp)
+    target_link_libraries(lc1_font_tests PRIVATE lc1_engine)
+    lc1_enable_warnings(lc1_font_tests)
+    add_test(NAME font_layout
+        COMMAND lc1_font_tests
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_dependencies(lc1_font_tests copy_assets)
     if(MINGW)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
@@ -298,6 +317,7 @@ if(BUILD_TESTING)
         target_link_options(lc1_tangent_tests PRIVATE -static)
         target_link_options(lc1_player_view_tests PRIVATE -static)
         target_link_options(lc1_render_graph_tests PRIVATE -static)
+        target_link_options(lc1_font_tests PRIVATE -static)
     endif()
     if(NOT CMAKE_CROSSCOMPILING)
         add_executable(lc1_descriptor_heap_tests EXCLUDE_FROM_ALL tests/descriptor-heap.cpp)
@@ -321,7 +341,7 @@ if(BUILD_TESTING)
         add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp)
         target_link_libraries(lc1_pbr_tests PRIVATE lc1_game)
         lc1_enable_warnings(lc1_pbr_tests)
-        add_dependencies(lc1_pbr_tests shaders)
+        add_dependencies(lc1_pbr_tests shaders copy_assets)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
         add_test(NAME continent COMMAND lc1_continent_tests)
         add_test(NAME character COMMAND lc1_character_tests)

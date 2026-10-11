@@ -15,6 +15,9 @@ struct GraphicsState {
     std::uint32_t color_attachment_count = 1;
     bool depth_test = false;
     bool depth_bias = false;
+    // Straight-alpha blending (src alpha, one minus src alpha); off keeps the
+    // opaque passes byte-identical.
+    bool blend = false;
 };
 
 // Establishes the pass's fixed-function state, including after an ImGui pipeline

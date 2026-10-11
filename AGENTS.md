@@ -232,7 +232,8 @@ The following frame-loop invariants must survive refactoring:
   Shadows, temporal history and filtering use the unperturbed surface normal.
 - Meshes own BLASes; each frame slot owns TLAS/build inputs/scratch, updated only after its fence
   and reused when unchanged. Copy GLM transforms into Vulkan's row-major 3×4 layout correctly.
-  Off-camera casters still participate. Ray-query shadows honor `casts_shadow`; labels opt out.
+  Off-camera casters still participate. Ray-query shadows honor `casts_shadow`; text is drawn
+  by the text pass and is never a draw item, so it casts nothing.
 - Shadow rays run in a separate single-sample pass, not once per MSAA sample. Local lights use
   unbounded inverse-square attenuation; do not add range/cutoff. Sphere lights use a receiver-facing
   disk approximation (radius zero is point light), normally one ray/frame and up to 32 history frames.
@@ -291,6 +292,9 @@ The following frame-loop invariants must survive refactoring:
   [continent and cameras](docs/continent.md), [regions/roads](docs/world-map.md).
 - Map data/export: [outline conventions](docs/continent-outline.md), [map tools](docs/map/README.md).
 - Save data: [save files and load order](docs/save-data.md).
+- Text and fonts: [text rendering](docs/text-rendering.md).
 - Rendering investigations: [performance](docs/render-performance.md),
   [Vulkan primer](docs/vulkan-minimal.md), [dated semantics review](docs/engine-semantics-review.md).
   Historical findings/plans are context; check current implementation before treating them as status.
+- External defects (Slang, GPU driver, toolchain — not project bugs):
+  [records, minimal repros and retest recipes](docs/external-defects.md).

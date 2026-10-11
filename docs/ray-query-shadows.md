@@ -103,7 +103,8 @@ Slang 2026.18 将 `ResourceDescriptorHeap[index]` 转成 acceleration structure 
 仍导致 `ErrorDeviceLost`，内核记录 Xid 109。CPU 检查确认描述符内保存了正确地址，stride
 为 8；独立 GPU 原始地址回读却得到零。同一 TLAS 地址通过 push data 传入时可正常查询。
 原始 SPIR-V 通过 `spirv-val --target-env vulkan1.4`；这些结果定位了失败路径，尚不能据此
-确定 Slang 或驱动哪一方有缺陷。
+确定 Slang 或驱动哪一方有缺陷。同类"分不清编译器还是驱动"的记录集中在
+[外部缺陷记录](external-defects.md)。
 
 生产可见度通道因此让 `PassData.scene` 索引一个 heap uniform-buffer descriptor。
 每个帧槽的 `scene_address` 缓冲保存 8 字节 TLAS 地址，shader 读取

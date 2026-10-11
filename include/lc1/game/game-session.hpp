@@ -11,6 +11,7 @@
 #include "lc1/game/player-view.hpp"
 #include "lc1/game/save.hpp"
 #include "lc1/vk/render/output-settings.hpp"
+#include "lc1/vk/resources/gpu-font.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
 
 #include <cstdint>
@@ -70,6 +71,13 @@ class GameSession {
 
     OutputSettings const &output() const { return output_; }
 
+    // The world's face, shared by panel labels and the application's HUD text.
+    GpuFont const &font() const { return font_; }
+
+    std::span<WorldTextItem const> world_labels() const { return showcase_.labels(); }
+
+    std::string_view player_name() const { return player_->config().name; }
+
     std::uint32_t object_capacity() const;
 
   private:
@@ -85,6 +93,7 @@ class GameSession {
 
     // Owners precede their borrowers: materials reference textures, draws reference
     // meshes/materials, and the character/controllers reference the continent.
+    GpuFont const font_;
     GpuTexture const white_;
     Continent const continent_;
     ContinentView const continent_view_;

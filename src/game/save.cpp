@@ -18,13 +18,27 @@ namespace {
 // A save file is a sequence of records. A missing or malformed file is fatal: a partial
 // world would silently drop entities and leave references dangling.
 template <typename Record>
-std::vector<Record> read_save_file(std::filesystem::path const &directory, std::string_view name)
+std::vector<Record> read_save_file_sequence(std::filesystem::path const &directory,
+                                            std::string_view name)
 {
     auto const path = directory / name;
     auto stream = std::ifstream{path};
     if (!stream)
         fail("cannot open save file {}", path.string());
     auto records = rfl::yaml::read<std::vector<Record>, rfl::NoOptionals>(stream);
+    if (!records)
+        fail("cannot read save file {}: {}", path.string(), records.error().what());
+    return *records;
+}
+
+template <typename Record>
+Record read_save_file_single(std::filesystem::path const &directory, std::string_view name)
+{
+    auto const path = directory / name;
+    auto stream = std::ifstream{path};
+    if (!stream)
+        fail("cannot open save file {}", path.string());
+    auto records = rfl::yaml::read<Record, rfl::NoOptionals>(stream);
     if (!records)
         fail("cannot read save file {}: {}", path.string(), records.error().what());
     return *records;
@@ -40,7 +54,7 @@ template <typename Map> void insert_unique(Map &map, auto const &record, std::st
 
 } // namespace
 
-Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}
+Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, session_{}
 {
     read_factions();
     read_equipments();
@@ -53,41 +67,40 @@ Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}
 
 void Save::read_factions()
 {
-    for (auto const &record : read_save_file<SerializedFaction>(directory_, "factions.yaml"))
+    for (auto const &record :
+         read_save_file_sequence<SerializedFaction>(directory_, "factions.yaml"))
         insert_unique(factions_, record, "faction");
 }
 
 void Save::read_equipments()
 {
-    for (auto const &record : read_save_file<SerializedEquipment>(directory_, "equipments.yaml"))
+    for (auto const &record :
+         read_save_file_sequence<SerializedEquipment>(directory_, "equipments.yaml"))
         insert_unique(equipments_, record, "equipment");
 }
 
 void Save::read_weapons()
 {
-    for (auto const &record : read_save_file<SerializedWeapon>(directory_, "weapons.yaml"))
+    for (auto const &record : read_save_file_sequence<SerializedWeapon>(directory_, "weapons.yaml"))
         insert_unique(weapons_, record, "weapon");
 }
 
 void Save::read_parties()
 {
-    for (auto const &record : read_save_file<SerializedParty>(directory_, "parties.yaml"))
+    for (auto const &record : read_save_file_sequence<SerializedParty>(directory_, "parties.yaml"))
         insert_unique(parties_, record, "party");
 }
 
 void Save::read_characters()
 {
     for (auto const &record :
-         read_save_file<SerializedCharacterConfig>(directory_, "characters.yaml"))
+         read_save_file_sequence<SerializedCharacterConfig>(directory_, "characters.yaml"))
         insert_unique(characters_, record, "character");
 }
 
 void Save::read_session()
 {
-    auto records = read_save_file<SerializedSession>(directory_, "session.yaml");
-    if (records.size() != 1)
-        fail("session.yaml must hold exactly one record, found {}", records.size());
-    session_ = std::move(records.front());
+    session_ = read_save_file_single<SerializedSession>(directory_, "session.yaml");
     if (session_.player == 0)
         fail("session.yaml must name the player character");
 }

@@ -372,12 +372,22 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
                                                                     RenderTarget const &target) {
         // The graph borrows this frame's computed draws until execute() returns.
         auto const draws = game_.draws();
+        // Same contract for the HUD: the string and its single item outlive
+        // graph.execute(), and screen text is measured in pixels from the
+        // bottom-left corner of the frame.
+        auto const location = game_.location();
+        std::string const hud =
+            std::format("{} | {} / {}", game_.player_name(), location.region, location.place);
+        std::array const hud_items{
+            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .pixel_height = 22.0F}};
+        TextFrameInput const text{
+            .font = &game_.font(), .world = game_.world_labels(), .screen = hud_items};
         RenderGraph graph;
         renderer_.add_passes(graph, resources, target, game_.camera(), game_.lights(), draws,
-                             game_.output());
+                             game_.output(), text);
         graph.add_pass(
-            "ImGui overlay", {"output.color"}, {"output.ui"}, [target](CommandBuffer &commands) {
-                // Make tone mapping's writes visible to the UI attachment load and blending.
+            "ImGui overlay", {"output.ui_text"}, {"output.ui"}, [target](CommandBuffer &commands) {
+                // Make the UI text's writes visible to this attachment load and blending.
                 vk::MemoryBarrier2 const barrier{
                     .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                     .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,

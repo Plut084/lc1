@@ -11,6 +11,7 @@
 #include "lc1/scene/lights/sphere-light.hpp"
 #include "lc1/scene/lights/spot-light.hpp"
 
+#include <random>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -77,7 +78,8 @@ void insert_unique(Map &map, std::uint32_t keyid, Value value, std::string_view 
 
 GameSession::GameSession(Device const &device, std::filesystem::path const &asset_root,
                          Save const &save, OutputSettings output)
-    : white_{device, Image::load_from_file(asset_root / "textures/prototype-white.png")},
+    : font_{device, text::GlyphAtlas{asset_root / "fonts/LiberationSans-Regular.ttf"}},
+      white_{device, Image::load_from_file(asset_root / "textures/prototype-white.png")},
       continent_{Continent::make_present(demo::PbrShowcase::spawn_blocks())},
       continent_view_{device, white_, continent_}, showcase_{device, continent_.spawn()},
       player_mesh_{make_player_model(player_body).gen_mesh(device)},
@@ -182,8 +184,14 @@ void GameSession::build_world(Save const &save)
             config.equipment[slot.first] = equipments_.at(slot.second).get();
         for (auto const &slot : record.weapon)
             config.weapon[slot.first] = weapons_.at(slot.second).get();
+        auto actual = prototype;
+        // Randomize in x,z [-5,5]
+        std::uint32_t const seed = record.keyid * 0x9E3779B9U;
+        std::mt19937_64 rng{seed};
+        std::uniform_real_distribution<float> dist{-5.0F, 5.0F};
+        actual.transform.position = continent_.spawn() + glm::vec3{dist(rng), 0.0F, dist(rng)};
         insert_unique(characters_, record.keyid,
-                      std::make_unique<Character>(continent_, prototype, std::move(config)),
+                      std::make_unique<Character>(continent_, actual, std::move(config)),
                       "character");
     }
 

@@ -5,7 +5,6 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <stb_easy_font.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,29 +27,6 @@ struct Geometry {
         vertices.push_back({point + v, normal, color, {0, 0}});
         for (auto const index : {0U, 1U, 2U, 0U, 2U, 3U})
             indices.push_back(first + index);
-    }
-
-    void label(std::string text, glm::vec3 center, float height, float max_width)
-    {
-        // stb's CPU-only font produces quads; the existing Vulkan mesh path draws them.
-        struct FontVertex {
-            float x, y, z;
-            unsigned char color[4];
-        };
-
-        static_assert(sizeof(FontVertex) == 16);
-        std::vector<FontVertex> font(text.size() * 64);
-        float const width = static_cast<float>(stb_easy_font_width(text.data()));
-        float const scale = std::min(height / 12.0F, max_width / std::max(width, 1.0F));
-        auto const count = stb_easy_font_print(0, 0, text.data(), nullptr, font.data(),
-                                               static_cast<int>(font.size() * sizeof(FontVertex)));
-        center.x -= width * scale * 0.5F;
-        for (int i = 0; i < count; ++i) {
-            auto const &a = font[static_cast<std::size_t>(i) * 4];
-            auto const &b = font[static_cast<std::size_t>(i) * 4 + 2];
-            quad(center + glm::vec3{a.x * scale, -b.y * scale, 0}, {(b.x - a.x) * scale, 0, 0},
-                 {0, (b.y - a.y) * scale, 0});
-        }
     }
 
     GpuMesh upload(Device const &device, bool with_tangents = false) const
@@ -219,10 +195,14 @@ PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     auto const &white = material({0.7F, 0.75F, 0.8F}, 0, 0.85F);
     auto const &dark = material({0.035F, 0.045F, 0.06F}, 0, 0.6F);
     auto const &trim = material({0, 0, 0}, 0, 1, {0.04F, 0.6F, 0.85F});
-    auto const &lettering = material({0, 0, 0}, 0, 1, {1.8F, 1.8F, 1.8F});
-    Geometry labels;
-    auto label = [&](std::string text, glm::vec3 center, float height, float width) {
-        labels.label(std::move(text), center, height, width);
+    // Panel lettering keeps the brightness the emissive material used to give it,
+    // and the showcase origin every exhibit is placed from.
+    auto label = [this](std::string text, glm::vec3 center, float height, float max_width) {
+        labels_.push_back({.text = label_text_.emplace_back(std::move(text)),
+                           .center = center + origin_,
+                           .height = height,
+                           .max_width = max_width,
+                           .color = {1.8F, 1.8F, 1.8F}});
     };
     MaterialInfo floor_info;
     floor_info.parameters.metallic_factor = 0;
@@ -389,9 +369,6 @@ PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     label("F4 LIGHTS  /  F5 MOTION", {13, 4.55F, 11.86F}, 0.5F, 14);
     label("PGUP / PGDN EXPOSURE", {-13, 4.65F, 11.86F}, 0.5F, 14);
     label("PBR  /  MATERIAL WALK", {0, 0.4F, 20.5F}, 0.7F, 10);
-    labels_.emplace(labels.upload(device));
-    auto const labels_draw = place(*labels_, lettering, {0, 0, 0});
-    draws_[labels_draw].casts_shadow = false;
     update(0);
 }
 

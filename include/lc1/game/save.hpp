@@ -62,10 +62,6 @@ struct SerializedCharacterConfig {
     // of [key, value] pairs: "- [Head, 10]".
     std::map<EquipmentType, std::uint32_t> equipment;
     std::map<WeaponType, std::uint32_t> weapon;
-
-    float health();
-    float strenth();
-    float agility();
 };
 
 // The saved world as data: one directory of YAML files, decoded once and checked for
@@ -75,7 +71,7 @@ struct SerializedCharacterConfig {
 // borrows nothing back.
 class Save {
   public:
-    explicit Save(std::filesystem::path directory = "saves/01");
+    explicit Save(std::filesystem::path directory);
 
     std::filesystem::path const &directory() const { return directory_; }
 

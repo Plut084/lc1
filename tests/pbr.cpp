@@ -9,6 +9,7 @@
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
 #include "lc1/vk/presentation/surface.hpp"
+#include "lc1/vk/resources/gpu-font.hpp"
 #include "lc1/vk/resources/one-time-submit.hpp"
 #include "lc1/window.hpp"
 
@@ -59,7 +60,8 @@ Capture capture(lc1::Device const &device, lc1::Renderer &renderer, lc1::FrameRe
                 lc1::scene::FpsCamera &camera, std::span<lc1::scene::Light const> lights,
                 std::span<lc1::DrawItem const> draws,
                 vk::Extent2D extent = {.width = 65, .height = 65},
-                lc1::OutputSettings settings = {}, vk::Format format = vk::Format::eR8G8B8A8Unorm)
+                lc1::OutputSettings settings = {}, vk::Format format = vk::Format::eR8G8B8A8Unorm,
+                lc1::TextFrameInput text = {})
 {
     lc1::GpuImage output{device,
                          format,
@@ -84,7 +86,8 @@ Capture capture(lc1::Device const &device, lc1::Renderer &renderer, lc1::FrameRe
                                  vk::PipelineStageFlagBits2::eNone, {},
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                  vk::AccessFlagBits2::eColorAttachmentWrite);
-        renderer.record(wrapped, frame, {&output.view(), extent}, camera, lights, draws, settings);
+        renderer.record(wrapped, frame, {&output.view(), extent}, camera, lights, draws, settings,
+                        text);
         output.transition_layout(commands, vk::ImageLayout::eColorAttachmentOptimal,
                                  vk::ImageLayout::eTransferSrcOptimal,
                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -449,6 +452,9 @@ void showcase_test(lc1::Device const &device)
     lc1::GpuTexture white{device, {.width = 1, .height = 1}, pixel};
     lc1::ContinentView terrain{device, white, continent};
     lc1::demo::PbrShowcase scene{device, continent.spawn()};
+    // Panel lettering is world text; the same view is captured with and without it.
+    lc1::GpuFont font{device, lc1::text::GlyphAtlas{"assets/fonts/LiberationSans-Regular.ttf"}};
+    lc1::TextFrameInput const text{.font = &font, .world = scene.labels()};
     std::vector<lc1::DrawItem> draws{terrain.draw_items().begin(), terrain.draw_items().end()};
     auto const offset = draws.size();
     draws.insert(draws.end(), scene.draws().begin(), scene.draws().end());
@@ -474,10 +480,14 @@ void showcase_test(lc1::Device const &device)
     for (int i = 0; i < 8; ++i)
         capture(device, renderer, frame, camera, lights, draws, {.width = 1200, .height = 800}, {},
                 vk::Format::eR8G8B8A8Srgb);
-    auto const overview = capture(device, renderer, frame, camera, lights, draws,
-                                  {.width = 1200, .height = 800}, {}, vk::Format::eR8G8B8A8Srgb);
+    auto const overview =
+        capture(device, renderer, frame, camera, lights, draws, {.width = 1200, .height = 800}, {},
+                vk::Format::eR8G8B8A8Srgb, text);
     check(std::ranges::any_of(overview.hdr, [](auto p) { return p.r > 1; }),
           "showcase has no HDR emission");
+    auto const unlettered = capture(device, renderer, frame, camera, lights, draws,
+                                    {.width = 1200, .height = 800}, {}, vk::Format::eR8G8B8A8Srgb);
+    check(overview.output != unlettered.output, "panel lettering is missing from the scene");
     save(overview, "artifacts/pbr-showcase.ppm");
     check(frame.ray_query.built_instances.size() ==
               static_cast<std::size_t>(

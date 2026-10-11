@@ -17,14 +17,17 @@
 | Shadow visibility | `shadow.scene`、`shadow.frame` | `shadow.raw_visibility`、`shadow.surface` |
 | Temporal shadow resolve | `shadow.raw_visibility`、`shadow.surface`、`shadow.history`、`shadow.frame` | `shadow.temporal_visibility`、`shadow.temporal_surface` |
 | Spatial shadow filter | `shadow.temporal_visibility`、`shadow.surface`、`shadow.frame` | `shadow.filtered_visibility` |
-| HDR lighting | `shadow.frame`、`shadow.filtered_visibility` | `hdr.color` |
+| HDR lighting（含世界文字） | `shadow.frame`、`shadow.filtered_visibility` | `hdr.color` |
 | Tone mapping | `hdr.color`、`output.target` | `output.color` |
-| ImGui overlay（应用添加） | `output.color` | `output.ui` |
+| UI text | `output.color` | `output.ui_text` |
+| ImGui overlay（应用添加） | `output.ui_text` | `output.ui` |
 
-`RayQueryShadows::add_passes()` 注册前四个 pass，Renderer 注册光照与色调映射；
-应用将 ImGui 绘制注册为消费 `output.color` 的最后一个节点，渲染层不依赖 ImGui。
+`RayQueryShadows::add_passes()` 注册前四个 pass，Renderer 注册光照与色调映射以及界面文字的
+pass；应用将 ImGui 绘制注册为消费 `output.ui_text` 的最后一个节点，渲染层不依赖 ImGui。
 场景准备包括 camera/light/object UBO 上传、TLAS 更新、附件创建与历史准备；
 光照 pass 保留线性 RGBA16F HDR、最多 4× MSAA 和 pass 内 resolve，之后才执行色调映射。
+世界文字在光照 pass 的同一个渲染实例末尾混合绘制：瞬态 MSAA 附件不保证跨实例内容，
+留在同一实例里既能复用场景深度做遮挡，也不需要第二次 resolve。详见[文字渲染](text-rendering.md)。
 图的执行顺序由输入／输出依赖决定，不要求生产者先于消费者注册。
 
 ## 逻辑资源与同步

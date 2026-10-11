@@ -455,7 +455,8 @@ void showcase_test(lc1::Device const &device)
     // Panel lettering is world text; the same view is captured with and without it.
     lc1::GpuFont font{device,
                       lc1::text::GlyphAtlas{"runtime/assets/fonts/LiberationSans-Regular.ttf"}};
-    lc1::TextFrameInput const text{.font = &font, .world = scene.labels()};
+    lc1::TextFrameInput const text{
+        .font = &font, .world = {scene.labels().begin(), scene.labels().end()}, .screen = {}};
     std::vector<lc1::DrawItem> draws{terrain.draw_items().begin(), terrain.draw_items().end()};
     auto const offset = draws.size();
     draws.insert(draws.end(), scene.draws().begin(), scene.draws().end());

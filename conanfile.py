@@ -64,6 +64,9 @@ class Lc1Recipe(ConanFile):
         self.requires("imgui/1.92.9b")
         self.requires("reflect-cpp/0.25.0")
         self.requires("freetype/2.14.3")
+        self.requires("openal-soft/1.24.3")
+        self.requires("drmp3/0.6.38")
+        self.requires("drwav/0.13.14")
 
         # Validation layers are a debug-only dependency: nothing needs them in a
         # Release build, and building them from source is expensive.

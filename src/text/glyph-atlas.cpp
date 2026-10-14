@@ -16,6 +16,15 @@
 #include <spdlog/spdlog.h>
 
 namespace lc1::text {
+
+std::u32string ascii_codepoints()
+{
+    std::u32string codepoints;
+    for (char32_t code_point = U' '; code_point <= U'~'; ++code_point)
+        codepoints.push_back(code_point);
+    return codepoints;
+}
+
 namespace {
 
 // The face must be deleted before the library that created it.
@@ -30,17 +39,16 @@ void check(FT_Error error, std::string_view action, std::filesystem::path const 
     fail("{} {}: {}", action, ttf.string(), message != nullptr ? message : "FreeType error");
 }
 
-std::u32string default_codepoints()
-{
-    std::u32string codepoints;
-    for (char32_t code_point = U' '; code_point <= U'~'; ++code_point)
-        codepoints.push_back(code_point);
-    return codepoints;
-}
-
 // Blank texels around every glyph keep linear filtering from pulling a
 // neighbour's coverage across the edge of a quad.
 constexpr std::uint32_t padding = 1;
+
+// Pair kerning is looked up for every ordered pair of rasterized glyphs, so that pass is
+// quadratic. A few hundred glyphs are instant; a large CJK set would spend minutes on pairs
+// that almost never kern, while the pairs that do matter are the Latin ones a shaper would
+// handle later. Above this many glyphs the atlas therefore reports zero for every pair,
+// exactly as a face without a kern table does.
+constexpr std::size_t kerning_glyph_limit = 4096;
 
 struct Rasterized {
     char32_t code_point = 0;
@@ -54,8 +62,8 @@ struct Rasterized {
 
 GlyphAtlas::GlyphAtlas(std::filesystem::path const &ttf, GlyphAtlasOptions options)
 {
-    if (!(options.pixel_size > 0.0F))
-        fail("font pixel size must be positive, got {}", options.pixel_size);
+    if (!(options.em_size > 0.0F))
+        fail("font em size must be positive, got {}", options.em_size);
 
     FT_Library library = nullptr;
     check(FT_Init_FreeType(&library), "cannot initialize FreeType for", ttf);
@@ -66,17 +74,21 @@ GlyphAtlas::GlyphAtlas(std::filesystem::path const &ttf, GlyphAtlasOptions optio
     FaceHandle const face_handle{face, &FT_Done_Face};
 
     check(FT_Select_Charmap(face, FT_ENCODING_UNICODE), "font has no Unicode charmap:", ttf);
-    check(FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(std::lround(options.pixel_size))),
-          "font cannot be set to the requested pixel size:", ttf);
+    check(FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(std::lround(options.em_size))),
+          "font cannot be set to the requested em size:", ttf);
 
-    pixel_size_ = options.pixel_size;
+    em_size_ = options.em_size;
     auto const &size_metrics = face->size->metrics;
     line_height_ = static_cast<float>(size_metrics.height) / 64.0F;
     ascent_ = static_cast<float>(size_metrics.ascender) / 64.0F;
     descent_ = -static_cast<float>(size_metrics.descender) / 64.0F;
 
-    // Rasterize before packing: placing glyphs needs every bitmap's size.
-    auto const requested = options.codepoints.empty() ? default_codepoints() : options.codepoints;
+    // Rasterize before packing: placing glyphs needs every bitmap's size. A repeated
+    // codepoint would otherwise rasterize twice, spend atlas space twice, and add a row and
+    // a column to the kerning pass below.
+    auto requested = options.codepoints.empty() ? ascii_codepoints() : options.codepoints;
+    std::sort(requested.begin(), requested.end());
+    requested.erase(std::unique(requested.begin(), requested.end()), requested.end());
     std::vector<Rasterized> rasters;
     rasters.reserve(requested.size());
     std::uint64_t area = 0;
@@ -168,7 +180,7 @@ GlyphAtlas::GlyphAtlas(std::filesystem::path const &ttf, GlyphAtlasOptions optio
 
     // Kerning is a property of pairs, so it is looked up once for the whole
     // rasterized set rather than lazily during layout, which is const.
-    if (FT_HAS_KERNING(face)) {
+    if (FT_HAS_KERNING(face) && rasters.size() <= kerning_glyph_limit) {
         for (auto const &left : rasters) {
             for (auto const &right : rasters) {
                 FT_Vector delta{};
@@ -183,9 +195,14 @@ GlyphAtlas::GlyphAtlas(std::filesystem::path const &ttf, GlyphAtlasOptions optio
             }
         }
     }
+    else if (FT_HAS_KERNING(face)) {
+        spdlog::debug("[GlyphAtlas] {}: {} glyphs exceed the {} glyph kerning limit; pair "
+                      "kerning skipped",
+                      ttf.string(), rasters.size(), kerning_glyph_limit);
+    }
 
     spdlog::debug("[GlyphAtlas] {}: {} glyphs, {}x{} atlas, {:.0F}px em, {} kerning pairs",
-                  ttf.string(), glyphs_.size(), extent_.x, extent_.y, pixel_size_, kerning_.size());
+                  ttf.string(), glyphs_.size(), extent_.x, extent_.y, em_size_, kerning_.size());
 }
 
 Glyph const *GlyphAtlas::glyph(char32_t code_point) const

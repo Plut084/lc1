@@ -3,6 +3,7 @@
 #include "lc1/game/player-controller.hpp"
 #include "lc1/model.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -53,6 +54,73 @@ lc1::Continent make_world()
         .locations = {},
         .roads = {},
     }};
+}
+
+void jumping()
+{
+    auto const world = make_world();
+    auto make_character = [&] {
+        return lc1::Character{world, {.transform = {.position = world.spawn()}}, {}};
+    };
+    auto character = make_character();
+    check(character.on_ground(), "spawn starts grounded");
+    character.request_jump();
+    character.update(0.0F);
+    check(character.on_ground(), "zero-time update does not start a jump");
+    character.update(0.01F);
+    check(!character.on_ground() && character.position().y > 0.0F, "jump leaves the ground");
+    float const airborne_height = character.position().y;
+    character.walk(world, {1, 0, 0}, 0.01F, false);
+    check(near(character.position().y, airborne_height), "walking preserves jump height");
+    check(character.position().x > world.spawn().x, "walking works while airborne");
+    character.move(world, {10, 0, 0});
+    check(character.position().x < 4.701F, "jump retains ground-plane obstacle blocking");
+    character.request_jump();
+    character.update(0.01F);
+    float const expected_height =
+        std::sqrt(2.0F * lc1::gravityf) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
+    check(near(character.position().y, expected_height), "airborne request cannot double jump");
+    for (int i = 0; i < 200; ++i)
+        character.update(0.01F);
+    check(character.on_ground() && character.position().y == 0.0F, "landing clamps to ground");
+    character.update(0.1F);
+    check(character.position().y == 0.0F, "landing clears falling velocity");
+    character.request_jump();
+    character.update(0.01F);
+    check(near(character.position().y, airborne_height), "subsequent jump has the same impulse");
+
+    for (float const step : {1.0F / 30.0F, 1.0F / 60.0F, 1.0F / 144.0F}) {
+        auto jumper = make_character();
+        jumper.request_jump();
+        float peak = 0.0F;
+        for (int i = 0; i < 300; ++i) {
+            jumper.update(step);
+            peak = std::max(peak, jumper.position().y);
+        }
+        check(std::abs(peak - 1.0F) < 0.002F, "jump height is stable across frame rates");
+        check(jumper.on_ground(), "jump lands at each frame rate");
+    }
+    auto capped = make_character();
+    auto regular = make_character();
+    capped.request_jump();
+    regular.request_jump();
+    capped.update(10.0F);
+    regular.update(0.1F);
+    check(near(capped.position(), regular.position()), "update caps stalled frame time");
+    rejects([&] { character.update(-1.0F); }, "negative update time is rejected");
+    rejects([&] { character.update(std::numeric_limits<float>::quiet_NaN()); },
+            "nonfinite update time is rejected");
+
+    lc1::FirstPersonCharacterController first_person{world};
+    auto first = make_character();
+    first_person.update(0.01F, {.jumping = true}, first);
+    first.update(0.01F);
+    check(!first.on_ground(), "first-person controller requests jump");
+    lc1::ThirdPersonCharacterController third_person{world};
+    auto third = make_character();
+    third_person.update(0.01F, {.jumping = true}, {0, 0, -1}, third);
+    third.update(0.01F);
+    check(!third.on_ground(), "third-person controller requests jump");
 }
 
 void pose_and_movement()
@@ -217,6 +285,7 @@ void model_correction()
 int main()
 {
     try {
+        jumping();
         pose_and_movement();
         player_controllers();
         model_correction();

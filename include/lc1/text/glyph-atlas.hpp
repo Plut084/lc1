@@ -11,6 +11,12 @@
 
 namespace lc1::text {
 
+// The baseline codepoint set: printable ASCII, U+0020..U+007E. The atlas holds one fixed
+// set, and layout silently skips what it does not hold, so a caller that draws text from
+// data (save records, for example) appends those codepoints here before constructing the
+// atlas rather than expecting each one to be covered.
+std::u32string ascii_codepoints();
+
 // One rasterized glyph, measured in atlas pixels. `bearing` is the offset from
 // the pen position to the bitmap's top-left corner with y pointing up (FreeType's
 // convention), so the bitmap's top edge sits `bearing.y` above the baseline.
@@ -25,10 +31,10 @@ struct Glyph {
 };
 
 struct GlyphAtlasOptions {
-    // Em size the face is rasterized at. Layout `scale` is world or screen units
-    // per atlas pixel, so callers usually divide a target height by `ascent()`.
-    float pixel_size = 48.0F;
-    // Codepoints to rasterize. Empty means printable ASCII, U+0020..U+007E.
+    // Em size the face is rasterized at, in atlas pixels. This only controls glyph
+    // resolution; callers choose a target line height when laying text out.
+    float em_size = 48.0F;
+    // Codepoints to rasterize. Empty means `ascii_codepoints()`; repeats are removed.
     std::u32string codepoints;
 };
 
@@ -53,11 +59,18 @@ class GlyphAtlas {
     // face has no kerning for the pair.
     float kerning(char32_t left, char32_t right) const;
 
-    float pixel_size() const { return pixel_size_; }
+    // Em size used when rasterizing the atlas, in atlas pixels.
+    float em_size() const { return em_size_; }
 
+    // Line-box height in atlas pixels. The target line height is a caller unit;
+    // layout scales atlas pixels by `target_line_height / line_height()`.
     float line_height() const { return line_height_; }
 
-    // Positive above and below the baseline respectively.
+    // Target line height, in caller units, for a requested em size. Callers that
+    // think in font sizes use this instead of touching atlas metrics directly.
+    float line_height_for_em(float em) const { return em * line_height_ / em_size_; }
+
+    // Positive above and below the baseline respectively, in atlas pixels.
     float ascent() const { return ascent_; }
 
     float descent() const { return descent_; }
@@ -73,7 +86,7 @@ class GlyphAtlas {
     std::unordered_map<std::uint64_t, float> kerning_;
     std::vector<std::uint8_t> pixels_;
     glm::uvec2 extent_{};
-    float pixel_size_ = 0.0F;
+    float em_size_ = 0.0F;
     float line_height_ = 0.0F;
     float ascent_ = 0.0F;
     float descent_ = 0.0F;

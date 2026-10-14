@@ -16,8 +16,9 @@ struct TextPlacement {
     // Top of the first line, on its ascent line; later lines fall along local -up.
     // The left edge, or the horizontal centre when `center_x` is set.
     glm::vec3 origin{};
-    // Caller units per atlas pixel.
-    float scale = 1.0F;
+    // Target height, in caller units, of the first line's ascent-to-descent box.
+    // Layout scales atlas pixels by `line_height / atlas.line_height()`.
+    float line_height = 1.0F;
     glm::vec3 color{1.0F};
     // Centres the text along the plane's right axis about origin.
     bool center_x = false;
@@ -26,16 +27,18 @@ struct TextPlacement {
     glm::vec3 normal{0.0F, 0.0F, 1.0F};
 };
 
-// Extent of a laid-out run in atlas pixels before `scale` is applied.
+// Extent of a laid-out run in caller units for the requested line height.
 struct TextMetrics {
     float width = 0.0F;
     float height = 0.0F;
     std::size_t lines = 0;
 };
 
-// Measured with the same pen arithmetic as append_text, kerning included. Width
-// is the widest line. Unknown codepoints are skipped, so they contribute nothing.
-TextMetrics measure_text(GlyphAtlas const &atlas, std::string_view text);
+// Measures a run in the units of `line_height` (pixels for screen text, world
+// units for world text), using the same pen arithmetic as append_text, kerning
+// included. Width is the widest line. Unknown codepoints are skipped, so they
+// contribute nothing.
+TextMetrics measure_text(GlyphAtlas const &atlas, std::string_view text, float line_height);
 
 // Appends six vertices per visible glyph (triangle list, no index buffer) with
 // the winding the rest of the project uses: the front faces placement.normal.

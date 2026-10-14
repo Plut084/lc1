@@ -93,6 +93,9 @@ find_package(mikktspace CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
 find_package(freetype CONFIG REQUIRED)
+find_package(OpenAL CONFIG REQUIRED)
+find_package(drmp3 CONFIG REQUIRED)
+find_package(drwav CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -109,6 +112,9 @@ add_library(lc1_engine STATIC
     src/text/glyph-atlas.cpp
     src/text/text-layout.cpp
     src/text/utf8.cpp
+
+    # Audio
+    src/audio/audio.cpp
 
     # Vulkan setup and dispatch.
     src/vk/core/common.cpp
@@ -165,6 +171,9 @@ target_link_libraries(lc1_engine PUBLIC
     KTX::ktx
     reflectcpp::reflectcpp
     Freetype::Freetype
+    OpenAL::OpenAL
+    drmp3::drmp3
+    drwav::drwav
 )
 target_link_libraries(lc1_engine PRIVATE
     mikktspace::mikktspace
@@ -213,8 +222,9 @@ add_library(lc1_game STATIC
     src/game/game-session.cpp
     src/game/player-view.cpp
     src/game/debug/pbr-showcase.cpp
+    src/game/interactable.cpp
 )
-target_link_libraries(lc1_game PUBLIC lc1_engine)
+target_link_libraries(lc1_game PUBLIC lc1_engine imgui::imgui)
 
 # app: the game executable. Output name stays lc1 so the Makefile works.
 add_executable(lc1
@@ -302,8 +312,8 @@ if(BUILD_TESTING)
     add_executable(lc1_render_graph_tests tests/render-graph.cpp)
     target_link_libraries(lc1_render_graph_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_render_graph_tests)
-    # The font test reads runtime/assets/fonts like the game does, and skips when the
-    # face is absent (runtime/assets/ is not tracked in this repository).
+    # The font test reads runtime/assets/fonts like the game does, and skips a face that is
+    # absent (runtime/assets/ is not tracked in this repository).
     add_executable(lc1_font_tests tests/font.cpp)
     target_link_libraries(lc1_font_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_font_tests)

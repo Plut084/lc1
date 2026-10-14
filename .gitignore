@@ -10,4 +10,8 @@ compile_commands.json
 .idea/
 *.user
 
+# Huge files assets
 runtime/assets/
+
+# AI
+.claude/

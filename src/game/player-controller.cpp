@@ -29,7 +29,11 @@ void FirstPersonCharacterController::update(float delta_seconds, PlayerInput con
     character.set_look_angles(0.0F, character.look_pitch() - input.look_delta.y * look_sensitivity);
     auto const direction =
         character.right() * input.movement.x + character.heading() * input.movement.y;
-    character.walk(*continent_, direction, delta_seconds, input.running);
+    character.walk(*continent_, direction, delta_seconds, input.running, false);
+
+    if (input.jumping) {
+        character.request_jump();
+    }
 }
 
 void ThirdPersonCharacterController::update(float delta_seconds, PlayerInput const &input,
@@ -52,6 +56,8 @@ void ThirdPersonCharacterController::update(float delta_seconds, PlayerInput con
         character.set_look_angles(0.0F, 0.0F);
     }
     character.walk(*continent_, direction, delta_seconds, input.running);
+    if (input.jumping)
+        character.request_jump();
 }
 
 } // namespace lc1

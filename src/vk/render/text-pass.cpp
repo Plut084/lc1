@@ -46,16 +46,16 @@ void TextPass::draw_world(CommandBuffer &commands, FrameResources &resources, Gp
     auto const &atlas = font.atlas();
     vertices_.clear();
     for (auto const &item : items) {
-        auto const metrics = text::measure_text(atlas, item.text);
-        // `height` is the first line's ascent-to-descent box, so a line keeps the
-        // size the caller asked for whatever the face's own em is.
-        auto scale = item.height / atlas.line_height();
+        auto const metrics = text::measure_text(atlas, item.text, item.line_height);
+        // `line_height` is the first line's ascent-to-descent box, so a line keeps
+        // the size the caller asked for whatever the face's own em is.
+        auto target_line_height = item.line_height;
         if (item.max_width > 0.0F && metrics.width > 0.0F)
-            scale = std::min(scale, item.max_width / metrics.width);
+            target_line_height *= std::min(1.0F, item.max_width / metrics.width);
         text::append_text(vertices_, atlas, item.text,
                           {
                               .origin = item.center,
-                              .scale = scale,
+                              .line_height = target_line_height,
                               .color = item.color,
                               .center_x = true,
                               .normal = item.normal,
@@ -76,7 +76,7 @@ void TextPass::draw_screen(CommandBuffer &commands, FrameResources &resources, v
         text::append_text(vertices_, atlas, item.text,
                           {
                               .origin = {item.position.x, item.position.y, 0.0F},
-                              .scale = item.pixel_height / atlas.line_height(),
+                              .line_height = item.line_height,
                               .color = item.color,
                           });
     }

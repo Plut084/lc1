@@ -12,6 +12,8 @@ struct PlayerInput {
     glm::vec2 movement{};   // x: right, y: forward.
     glm::vec2 look_delta{}; // Cursor motion, supplied only while mouse look is enabled.
     bool running = false;
+    bool jumping = false;
+    bool interacting = false;
 };
 
 class FirstPersonCharacterController {

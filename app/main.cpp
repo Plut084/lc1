@@ -26,6 +26,7 @@ int main()
 {
     try {
         spdlog::set_pattern("[%^%l%$] %v");
+        spdlog::set_level(spdlog::level::info);
         std::signal(SIGINT, interrupt_handler);
         std::signal(SIGTERM, interrupt_handler);
 

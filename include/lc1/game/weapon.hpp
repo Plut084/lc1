@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace lc1 {
 
@@ -8,6 +9,18 @@ enum class WeaponType : std::uint8_t {
     MeleeWeapon,
     RangedWeapon,
 };
+
+inline std::string_view to_string(WeaponType type)
+{
+    switch (type) {
+    case WeaponType::MeleeWeapon:
+        return "MeleeWeapon";
+    case WeaponType::RangedWeapon:
+        return "RangedWeapon";
+    default:
+        return "Unknown";
+    }
+}
 
 struct WeaponProperty {
     float attack;

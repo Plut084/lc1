@@ -25,7 +25,7 @@ glm::vec3 horizontal_direction(float degrees)
 
 Character::Character(Continent const &continent, scene::Object object, CharacterConfig config,
                      CharacterBody body)
-    : config_(std::move(config)), body_(body), object_(object)
+    : config_(std::move(config)), body_(body), on_ground_{}, velocity_{}, object_(object)
 {
     if (!std::isfinite(body_.half_width) || body_.half_width <= 0.0F ||
         !std::isfinite(body_.height) || body_.height <= 0.0F || !std::isfinite(body_.eye_height) ||
@@ -43,18 +43,55 @@ Character::Character(Continent const &continent, scene::Object object, Character
     if ((object_.mesh == nullptr) != (object_.material == nullptr))
         fail("character drawable needs both a mesh and a material");
     set_body_yaw(pose.rotation.y);
+    on_ground_ = position().y == 0.0F;
+}
+
+void Character::update(float delta_seconds)
+{
+    if (!std::isfinite(delta_seconds) || delta_seconds < 0.0F)
+        fail("invalid character update time");
+    // Match the horizontal movement cap after a resize or debugger stall.
+    float const elapsed = std::min(delta_seconds, 0.1F);
+    if (controller_)
+        controller_->update(elapsed, *this);
+
+    if (elapsed == 0.0F)
+        return;
+
+    if (jump_requested_ && on_ground_) {
+        constexpr float jump_height = 1.0F;
+        velocity_.y = std::sqrt(2.0F * gravityf * jump_height);
+        on_ground_ = false;
+    }
+    jump_requested_ = false;
+
+    if (!on_ground_) {
+        // Constant-acceleration integration keeps the jump height independent of frame rate.
+        object_.transform.position.y += velocity_.y * elapsed - 0.5F * gravityf * elapsed * elapsed;
+        velocity_.y -= gravityf * elapsed;
+        if (position().y <= 0.0F) {
+            object_.transform.position.y = 0.0F;
+            velocity_.y = 0.0F;
+            on_ground_ = true;
+        }
+    }
 }
 
 void Character::move(Continent const &continent, glm::vec3 displacement)
 {
     if (!finite(displacement) || displacement.y != 0.0F)
         fail("ground character displacement must be finite and horizontal");
-    object_.transform.position = continent.move(position(), {displacement.x, displacement.z},
-                                                body_.half_width, body_.height);
+    // Continent currently resolves ground-plane collision only. Keep that footprint
+    // blocked while jumping, rather than allowing jumps over obstacles with no landing checks.
+    auto const feet = position();
+    auto resolved = continent.move({feet.x, 0.0F, feet.z}, {displacement.x, displacement.z},
+                                   body_.half_width, body_.height);
+    resolved.y = feet.y;
+    object_.transform.position = resolved;
 }
 
 void Character::walk(Continent const &continent, glm::vec3 direction, float delta_seconds,
-                     bool running)
+                     bool running, bool face_movement)
 {
     if (!finite(direction) || !std::isfinite(delta_seconds) || delta_seconds < 0.0F)
         fail("invalid character walking input");
@@ -65,6 +102,10 @@ void Character::walk(Continent const &continent, glm::vec3 direction, float delt
     if (length == 0.0)
         return;
     direction *= static_cast<float>(1.0 / std::max(length, 1.0));
+
+    if (face_movement)
+        set_body_yaw(glm::degrees(std::atan2(-direction.x, -direction.z)));
+
     float const speed = running ? body_.run_speed : body_.walk_speed;
     // A resize or debugger stall must not teleport the character.
     float const elapsed = std::min(delta_seconds, 0.1F);

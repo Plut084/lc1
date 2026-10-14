@@ -197,10 +197,10 @@ PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     auto const &trim = material({0, 0, 0}, 0, 1, {0.04F, 0.6F, 0.85F});
     // Panel lettering keeps the brightness the emissive material used to give it,
     // and the showcase origin every exhibit is placed from.
-    auto label = [this](std::string text, glm::vec3 center, float height, float max_width) {
+    auto label = [this](std::string text, glm::vec3 center, float line_height, float max_width) {
         labels_.push_back({.text = label_text_.emplace_back(std::move(text)),
                            .center = center + origin_,
-                           .height = height,
+                           .line_height = line_height,
                            .max_width = max_width,
                            .color = {1.8F, 1.8F, 1.8F}});
     };

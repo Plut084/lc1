@@ -48,9 +48,17 @@ float first_baseline(GlyphAtlas const &atlas)
     return -atlas.ascent();
 }
 
-} // namespace
+// Caller units per atlas pixel, with the one shared guard for every layout entry
+// point. A zero or non-finite target line height would otherwise collapse or flip
+// glyphs through the axis-aligned plane basis.
+float layout_scale(GlyphAtlas const &atlas, float line_height)
+{
+    if (!std::isfinite(line_height) || !(line_height > 0.0F))
+        fail("text line height must be finite and positive, got {}", line_height);
+    return line_height / atlas.line_height();
+}
 
-TextMetrics measure_text(GlyphAtlas const &atlas, std::string_view text)
+TextMetrics measure_text_atlas_pixels(GlyphAtlas const &atlas, std::string_view text)
 {
     auto const lines = split_lines(decode_utf8(text));
     TextMetrics metrics{.lines = lines.size()};
@@ -60,12 +68,23 @@ TextMetrics measure_text(GlyphAtlas const &atlas, std::string_view text)
     return metrics;
 }
 
+} // namespace
+
+TextMetrics measure_text(GlyphAtlas const &atlas, std::string_view text, float line_height)
+{
+    auto const scale = layout_scale(atlas, line_height);
+    auto metrics = measure_text_atlas_pixels(atlas, text);
+    metrics.width *= scale;
+    metrics.height *= scale;
+    return metrics;
+}
+
 void append_text(std::vector<Vertex> &vertices, GlyphAtlas const &atlas, std::string_view text,
                  TextPlacement const &placement)
 {
     auto const lines = split_lines(decode_utf8(text));
     auto const baseline_step = atlas.line_height();
-    auto const scale = placement.scale;
+    auto const scale = layout_scale(atlas, placement.line_height);
     // The quad's front must agree with the rest of the project: the same vertex
     // order as Geometry::quad, whose normal is cross(right, up).
     auto const normal = placement.normal;

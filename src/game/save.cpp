@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <spdlog/spdlog.h>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -68,34 +69,51 @@ Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, 
 void Save::read_factions()
 {
     for (auto const &record :
-         read_save_file_sequence<SerializedFaction>(directory_, "factions.yaml"))
+         read_save_file_sequence<SerializedFaction>(directory_, "factions.yaml")) {
         insert_unique(factions_, record, "faction");
+        spdlog::info("[save] {}: faction {} {} loaded", directory_.string(), record.keyid,
+                     record.name);
+    }
 }
 
 void Save::read_equipments()
 {
     for (auto const &record :
-         read_save_file_sequence<SerializedEquipment>(directory_, "equipments.yaml"))
+         read_save_file_sequence<SerializedEquipment>(directory_, "equipments.yaml")) {
         insert_unique(equipments_, record, "equipment");
+        spdlog::info("[save] {}: equipment {} {} loaded", directory_.string(), record.keyid,
+                     to_string(record.type));
+    }
 }
 
 void Save::read_weapons()
 {
-    for (auto const &record : read_save_file_sequence<SerializedWeapon>(directory_, "weapons.yaml"))
+    for (auto const &record :
+         read_save_file_sequence<SerializedWeapon>(directory_, "weapons.yaml")) {
         insert_unique(weapons_, record, "weapon");
+        spdlog::info("[save] {}: weapon {} {} loaded", directory_.string(), record.keyid,
+                     to_string(record.type));
+    }
 }
 
 void Save::read_parties()
 {
-    for (auto const &record : read_save_file_sequence<SerializedParty>(directory_, "parties.yaml"))
+    for (auto const &record :
+         read_save_file_sequence<SerializedParty>(directory_, "parties.yaml")) {
         insert_unique(parties_, record, "party");
+        spdlog::info("[save] {}: party {} of faction {} loaded", directory_.string(), record.keyid,
+                     record.faction);
+    }
 }
 
 void Save::read_characters()
 {
     for (auto const &record :
-         read_save_file_sequence<SerializedCharacterConfig>(directory_, "characters.yaml"))
+         read_save_file_sequence<SerializedCharacterConfig>(directory_, "characters.yaml")) {
         insert_unique(characters_, record, "character");
+        spdlog::info("[save] {}: character {} {} loaded", directory_.string(), record.keyid,
+                     record.name);
+    }
 }
 
 void Save::read_session()
@@ -103,6 +121,8 @@ void Save::read_session()
     session_ = read_save_file_single<SerializedSession>(directory_, "session.yaml");
     if (session_.player == 0)
         fail("session.yaml must name the player character");
+    spdlog::info("[save] {}: session player {} example {} loaded", directory_.string(),
+                 session_.player, session_.example);
 }
 
 void Save::validate_references() const

@@ -43,7 +43,6 @@ class Application {
   private:
     bool prepare_swapchain();
     void init_imgui_vulkan(std::uint32_t min_image_count);
-    void update_game(float delta_seconds);
     void update_title();
     void run_loop(std::function<bool()> const &stop_requested);
 

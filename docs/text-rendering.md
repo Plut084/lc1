@@ -18,10 +18,15 @@
 
 ## 图集
 
-`GlyphAtlas` 在构造时打开 `.ttf`，用固定像素尺寸（默认 48px em）光栅化固定字符集
-（默认可打印 ASCII），按行货架式打包进一张 RGBA8 位图：RGB 恒为 255，覆盖率放在 alpha。
+`GlyphAtlas` 在构造时打开字体文件，用固定像素尺寸（默认 48px em）光栅化**构造时给定的**字符集，
+按行货架式打包进一张 RGBA8 位图：RGB 恒为 255，覆盖率放在 alpha。
 每个字形记录 `uv_min/uv_max`、位图尺寸、`bearing`（从笔位到位图左上角，y 向上）和 `advance`，
 另存 `line_height`、`ascent`、`descent` 以及 `FT_Get_Kerning` 得到的成对字距。
+
+`GlyphAtlasOptions::codepoints` 为空时用 `text::ascii_codepoints()`（可打印 ASCII，U+0020..U+007E）。
+图集一旦构造就固定，而布局会**静默跳过**图集里没有的码位，所以"画什么就必须请求什么"是调用方的
+责任，不是靠字体覆盖自动兜底：`GameSession` 传入的是 `ascii_codepoints()` 加上存档里会画出来的
+角色名和势力名码位（`font_codepoints(save)`）。重复的码位在光栅化前排序去重，不会占两份图集空间。
 
 - 采样固定在 mip 0：`GpuTexture` 总会生成 mipmap，图集一旦降到 mip 0 以上，相邻字形就会互相
   渗透。`GpuFont::sampler_info()` 因此返回钳位到边缘、`maxLod = 0` 的采样器，shader 里用
@@ -29,14 +34,19 @@
 - 字形之间留一个像素空白，四周覆盖率都是 0，线性过滤不会把邻居的覆盖率带过来。
 - 未映射的码位（字体没有该字形，或不在字符集内）不产生条目，也不占位：布局直接跳过，笔位不前进。
 - 空格有度量没有位图，会推进笔位但不产生几何。
+- 成对字距是 O(n²) 的（每个字形和每个字形查一次 `FT_Get_Kerning`）。字形数超过
+  `kerning_glyph_limit`（4096）时整个 kerning pass 跳过并记一条 debug 日志，此时所有字距返回 0，
+  和字体没有 kern 表的行为一致；真正的解法是交给 shaper（HarfBuzz），不在图集里做。
 
 ## 布局与摆放
 
 `append_text` 把 UTF-8 文本变成 `lc1::Vertex` 四边形（每个字形 6 个顶点，三角形列表，无索引缓冲），
 和网格顶点用同一套顶点布局与卷绕方向：正面朝平面的 +z，逆时针，与旧的展牌四边形一致，
-所以背面剔除的行为不变。`TextPlacement` 给出平面原点（x、y 在平面内，z 是平面深度）、每图集像素
-对应多少调用方单位、颜色和是否水平居中；`origin` 落在第一行的 ascent 线上，也就是首行顶部，
-后续行沿 -y 向下排列——展牌坐标一直是以"文字顶部"为锚点调的，保持这个约定不用重调数值。
+所以背面剔除的行为不变。`TextPlacement` 给出平面原点（x、y 在平面内，z 是平面深度）、目标
+`line_height`（调用方单位）、颜色和是否水平居中；`origin` 落在第一行的 ascent 线上，
+也就是首行顶部，后续行沿 -y 向下排列——展牌坐标一直是以"文字顶部"为锚点调的，保持这个约定
+不用重调数值。布局内部使用 `line_height / atlas.line_height()` 作为“调用方单位 / 图集像素”的
+缩放比例，调用方不再直接传 `scale`。
 
 默认平面为 xy 平面（右为 +x、上为 +y），`WorldTextItem::normal` 可以指定任意正面方向：
 
@@ -48,12 +58,15 @@
   不适合用作需要连续旋转的朝向插值。
 
 
-- 世界文字：传世界坐标，缩放是世界单位／图集像素，绘制时乘相机的 view-projection。
-- 屏幕文字：传像素坐标，原点在**左下角**，缩放是像素／图集像素。界面 pass 的正高度 viewport
-  配上 `y_ndc = 1 - 2y/H` 的变换，正好和场景 pass 的负高度 viewport 对应，两边卷绕方向一致。
+- 世界文字：`WorldTextItem::line_height`、`max_width` 用世界单位，绘制时乘相机的 view-projection。
+- 屏幕文字：`ScreenTextItem::line_height` 用 framebuffer 像素，`position` 的原点在**左下角**。
+  界面 pass 的正高度 viewport 配上 `y_ndc = 1 - 2y/H` 的变换，正好和场景 pass 的负高度
+  viewport 对应，两边卷绕方向一致。
 
-`measure_text` 用同一套笔位算术（含字距）返回宽度、行数与高度，调用方据此决定缩放
-（例如展牌 `height` 与 `max_width` 之间取小）。
+`measure_text(atlas, text, line_height)` 用同一套笔位算术（含字距）直接返回目标单位下的
+宽度、行数与高度，因此屏幕居中和展牌 `line_height`/`max_width` 取小都不需要再手算缩放。
+如果调用方想用"字号/em"表达，使用 `GlyphAtlas::line_height_for_em()` 换算；不要拿
+`GlyphAtlas::em_size()` 当目标行高。
 
 ## 绘制通路
 
@@ -85,11 +98,32 @@
 
 ## 字体文件
 
-运行时的字体放在 `runtime/assets/fonts/`（例如 `LiberationSans-Regular.ttf`），和其余素材一样不入库，
-`copy_assets` 会把它复制进构建树。`GameSession` 用
-`asset_root / "fonts/LiberationSans-Regular.ttf"` 构造 `GlyphAtlas`，换字体只需换这个文件
-（或改这一行常量）。
-CPU 测试 `lc1_font_tests` 读同一个路径，文件不存在时打印一行说明并跳过——CI 里 `runtime/assets/` 为空。
+运行时的字体放在 `runtime/assets/fonts/`，和其余素材一样不入库，`copy_assets` 会把它复制进构建树。
+`GameSession` 用 `asset_root / font_file` 构造 `GlyphAtlas`，换字体只需改 `font_file` 这个常量。
+当前是 `SourceHanSansCN-Regular.otf`（思源黑体 CN Regular，OFL 许可，Latin + 中文覆盖）；
+只覆盖 Latin 的字体会让中文名字整段消失（图集里没有对应字形，布局直接跳过），换字体时必须同时
+确认它覆盖存档数据可能出现的文字。
+
+字符集在 `GameSession` 构造时定下，所以**之后新增的可绘制文本来源必须加进 `font_codepoints()`**：
+目前是存档里的角色名与势力名，其余绘制文本（地图名称、HUD、调试 UI）都是 ASCII 字面量。
+将来做读档/换存档功能时，图集要跟着目标存档重建。
+
+CPU 测试 `lc1_font_tests` 用 `LiberationSans-Regular.ttf` 覆盖图集与布局路径（包括"字符集外的码位
+不存在"这一分支），再用 `SourceHanSansCN-Regular.otf` 检查中文字形、去重和基线字符集；
+哪个字体文件不存在就跳过对应的检查——CI 里 `runtime/assets/` 为空。
+
+## 验证记录（2026-10-13）
+
+本机 Linux Clang Debug、RTX 4060 Laptop：
+
+- 全部 11 个 CPU CTest 通过。`font_layout` 新增的检查：基线字符集仍只含 ASCII（中文名字宽度为 0，
+  也就是修复前的症状）、请求 `啥句冲个` 的四个码位后每个都有字形／位图／advance 和 6 个顶点、
+  重复码位不放大图集。
+- `./lc1`（构建树 + `generators/conanrun.sh`，等价于 `make run`）：世界里画出 `啥句冲个 from Empire`，
+  同时 `lc`、`yyx` 的标签照常显示；运行期间没有 validation／synchronization ERROR（ERROR 会 abort）。
+  截图 `build/linux-x86_64/Debug/label-window.png`（构建产物，未入库）。
+- 未验证：Windows 交叉构建、Release、其余 GPU 测试目标（`lc1_pbr_tests` 等）与远端 CI。
+  字体来自 `~/.local/share/fonts/SourceHanSans/CN/SourceHanSansCN-Regular.otf`，`runtime/assets/` 未入库。
 
 ## 验证记录（2026-10-11）
 

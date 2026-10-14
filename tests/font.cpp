@@ -15,13 +15,17 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
-// The same path the game loads, relative to the build tree. assets/ is not tracked
-// in this repository, so the checks below are skipped when the face is absent.
+// A Latin face exercises the atlas and the layout paths, including the "codepoint outside
+// the set is absent" case; the game itself loads the Chinese-capable face below, because
+// save data can hold names in Chinese. runtime/assets/ is not tracked in this repository,
+// so a check whose face is absent is skipped.
 constexpr char const *font_path = "runtime/assets/fonts/LiberationSans-Regular.ttf";
+constexpr char const *chinese_font_path = "runtime/assets/fonts/SourceHanSansCN-Regular.otf";
 
 void check(bool condition, std::string const &message)
 {
@@ -54,7 +58,10 @@ void utf8_decoding()
 void atlas_contents(lc1::text::GlyphAtlas const &atlas)
 {
     check(atlas.extent().x > 0 && atlas.extent().y > 0, "atlas extent is positive");
+    check(atlas.em_size() > 0.0F, "em size is positive");
     check(atlas.line_height() > 0.0F, "line height is positive");
+    check(std::abs(atlas.line_height_for_em(atlas.em_size()) - atlas.line_height()) < 1e-4F,
+          "native em size maps to the atlas line height");
     check(atlas.ascent() > 0.0F && atlas.descent() >= 0.0F, "ascent and descent are positive");
     check(atlas.pixels().size() ==
               static_cast<std::size_t>(atlas.extent().x) * atlas.extent().y * 4,
@@ -99,36 +106,55 @@ void atlas_contents(lc1::text::GlyphAtlas const &atlas)
 
 void measurement(lc1::text::GlyphAtlas const &atlas)
 {
+    auto const line_height = atlas.line_height();
     auto const *a = atlas.glyph(U'A');
     auto const *b = atlas.glyph(U'B');
-    auto const one = lc1::text::measure_text(atlas, "A");
+    auto const one = lc1::text::measure_text(atlas, "A", line_height);
     check(std::abs(one.width - a->advance) < 1e-4F, "one glyph measures its advance");
-    check(std::abs(one.height - atlas.line_height()) < 1e-4F, "one line measures one line height");
+    check(std::abs(one.height - line_height) < 1e-4F, "one line measures one line height");
     check(one.lines == 1, "one line is counted");
 
-    auto const two = lc1::text::measure_text(atlas, "AB");
+    auto const two = lc1::text::measure_text(atlas, "AB", line_height);
     check(std::abs(two.width - (a->advance + atlas.kerning(U'A', U'B') + b->advance)) < 1e-4F,
           "kerning joins two advances");
 
-    auto const lines = lc1::text::measure_text(atlas, "AB\nA");
-    check(lines.lines == 2 && std::abs(lines.height - 2.0F * atlas.line_height()) < 1e-4F,
+    auto const lines = lc1::text::measure_text(atlas, "AB\nA", line_height);
+    check(lines.lines == 2 && std::abs(lines.height - 2.0F * line_height) < 1e-4F,
           "a line break adds one line height");
 
+    // Metrics are returned in the requested line-height unit, so scaling the
+    // target scales both axes.
+    auto const doubled = lc1::text::measure_text(atlas, "AB", 2.0F * line_height);
+    check(std::abs(doubled.width - 2.0F * two.width) < 1e-4F, "width scales with line height");
+    check(std::abs(doubled.height - 2.0F * two.height) < 1e-4F, "height scales with line height");
+
     // A codepoint the atlas does not hold is skipped, pen included.
-    check(std::abs(lc1::text::measure_text(atlas, "A\xE4\xB8\xAD"
-                                                  "B")
+    check(std::abs(lc1::text::measure_text(atlas,
+                                           "A\xE4\xB8\xAD"
+                                           "B",
+                                           line_height)
                        .width -
                    two.width) < 1e-4F,
           "an unknown codepoint takes no space");
+
+    bool rejected = false;
+    try {
+        static_cast<void>(lc1::text::measure_text(atlas, "A", 0.0F));
+    }
+    catch (lc1::Error const &) {
+        rejected = true;
+    }
+    check(rejected, "a zero line height is rejected");
 }
 
 void single_line(lc1::text::GlyphAtlas const &atlas)
 {
+    auto const line_height = atlas.line_height();
     auto const *a = atlas.glyph(U'A');
     std::vector<lc1::Vertex> vertices;
     lc1::text::append_text(
         vertices, atlas, "AB",
-        {.origin = {10.0F, 20.0F, 3.0F}, .scale = 1.0F, .color = {0.25F, 0.5F, 1.0F}});
+        {.origin = {10.0F, 20.0F, 3.0F}, .line_height = line_height, .color = {0.25F, 0.5F, 1.0F}});
     check(vertices.size() == 12, "one quad per visible glyph");
     for (auto const &vertex : vertices) {
         check(vertex.color == glm::vec3{0.25F, 0.5F, 1.0F}, "the colour reaches every vertex");
@@ -148,7 +174,7 @@ void single_line(lc1::text::GlyphAtlas const &atlas)
 
     // Spaces advance the pen but emit nothing.
     std::vector<lc1::Vertex> spaced;
-    lc1::text::append_text(spaced, atlas, "A B", {.scale = 1.0F});
+    lc1::text::append_text(spaced, atlas, "A B", {.line_height = line_height});
     check(spaced.size() == 12, "a space emits no geometry");
     auto const *b = atlas.glyph(U'B');
     auto const pen_of_b = a->advance + atlas.kerning(U'A', U' ') + atlas.glyph(U' ')->advance +
@@ -160,36 +186,83 @@ void single_line(lc1::text::GlyphAtlas const &atlas)
     lc1::text::append_text(unknown, atlas,
                            "A\xE4\xB8\xAD"
                            "B",
-                           {.scale = 1.0F});
+                           {.line_height = line_height});
     check(unknown.size() == 12, "an unknown codepoint emits no geometry");
 }
 
 void multiple_lines(lc1::text::GlyphAtlas const &atlas)
 {
+    auto const line_height = atlas.line_height();
     std::vector<lc1::Vertex> vertices;
-    lc1::text::append_text(vertices, atlas, "A\nA", {.origin = {0.0F, 0.0F, 0.0F}, .scale = 1.0F});
+    lc1::text::append_text(vertices, atlas, "A\nA",
+                           {.origin = {0.0F, 0.0F, 0.0F}, .line_height = line_height});
     check(vertices.size() == 12, "two lines of one glyph");
     check(vertices[6].position.y < vertices[0].position.y, "later lines fall below earlier ones");
-    check(std::abs((vertices[0].position.y - vertices[6].position.y) - atlas.line_height()) < 1e-4F,
+    check(std::abs((vertices[0].position.y - vertices[6].position.y) - line_height) < 1e-4F,
           "line spacing is one line height");
+}
+
+// The game builds its atlas from `ascii_codepoints()` plus the codepoints save data draws,
+// because the atlas is fixed once constructed and layout silently drops what it does not
+// hold. A Chinese name therefore only appears when it was requested.
+void chinese_coverage()
+{
+    using lc1::text::ascii_codepoints;
+    // 啥句冲个: the name a save file in this repository holds, and the text a Latin face
+    // silently dropped before the game requested it.
+    std::u32string const name{U"\u55E6\u53E5\u51B2\u4E2A"};
+    std::string_view const name_utf8 = "\xE5\x97\xA6\xE5\x8F\xA5\xE5\x86\xB2\xE4\xB8\xAA";
+
+    lc1::text::GlyphAtlas const baseline{chinese_font_path};
+    auto const baseline_line_height = baseline.line_height();
+    check(baseline.glyph(U'M') != nullptr, "the Chinese face still rasterizes ASCII");
+    check(baseline.glyph(name.front()) == nullptr, "the baseline set stays ASCII-only");
+    check(lc1::text::measure_text(baseline, name_utf8, baseline_line_height).width == 0.0F,
+          "the baseline set gives a Chinese name no width, which is how it disappeared");
+
+    lc1::text::GlyphAtlas const atlas{chinese_font_path, {.codepoints = ascii_codepoints() + name}};
+    auto const line_height = atlas.line_height();
+    for (auto const code_point : name) {
+        auto const *glyph = atlas.glyph(code_point);
+        check(glyph != nullptr, "a requested Chinese codepoint is in the atlas");
+        check(glyph->size.x > 0.0F && glyph->size.y > 0.0F, "that glyph has a bitmap");
+        check(glyph->advance > 0.0F, "a Chinese glyph advances the pen");
+    }
+    std::vector<lc1::Vertex> vertices;
+    lc1::text::append_text(vertices, atlas, name_utf8, {.line_height = line_height});
+    check(vertices.size() == 6 * name.size(), "every Chinese glyph emits a quad");
+    check(lc1::text::measure_text(atlas, name_utf8, line_height).width > 0.0F,
+          "the name now measures");
+    check(lc1::text::measure_text(baseline, name_utf8, baseline_line_height).width <
+              lc1::text::measure_text(atlas, name_utf8, line_height).width,
+          "requesting the name is what gives it width");
+
+    // A codepoint requested twice must not rasterize and pack twice.
+    lc1::text::GlyphAtlas const doubled{chinese_font_path,
+                                        {.codepoints = ascii_codepoints() + name + name}};
+    check(doubled.extent() == atlas.extent(), "a repeated codepoint does not enlarge the atlas");
 }
 
 void placement(lc1::text::GlyphAtlas const &atlas)
 {
+    auto const line_height = atlas.line_height();
     std::vector<lc1::Vertex> left;
-    lc1::text::append_text(left, atlas, "AB", {.origin = {100.0F, 0.0F, 0.0F}});
+    lc1::text::append_text(left, atlas, "AB",
+                           {.origin = {100.0F, 0.0F, 0.0F}, .line_height = line_height});
     std::vector<lc1::Vertex> centered;
-    lc1::text::append_text(centered, atlas, "AB",
-                           {.origin = {100.0F, 0.0F, 0.0F}, .center_x = true});
-    auto const width = lc1::text::measure_text(atlas, "AB").width;
+    lc1::text::append_text(
+        centered, atlas, "AB",
+        {.origin = {100.0F, 0.0F, 0.0F}, .line_height = line_height, .center_x = true});
+    auto const width = lc1::text::measure_text(atlas, "AB", line_height).width;
     check(std::abs((left[0].position.x - centered[0].position.x) - width * 0.5F) < 1e-4F,
           "centring shifts the run left by half its measured width");
 
     std::vector<lc1::Vertex> scaled;
-    lc1::text::append_text(scaled, atlas, "AB", {.origin = {0.0F, 0.0F, 0.0F}, .scale = 3.0F});
+    lc1::text::append_text(scaled, atlas, "AB",
+                           {.origin = {0.0F, 0.0F, 0.0F}, .line_height = 3.0F * line_height});
     check(std::abs((scaled[1].position.x - scaled[0].position.x) -
                    3.0F * (left[1].position.x - left[0].position.x)) < 1e-3F,
-          "scale multiplies the quad's extent");
+          "line height multiplies the quad's extent");
 }
 
 void oriented_placement(lc1::text::GlyphAtlas const &atlas)
@@ -200,9 +273,11 @@ void oriented_placement(lc1::text::GlyphAtlas const &atlas)
           glm::vec3{0, -1, 0}, glm::vec3{2, 3, 4}, glm::vec3{0, 1, 0.0001F}, glm::vec3{0, 0, 1e30F},
           glm::vec3{0, 0, 1e-30F}}) {
         std::vector<lc1::Vertex> vertices;
-        lc1::text::append_text(
-            vertices, atlas, "A\nB",
-            {.origin = origin, .scale = 0.1F, .center_x = true, .normal = normal});
+        lc1::text::append_text(vertices, atlas, "A\nB",
+                               {.origin = origin,
+                                .line_height = 0.1F * atlas.line_height(),
+                                .center_x = true,
+                                .normal = normal});
         check(vertices.size() == 12, "oriented text retains all glyphs");
         auto const direction = vertices.front().normal;
         check(std::abs(glm::length(direction) - 1.0F) < 1e-5F, "text normal is normalized");
@@ -226,7 +301,8 @@ void oriented_placement(lc1::text::GlyphAtlas const &atlas)
         bool rejected = false;
         try {
             std::vector<lc1::Vertex> vertices;
-            lc1::text::append_text(vertices, atlas, "A", {.normal = normal});
+            lc1::text::append_text(vertices, atlas, "A",
+                                   {.line_height = atlas.line_height(), .normal = normal});
         }
         catch (lc1::Error const &) {
             rejected = true;
@@ -241,6 +317,11 @@ int main()
 {
     try {
         utf8_decoding();
+        if (std::filesystem::exists(chinese_font_path))
+            chinese_coverage();
+        else
+            std::cout << "font_layout: " << chinese_font_path
+                      << " is absent, so the Chinese coverage checks were skipped\n";
         if (!std::filesystem::exists(font_path)) {
             std::cout << "font_layout: " << font_path
                       << " is absent, so atlas and layout checks were skipped\n";

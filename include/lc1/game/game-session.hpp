@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lc1/audio/audio.hpp"
 #include "lc1/scene/lights/light.hpp"
 
 #include "lc1/game/ai-character-controller.hpp"
@@ -18,11 +19,14 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace lc1 {
+
+class Window;
 
 // Resolved game commands. The application supplies focus/context-gated input.
 struct GameInput {
@@ -43,7 +47,7 @@ struct GameLocation {
 class GameSession {
   public:
     GameSession(Device const &device, std::filesystem::path const &asset_root, Save const &save,
-                OutputSettings output);
+                OutputSettings output, Window const *window);
     GameSession(GameSession const &) = delete;
     GameSession &operator=(GameSession const &) = delete;
     GameSession(GameSession &&) = delete;
@@ -75,12 +79,21 @@ class GameSession {
     GpuFont const &font() const { return font_; }
 
     std::vector<WorldTextItem> world_labels() const;
+    std::vector<ScreenTextItem> screen_labels() const;
 
     std::string_view player_name() const { return player_->config().name; }
 
     std::uint32_t object_capacity() const;
 
+    Character *find_interaction_target() const;
+
   private:
+    enum class State : std::uint8_t {
+        MainMenu,
+        InSettings,
+        InGame,
+    };
+
     // The runtime world is built once, from the save data. Factions, equipment and weapons
     // come first because parties and characters borrow them; a character names its party,
     // and party membership names characters, so it is linked last.
@@ -90,9 +103,15 @@ class GameSession {
 
     void update_showcase(GameInput const &input, float delta_seconds);
     void update_lighting();
+    void update_audio_listener();
+    void update_ui();
+    void update_music_browser();
+    void refresh_music_browser();
+    void play_music(std::filesystem::path const &path);
 
     // Owners precede their borrowers: materials reference textures, draws reference
     // meshes/materials, and the character/controllers reference the continent.
+    Window const *window_;
     GpuFont const font_;
     GpuTexture const white_;
     Continent const continent_;
@@ -115,6 +134,22 @@ class GameSession {
     std::unordered_map<std::uint32_t, std::unique_ptr<Character>> characters_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Party>> parties_;
 
+    State state_;
+    float volume_;
+
+    struct MusicBrowserEntry {
+        std::filesystem::path path;
+        bool is_directory{};
+    };
+
+    std::filesystem::path music_browser_path_;
+    std::vector<MusicBrowserEntry> music_browser_entries_;
+    std::string music_error_;
+    std::string current_music_name_;
+    std::filesystem::path current_music_path_;
+    bool music_browser_open_ = false;
+    bool music_browser_loaded_ = false;
+
     // Borrowed from the character table once the world is built: every character, the
     // player included, comes from save data. The view is built at the same point, because
     // it needs the player's start position.
@@ -122,6 +157,13 @@ class GameSession {
     std::unique_ptr<PlayerView> player_view_;
 
     Character *example_ = nullptr;
+
+    Character *interaction_target_{};
+
+    audio::AudioContext audio_context_;
+    audio::Listener audio_listener_{audio_context_};
+    audio::Source audio_source_{audio_context_};
+    audio::Sound audio_music_;
 };
 
 } // namespace lc1

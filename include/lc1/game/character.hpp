@@ -2,7 +2,9 @@
 
 #include "lc1/game/character-controller.hpp"
 #include "lc1/game/equipment.hpp"
+#include "lc1/game/interactable.hpp"
 #include "lc1/game/party.hpp"
+#include "lc1/game/physics.hpp"
 #include "lc1/game/weapon.hpp"
 #include "lc1/scene/object.hpp"
 
@@ -71,7 +73,8 @@ class Character {
     scene::Transform const &transform() const { return object_.transform; }
 
     void move(Continent const &continent, glm::vec3 displacement);
-    void walk(Continent const &continent, glm::vec3 direction, float delta_seconds, bool running);
+    void walk(Continent const &continent, glm::vec3 direction, float delta_seconds, bool running,
+              bool face_movement = true);
 
     // Right-handed degrees about +Y. Zero faces -Z, independently of asset correction.
     float body_yaw() const { return object_.transform.rotation.y; }
@@ -95,17 +98,24 @@ class Character {
     // Requires an attached mesh and material; both are borrowed through scene::Object.
     DrawItem draw_item() const;
 
-    void update(float delta_seconds)
-    {
-        if (controller_)
-            controller_->update(delta_seconds, *this);
-    }
+    void request_jump() { jump_requested_ = true; }
+
+    bool on_ground() const { return on_ground_; }
+
+    void update(float delta_seconds);
 
     CharacterController *controller() { return controller_.get(); }
 
     void set_controller(std::unique_ptr<CharacterController> controller)
     {
         controller_ = std::move(controller);
+    }
+
+    Interactable *interactable() { return interactable_.get(); }
+
+    void set_interactable(std::unique_ptr<Interactable> interactable)
+    {
+        interactable_ = std::move(interactable);
     }
 
     Faction const *faction() const { return this->config_.party->faction(); }
@@ -116,8 +126,12 @@ class Character {
 
     float look_yaw_ = 0.0F;
     float look_pitch_ = 0.0F;
+    bool on_ground_;
+    glm::vec3 velocity_;
+    bool jump_requested_ = false;
     scene::Object object_;
     std::unique_ptr<CharacterController> controller_;
+    std::unique_ptr<Interactable> interactable_;
 };
 
 } // namespace lc1

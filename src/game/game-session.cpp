@@ -184,15 +184,15 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
         example_ = character_by_id(save.example(), "AI example");
         std::vector<Waypoint> waypoints{
             {.position = continent_.spawn() + glm::vec3{3.27F, 0.0F, -1.84F},
-             .wait_seconds = 0.83F},
+             .wait_seconds = 1.83F},
             {.position = continent_.spawn() + glm::vec3{-4.12F, 0.0F, 2.65F},
-             .wait_seconds = 1.47F},
-            {.position = continent_.spawn() + glm::vec3{1.58F, 0.0F, 4.03F}, .wait_seconds = 1.92F},
+             .wait_seconds = 2.47F},
+            {.position = continent_.spawn() + glm::vec3{1.58F, 0.0F, 4.03F}, .wait_seconds = 2.92F},
             {.position = continent_.spawn() + glm::vec3{-2.96F, 0.0F, -3.41F},
-             .wait_seconds = 0.61F},
+             .wait_seconds = 1.61F},
         };
         example_->set_controller(std::make_unique<AiCharacterController>(continent_, waypoints));
-        example_->set_interactable(std::make_unique<InteractableCharacter>(example_));
+        example_->set_interactable(std::make_unique<InteractableCharacter>(example_, &dialog_));
     }
 
     spdlog::info(
@@ -344,8 +344,33 @@ std::vector<ScreenTextItem> GameSession::screen_labels() const
         auto const metrics =
             text::measure_text(font_.atlas(), interact_text.text, interact_text.line_height);
         interact_text.position = {(extent.width - metrics.width) * 0.5F,
-                                  (extent.height + metrics.height) * 0.5F};
+                                  (extent.height - metrics.height) * 0.5F};
         labels.push_back(interact_text);
+    }
+
+    if (dialog_.current_speaker()) {
+        ScreenTextItem item{
+            .text = std::format("{}: {}", dialog_.current_speaker()->config().name,
+                                dialog_.current_speech_text()),
+            .line_height = font_.atlas().line_height_for_em(32),
+        };
+        auto const metrics = text::measure_text(font_.atlas(), item.text, item.line_height);
+        item.position = {(extent.width - metrics.width) * 0.5F, extent.height * 0.7};
+        labels.push_back(item);
+
+        for (auto const &[index, response] :
+             std::views::zip(std::views::iota(0), dialog_.candidate_responses())) {
+            ScreenTextItem response_item{
+                .text = std::format("{}. {}", index + 1, response),
+                .line_height = font_.atlas().line_height_for_em(24),
+            };
+            auto const response_metrics =
+                font_.atlas().measure(response_item.text, response_item.line_height);
+            response_item.position = {(extent.width - response_metrics.width) * 0.5F,
+                                      extent.height * 0.7 + metrics.height +
+                                          index * response_metrics.height};
+            labels.push_back(response_item);
+        }
     }
 
     return labels;
@@ -359,9 +384,7 @@ std::uint32_t GameSession::object_capacity() const
 
 Character *GameSession::find_interaction_target() const
 {
-    // return example_;
-
-    constexpr float max_distance = 3.0F;
+    constexpr float max_distance = 4.0F;
     constexpr float min_alignment = 0.70710678F;
 
     // 斜视角使用身体朝向；第一人称使用水平观察方向。
@@ -477,6 +500,9 @@ void GameSession::update(GameInput const &input, float delta_seconds)
     assert(player_);
     assert(player_view_);
 
+    for (auto const &[_, character] : characters_)
+        character->update(delta_seconds);
+
     update_showcase(input, delta_seconds);
     player_view_->update(*player_, input.player, input.camera, delta_seconds);
     update_audio_listener();
@@ -486,9 +512,14 @@ void GameSession::update(GameInput const &input, float delta_seconds)
     if (input.player.interacting && interaction_target_) {
         interaction_target_->interactable()->interact(*player_);
     }
-
-    for (auto const &[_, character] : characters_)
-        character->update(delta_seconds);
+    // Too far away from the player to interact, so clear the interaction target.
+    if (dialog_.current_speaker() != nullptr &&
+        glm::distance(dialog_.current_speaker()->position(), player_->position()) > 5) {
+        dialog_.clear();
+    }
+    if (input.player.dialog_response_index >= 0 && dialog_.current_speaker() != nullptr) {
+        dialog_.choose_response(input.player.dialog_response);
+    }
 
     update_ui();
 }

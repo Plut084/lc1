@@ -73,9 +73,12 @@ void TextPass::draw_screen(CommandBuffer &commands, FrameResources &resources, v
     auto const &atlas = font.atlas();
     vertices_.clear();
     for (auto const &item : items) {
+        // Screen positions use a top-left origin; append_text lays out from a
+        // top-left corner in the bottom-left pixel space this pass transforms.
+        auto const origin_y = static_cast<float>(extent.height) - item.position.y;
         text::append_text(vertices_, atlas, item.text,
                           {
-                              .origin = {item.position.x, item.position.y, 0.0F},
+                              .origin = {item.position.x, origin_y, 0.0F},
                               .line_height = item.line_height,
                               .color = item.color,
                           });

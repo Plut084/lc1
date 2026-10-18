@@ -37,8 +37,8 @@ struct WorldTextItem {
 };
 
 // One line of screen text. `position` is the top-left corner of the first line in
-// pixels from the bottom-left corner, which is the corner the screen transform
-// treats as the origin.
+// framebuffer pixels from the top-left corner of the screen: +x is right and +y
+// is down.
 struct ScreenTextItem {
     std::string text;
     glm::vec2 position{};
@@ -77,9 +77,10 @@ class TextPass {
                     std::span<WorldTextItem const> items, glm::mat4 const &view_projection);
 
     // One draw for all items, into the caller's begun rendering of the output
-    // target. `extent` is that target's, and the transform maps pixels (origin at
-    // the bottom-left corner) to clip space, so up stays up under a positive
-    // viewport just as it does in the scene pass under its negative one.
+    // target. `extent` is that target's; item positions are top-left-origin
+    // pixels and are converted to the pass's bottom-left pixel transform, so up
+    // stays up under the positive viewport just as it does in the scene pass
+    // under its negative one.
     void draw_screen(CommandBuffer &commands, FrameResources &resources, vk::Extent2D extent,
                      GpuFont const &font, std::span<ScreenTextItem const> items);
 

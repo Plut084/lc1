@@ -217,4 +217,9 @@ float GlyphAtlas::kerning(char32_t left, char32_t right) const
     return found != kerning_.end() ? found->second : 0.0F;
 }
 
+TextMetrics GlyphAtlas::measure(std::string_view text, float line_height) const
+{
+    return measure_text(*this, text, line_height);
+}
+
 } // namespace lc1::text

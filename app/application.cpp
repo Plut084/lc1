@@ -334,7 +334,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         auto const draws = game_.draws();
         // Same contract for the HUD: the string and its single item outlive
         // graph.execute(), and screen text is measured in pixels from the
-        // bottom-left corner of the frame.
+        // top-left corner of the frame.
         auto const location = game_.location();
         std::string const hud =
             std::format("{} | {} / {}", game_.player_name(), location.region, location.place);
@@ -432,6 +432,11 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
                     .running = game_keyboard_enabled && router_.held(Action::Sprint),
                     .jumping = game_keyboard_enabled && router_.pressed(Action::Jump),
                     .interacting = game_keyboard_enabled && router_.pressed(Action::Interact),
+                    .dialog_response_index = router_.pressed(Action::DialogResponse0)   ? 0
+                                             : router_.pressed(Action::DialogResponse1) ? 1
+                                             : router_.pressed(Action::DialogResponse2) ? 2
+                                             : router_.pressed(Action::DialogResponse3) ? 3
+                                                                                        : -1,
                 },
             .camera =
                 {

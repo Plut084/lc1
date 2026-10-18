@@ -10,7 +10,13 @@ void InteractableCharacter::interact(Character &actor)
     if (!can_interact(actor))
         fail("cannot interact with this character");
     (void)actor;
-    me_->request_jump();
+
+    dialog_->said(me_, "Hello, I am " + me_->config().name + "!",
+                  {
+                      std::format("Hi, {}. My name is {}. Glad to see you.", me_->config().name,
+                                  actor.config().name),
+                      std::format("I don't want to talk to you, {}.", me_->config().name),
+                  });
 }
 
 bool InteractableCharacter::can_interact(Character &actor) const

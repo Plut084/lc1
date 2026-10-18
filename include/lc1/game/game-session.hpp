@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lc1/audio/audio.hpp"
+#include "lc1/game/dialog.hpp"
 #include "lc1/scene/lights/light.hpp"
 
 #include "lc1/game/ai-character-controller.hpp"
@@ -159,6 +160,8 @@ class GameSession {
     Character *example_ = nullptr;
 
     Character *interaction_target_{};
+
+    Dialog dialog_;
 
     audio::AudioContext audio_context_;
     audio::Listener audio_listener_{audio_context_};

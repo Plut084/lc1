@@ -1,5 +1,6 @@
 #include "lc1/text/text-layout.hpp"
 
+#include "lc1/text/glyph-atlas.hpp"
 #include "lc1/text/utf8.hpp"
 
 #include "lc1/error.hpp"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lc1/text/text-layout.hpp"
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -79,6 +80,8 @@ class GlyphAtlas {
 
     // Tightly packed RGBA8: white RGB, coverage in alpha.
     std::span<std::uint8_t const> pixels() const { return pixels_; }
+
+    TextMetrics measure(std::string_view text, float line_height) const;
 
   private:
     std::unordered_map<char32_t, Glyph> glyphs_;

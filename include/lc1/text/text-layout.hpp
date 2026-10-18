@@ -1,6 +1,5 @@
 #pragma once
 
-#include "lc1/text/glyph-atlas.hpp"
 #include "lc1/vertex.hpp"
 
 #include <glm/glm.hpp>
@@ -10,6 +9,8 @@
 #include <vector>
 
 namespace lc1::text {
+
+class GlyphAtlas;
 
 // Places text in an oriented plane. Screen text uses the default +Z normal.
 struct TextPlacement {

@@ -14,6 +14,7 @@ struct PlayerInput {
     bool running = false;
     bool jumping = false;
     bool interacting = false;
+    std::int32_t dialog_response_index = -1; // -1 means no response selected.
 };
 
 class FirstPersonCharacterController {

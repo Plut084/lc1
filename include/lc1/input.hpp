@@ -245,6 +245,10 @@ enum class Action : std::uint8_t {
     ToggleCameraLock,
     RecenterCamera,
     Count,
+    DialogResponse0,
+    DialogResponse1,
+    DialogResponse2,
+    DialogResponse3,
 };
 
 inline constexpr std::size_t action_count = static_cast<std::size_t>(Action::Count);

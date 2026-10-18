@@ -29,7 +29,15 @@ os=Windows
 compiler=gcc
 compiler.version=16
 compiler.cppstd=23
-compiler.libcxx=libstdc++
+# Use the C++11 ABI (GCC's default), not Conan's old `libstdc++` value.
+# Conan maps `libstdc++` to -D_GLIBCXX_USE_CXX11_ABI=0. Under that ABI,
+# MinGW-w64 GCC 16's libstdc++.a has a non-COMDAT definition of
+# std::logic_error's copy constructor in cow-stdexcept.o, while old-ABI
+# translation units such as OpenAL Soft's wasapi.cpp emit their own COMDAT
+# version. The MinGW linker then reports "multiple definition" at the final
+# link. `libstdc++11` selects the default ABI, where the copy constructor
+# stays in the library and no duplicate is emitted.
+compiler.libcxx=libstdc++11
 
 [options]
 # Environment-specific opt-out: avoid cross-compiling the large validation-layer

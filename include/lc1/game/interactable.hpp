@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lc1/game/dialog.hpp"
+
 namespace lc1 {
 
 class Character;
@@ -19,7 +21,7 @@ class Interactable {
 
 class InteractableCharacter : public Interactable {
   public:
-    InteractableCharacter(Character *character) : me_(character) {}
+    InteractableCharacter(Character *character, Dialog *dialog) : me_(character), dialog_(dialog) {}
 
     InteractableCharacter(InteractableCharacter const &) = delete;
     InteractableCharacter(InteractableCharacter &&) = delete;
@@ -33,6 +35,7 @@ class InteractableCharacter : public Interactable {
 
   private:
     Character *me_;
+    Dialog *dialog_;
 };
 
 } // namespace lc1

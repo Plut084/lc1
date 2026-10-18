@@ -59,9 +59,10 @@
 
 
 - 世界文字：`WorldTextItem::line_height`、`max_width` 用世界单位，绘制时乘相机的 view-projection。
-- 屏幕文字：`ScreenTextItem::line_height` 用 framebuffer 像素，`position` 的原点在**左下角**。
-  界面 pass 的正高度 viewport 配上 `y_ndc = 1 - 2y/H` 的变换，正好和场景 pass 的负高度
-  viewport 对应，两边卷绕方向一致。
+- 屏幕文字：`ScreenTextItem::line_height` 用 framebuffer 像素，`position` 的原点在**左上角**，
+  +x 向右、+y 向下。绘制时用 `y = H - position.y` 转换到界面 pass 的左下角像素空间；正高度
+  viewport 配上 `y_ndc = 1 - 2y/H` 的变换，正好和场景 pass 的负高度 viewport 对应，
+  两边卷绕方向一致。
 
 `measure_text(atlas, text, line_height)` 用同一套笔位算术（含字距）直接返回目标单位下的
 宽度、行数与高度，因此屏幕居中和展牌 `line_height`/`max_width` 取小都不需要再手算缩放。

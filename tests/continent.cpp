@@ -151,20 +151,20 @@ void terrain_collision_candidates()
 void player_and_city()
 {
     lc1::Continent const flat{flat_world()};
-    lc1::Character straight{flat, {.transform = {.position = flat.spawn()}}, {}};
-    lc1::Character diagonal{flat, {.transform = {.position = flat.spawn()}}, {}};
+    lc1::Character straight{flat, {.position = flat.spawn()}, {}};
+    lc1::Character diagonal{flat, {.position = flat.spawn()}, {}};
     straight.walk(flat, {1, 0, 0}, 0.1F, false);
     diagonal.walk(flat, {1, 0, 1}, 0.1F, false);
     check(near(glm::length(straight.position()), glm::length(diagonal.position())),
           "diagonal movement must not be faster");
     check(near(straight.position().y, 0) && near(straight.eye_position().y, 1.65F),
           "feet and camera remain at ground level");
-    lc1::Character resumed{flat, {.transform = {.position = flat.spawn()}}, {}};
+    lc1::Character resumed{flat, {.position = flat.spawn()}, {}};
     resumed.walk(flat, {1, 0, 0}, 10.0F, false);
     check(near(resumed.position().x, 0.45F), "long stalls do not teleport the player");
 
     lc1::Continent const city = lc1::Continent::make_prototype();
-    lc1::Character player{city, {.transform = {.position = city.spawn()}}, {}};
+    lc1::Character player{city, {.position = city.spawn()}, {}};
     for (int frame = 0; frame < 600; ++frame)
         player.walk(city, {0, 0, -1}, 1.0F / 60.0F, false);
     check(player.position().z < -10.0F, "WASD walk crosses the actual city gate");
@@ -198,7 +198,7 @@ void present_relief()
 
     auto const approach = world.ground_height({70.0F, 32.0F});
     check(approach.has_value(), "hill approach is walkable");
-    lc1::Character walker{world, {.transform = {.position = {70.0F, *approach, 32.0F}}}, {}};
+    lc1::Character walker{world, {.position = {70.0F, *approach, 32.0F}}, {}};
     for (int frame = 0; frame < 500; ++frame) {
         walker.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, false);
         walker.update(world, 1.0F / 60.0F);
@@ -221,7 +221,7 @@ void present_relief()
     for (bool running : {false, true}) {
         auto const start = world.ground_height({78.0F, 32.0F});
         check(start.has_value(), "slope jump start is grounded");
-        lc1::Character slope_jumper{world, {.transform = {.position = {78.0F, *start, 32.0F}}}, {}};
+        lc1::Character slope_jumper{world, {.position = {78.0F, *start, 32.0F}}, {}};
         slope_jumper.request_jump();
         for (int frame = 0; frame < 600; ++frame) {
             slope_jumper.update(world, 1.0F / 60.0F);
@@ -242,7 +242,7 @@ void showcase_platform_jump()
     lc1::Continent const world = lc1::Continent::make_present(blocks);
 
     // The east front plinth is x in [6, 21], z in [14, 18], top at y=0.8.
-    lc1::Character character{world, {.transform = {.position = {13.5F, 0.0F, 18.8F}}}, {}};
+    lc1::Character character{world, {.position = {13.5F, 0.0F, 18.8F}}, {}};
     character.request_jump();
     bool reached_plinth = false;
     for (int frame = 0; frame < 180; ++frame) {
@@ -304,7 +304,7 @@ void switchback_stairs()
     check(upper_flight && std::abs(upper_flight->height - 10.8F) < 0.01F,
           "upper spiral flight is another walkable surface at the same XZ");
 
-    lc1::Character character{world, {.transform = {.position = {29.0F, 0.0F, 65.2F}}}, {}};
+    lc1::Character character{world, {.position = {29.0F, 0.0F, 65.2F}}, {}};
     auto step_towards = [&](glm::vec3 direction, auto stop) {
         for (int frame = 0; frame < 1600; ++frame) {
             character.update(world, 1.0F / 60.0F);
@@ -368,7 +368,6 @@ void camera_projection()
 
 void perspective_camera_zoom()
 {
-    lc1::GroundBounds const bounds{{-100, -100}, {100, 100}};
     glm::vec3 const player{0, 0, 0};
     lc1::scene::FpsCamera camera;
     camera.set_zfar(800.0F);
@@ -388,18 +387,21 @@ void perspective_camera_zoom()
     check(near(project(center + camera.up() * 24.0F).y, 1.0F),
           "default framing covers 48 metres at the target depth");
 
-    controller.update(camera, player, bounds, {.scroll = 1.0F}, 0.1F);
+    controller.zoom(1.0F);
+    controller.update(camera, player, 0.1F);
     check(glm::distance(camera.position(), center) < initial_distance &&
               project(sample).x > initial_size,
           "wheel zoom approaches the target and increases apparent size");
     check(glm::length(project(center) * glm::vec3{1, 1, 0}) < 0.001F &&
               glm::length(camera.forward() - forward) < 0.001F,
           "zoom preserves the target at screen center and the fixed viewing angle");
-    controller.update(camera, player, bounds, {.scroll = -1.0F}, 0.1F);
+    controller.zoom(-1.0F);
+    controller.update(camera, player, 0.1F);
     check(near(glm::distance(camera.position(), center), initial_distance),
           "reverse wheel input restores the camera distance");
 
-    controller.update(camera, player, bounds, {.scroll = 20.0F}, 0.1F);
+    controller.zoom(20.0F);
+    controller.update(camera, player, 0.1F);
     check(near(controller.view_height(), 16.0F), "zoom respects the minimum framing limit");
     check(project(center).z > 0.0F && project(center).z < 1.0F && camera.position().y > player.y,
           "minimum zoom keeps the target visible and camera above the ground");
@@ -408,79 +410,45 @@ void perspective_camera_zoom()
 void camera_lock_and_edge_pan()
 {
     lc1::GroundBounds const bounds{{-100, -100}, {100, 100}};
-    glm::vec3 player{0, 0, 0};
+    glm::vec3 const player{0, 0, 0};
     lc1::scene::FpsCamera camera;
     lc1::MapCameraController controller{player};
     auto same = [](glm::vec3 a, glm::vec3 b) { return glm::length(a - b) < 0.001F; };
-    lc1::MapCameraInput edge{
-        .cursor = {0, 350}, .viewport_size = {1000, 700}, .pointer_active = true};
-
-    controller.update(camera, {3, 0, 4}, bounds, edge, 0.1F);
+    controller.pan({-1, 0}, bounds, 0.1F);
+    controller.update(camera, {3, 0, 4}, 0.1F);
     check(controller.locked() && same(controller.center(), {3, 0.9F, 4}),
-          "locked camera follows the player and ignores screen edges");
-
+          "locked camera follows the player and ignores pan");
     auto const before_unlock = controller.center();
-    controller.update(camera, {3, 0, 4}, bounds, {.toggle_lock = true}, 0.1F);
+    controller.toggle_lock();
+    controller.update(camera, {10, 0, 10}, 0.1F);
     check(!controller.locked() && same(controller.center(), before_unlock),
-          "unlocking preserves the current camera center");
-    controller.update(camera, {10, 0, 10}, bounds, {}, 0.1F);
-    check(same(controller.center(), before_unlock),
-          "unlocked camera does not follow WASD movement");
-
-    controller.update(camera, player, bounds, edge, 0.1F);
-    glm::vec3 const pan = controller.center() - before_unlock;
-    check(glm::dot(pan, camera.right()) < -1.0F &&
-              std::abs(glm::dot(pan, camera.heading())) < 0.001F,
-          "left screen edge pans left in the fixed camera basis");
-    auto const panned = controller.center();
-    edge.pointer_active = false;
-    controller.update(camera, player, bounds, edge, 0.1F);
-    check(same(controller.center(), panned),
-          "leaving or defocusing the window stops stale edge pan");
-    edge.pointer_active = true;
-    edge.cursor.x = -1.0F;
-    controller.update(camera, player, bounds, edge, 0.1F);
-    check(same(controller.center(), panned), "coordinates outside the content area do not pan");
-
-    edge.cursor.x = 0.0F;
-    edge.enabled = false;
-    edge.toggle_lock = true;
-    edge.recenter = true;
-    edge.scroll = 5.0F;
-    controller.update(camera, player, bounds, edge, 0.1F);
-    check(!controller.locked() && same(controller.center(), panned) &&
-              near(controller.view_height(), 48.0F),
-          "UI context gates camera toggles, centering, zoom and edge input together");
-
-    edge.enabled = true;
-    edge.toggle_lock = false;
-    edge.scroll = 0.0F;
-    player = {10, 0, 10};
-    controller.update(camera, player, bounds, edge, 0.1F);
+          "unlocking preserves the center instead of following movement");
+    controller.pan({-1, 0}, bounds, 0.1F);
+    controller.update(camera, player, 0.1F);
+    auto const pan = controller.center() - before_unlock;
+    check(glm::dot(pan, camera.right()) < -1 && std::abs(glm::dot(pan, camera.heading())) < 0.001F,
+          "pan follows the fixed camera basis");
+    controller.recenter({10, 0, 10});
+    controller.update(camera, {10, 0, 10}, 0.1F);
     check(!controller.locked() && same(controller.center(), {10, 0.9F, 10}),
-          "Space recenters without locking and takes priority over edge pan");
-    controller.update(camera, {11, 0, 10}, bounds, edge, 0.1F);
-    check(!controller.locked() && same(controller.center(), {11, 0.9F, 10}),
-          "holding Space temporarily follows the player");
-    controller.update(camera, {12, 0, 10}, bounds, {}, 0.1F);
-    check(same(controller.center(), {11, 0.9F, 10}), "releasing Space leaves the camera unlocked");
-    controller.update(camera, {12, 0, 10}, bounds, {.toggle_lock = true}, 0.1F);
+          "recenter does not change the follow lock");
+    controller.update(camera, {12, 0, 10}, 0.1F);
+    check(same(controller.center(), {10, 0.9F, 10}), "recenter does not enable later following");
+    controller.toggle_lock();
+    controller.update(camera, {12, 0, 10}, 0.1F);
     check(controller.locked() && same(controller.center(), {12, 0.9F, 10}),
-          "locking again immediately returns to the player");
-
+          "locking again immediately follows the player");
     lc1::MapCameraController side{player};
     lc1::MapCameraController corner{player};
-    side.update(camera, player, bounds, {.toggle_lock = true}, 0.0F);
-    corner.update(camera, player, bounds, {.toggle_lock = true}, 0.0F);
+    side.toggle_lock();
+    corner.toggle_lock();
     auto const start = side.center();
-    edge = {.cursor = {0, 350}, .viewport_size = {1000, 700}, .pointer_active = true};
-    side.update(camera, player, bounds, edge, 0.1F);
-    edge.cursor.y = 0.0F;
-    corner.update(camera, player, bounds, edge, 0.1F);
+    side.pan({-1, 0}, bounds, 0.1F);
+    corner.pan({-1, 1}, bounds, 0.1F);
     check(near(glm::length(side.center() - start), glm::length(corner.center() - start)),
-          "corner pan does not exceed the maximum edge speed");
+          "corner pan does not exceed the maximum side speed");
     for (int frame = 0; frame < 100; ++frame)
-        corner.update(camera, player, {{-2, -2}, {2, 2}}, edge, 0.1F);
+        corner.pan({-1, 1}, {{-2, -2}, {2, 2}}, 0.1F);
     check(std::abs(corner.center().x) <= 2 && std::abs(corner.center().z) <= 2,
           "free camera center stays within the continent");
 }

@@ -216,10 +216,15 @@ add_library(lc1_game STATIC
     src/game/character.cpp
     src/game/party.cpp
     src/game/save.cpp
+    src/game/input.cpp
     src/game/player-controller.cpp
     src/game/map-camera-controller.cpp
     src/game/continent-view.cpp
     src/game/game-session.cpp
+    src/game/game-world.cpp
+    src/game/world-view.cpp
+    src/game/game-ui.cpp
+    src/game/music-browser.cpp
     src/game/player-view.cpp
     src/game/debug/pbr-showcase.cpp
     src/game/interactable.cpp
@@ -298,6 +303,13 @@ if(BUILD_TESTING)
     target_include_directories(lc1_error_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
     lc1_enable_warnings(lc1_error_tests)
     add_test(NAME error_diagnostics COMMAND lc1_error_tests)
+    add_executable(lc1_input_tests tests/input.cpp)
+    target_link_libraries(lc1_input_tests PRIVATE lc1_engine)
+    lc1_enable_warnings(lc1_input_tests)
+    if(MINGW)
+        target_link_options(lc1_input_tests PRIVATE -static)
+    endif()
+    add_test(NAME input_routing COMMAND lc1_input_tests)
     add_executable(lc1_world_map_tests tests/world-map.cpp)
     target_link_libraries(lc1_world_map_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_world_map_tests)
@@ -326,6 +338,11 @@ if(BUILD_TESTING)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_tangent_tests)
+    add_executable(lc1_game_world_tests tests/game-world.cpp)
+    target_link_libraries(lc1_game_world_tests PRIVATE lc1_game)
+    lc1_enable_warnings(lc1_game_world_tests)
+    add_test(NAME game_world COMMAND lc1_game_world_tests
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/fixtures")
     add_executable(lc1_player_view_tests tests/player-view.cpp)
     target_link_libraries(lc1_player_view_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_player_view_tests)
@@ -349,6 +366,7 @@ if(BUILD_TESTING)
         target_link_options(lc1_dialog_tests PRIVATE -static)
         target_link_options(lc1_save_tests PRIVATE -static)
         target_link_options(lc1_tangent_tests PRIVATE -static)
+        target_link_options(lc1_game_world_tests PRIVATE -static)
         target_link_options(lc1_player_view_tests PRIVATE -static)
         target_link_options(lc1_render_graph_tests PRIVATE -static)
         target_link_options(lc1_font_tests PRIVATE -static)

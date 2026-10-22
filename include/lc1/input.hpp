@@ -15,8 +15,8 @@
 //
 // Three layers, and keeping them apart is the whole design:
 //   InputState  -- which switches are down, this frame. No meaning, no game rules.
-//   Binding     -- one row of data saying "in this mode, this key means that action".
-//   InputRouter -- resolves the active mode's bindings into action state.
+//   BasicBinding -- one row of data saying "in this mode, this key means that action".
+//   BasicInputRouter -- resolves the active mode's bindings into action state.
 // Game code asks "is MoveForward held", never "is W down", so rebinding and a second
 // input mode cost nothing at the call sites.
 namespace lc1 {
@@ -223,151 +223,73 @@ class InputState {
     bool cursor_valid_ = false;
 };
 
-// What the application asks about. These are input-device-independent on purpose: no game
-// code names a key, so rebinding is a data change and a new mode is a new table.
-//
-// The enum lives in the engine because the engine and the app are one program today. The
-// day an action starts carrying game rules -- a cooldown, a target, a unit -- it belongs
-// to the game layer, and InputRouter does not have to change to let it move.
-enum class Action : std::uint8_t {
-    MoveForward,
-    MoveBackward,
-    MoveLeft,
-    MoveRight,
-    Sprint,
-    Jump,
-    Interact,
-    ToggleCameraView,
-    CycleLighting,
-    ToggleShowcaseMotion,
-    IncreaseExposure,
-    DecreaseExposure,
-    ToggleCameraLock,
-    RecenterCamera,
-    DialogResponse0,
-    DialogResponse1,
-    DialogResponse2,
-    DialogResponse3,
-    SaveGame,
-    Count,
-};
-
-inline constexpr std::size_t action_count = static_cast<std::size_t>(Action::Count);
-
-// Which set of bindings is live.
-//
-// Exactly one context is active at a time -- the one on top of InputRouter's stack --
-// because switching modes has to be able to turn a whole set of controls off, and "off" is
-// far easier to reason about than priority rules between overlapping layers.
-enum class InputContext : std::uint8_t {
-    // One ground-level control scheme for countryside, cities and combat.
-    Gameplay,
-    // Nothing binds here. Pushing it is the gate that hands the keyboard to a text field
-    // or to ImGui -- every action simply resolves to false. Included from the start
-    // because retrofitting it means auditing every held()/pressed() call site.
-    Ui,
-};
-
-// One row of the control scheme. Context first because the table reads as groups of mode.
-struct Binding {
-    InputContext context;
-    Action action;
+// ActionEnum must use contiguous values starting at zero and end with Count.
+// ContextEnum and all binding policy belong to the caller. Only the top context resolves.
+template <typename ActionEnum, typename ContextEnum> struct BasicBinding {
+    ContextEnum context;
+    ActionEnum action;
     Key key;
 };
 
-// The application's whole control scheme, as data. This is the only place a key meets an
-// action: rebinding, or giving one key a different meaning in another mode, is a row here
-// and touches no other file.
-//
-// One row per (context, action, key), so an action can have several rows -- W and Up both
-// mean MoveForward -- and one key can mean different things in different modes. Several
-// rows may share an action; the action is held if any of them is.
-//
-// InputContext::Ui has no rows on purpose and does not need any: an unbound context
-// resolves every action to false, which is exactly the gate for "a text field or ImGui
-// owns the keyboard now".
-constexpr std::vector<Binding> default_bindings()
-{
-    std::vector<lc1::Binding> bindings{
-        // NOLINTBEGIN
-        {lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::W},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveForward, lc1::Key::Up},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::S},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveBackward, lc1::Key::Down},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::A},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveLeft, lc1::Key::Left},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::D},
-        {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::Right},
-        {lc1::InputContext::Gameplay, lc1::Action::Sprint, lc1::Key::LeftShift},
-        {lc1::InputContext::Gameplay, lc1::Action::Jump, lc1::Key::Space},
-        {lc1::InputContext::Gameplay, lc1::Action::Interact, lc1::Key::F},
-        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse0, lc1::Key::Digit1},
-        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse1, lc1::Key::Digit2},
-        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse2, lc1::Key::Digit3},
-        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse3, lc1::Key::Digit4},
-        {lc1::InputContext::Gameplay, lc1::Action::SaveGame, lc1::Key::F6},
-        {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraView, lc1::Key::M},
-        {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraLock, lc1::Key::Y},
-        {lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Space},
-        {lc1::InputContext::Gameplay, lc1::Action::CycleLighting, lc1::Key::F4},
-        {lc1::InputContext::Gameplay, lc1::Action::ToggleShowcaseMotion, lc1::Key::F5},
-        {lc1::InputContext::Gameplay, lc1::Action::IncreaseExposure, lc1::Key::PageUp},
-        {lc1::InputContext::Gameplay, lc1::Action::DecreaseExposure, lc1::Key::PageDown},
-        // NOLINTEND
-    };
-    return bindings;
-}
-
-// Resolves device state into action state through the active context's bindings.
-//
-// Bindings are data. This class never knows that W means "forward"; it knows only what the
-// application's table says, so adding a control is a row in that table and touches
-// nothing else -- not this class, and not the code that reads the action.
-class InputRouter {
+template <typename ActionEnum, typename ContextEnum> class BasicInputRouter {
   public:
-    // The table is copied, so it needs no particular lifetime: a local
-    // `constexpr std::array` is enough and there is no dangling-view contract to honour.
-    InputRouter(std::span<Binding const> bindings, InputContext initial_context);
+    using Binding = BasicBinding<ActionEnum, ContextEnum>;
 
-    void push(InputContext context);
-    // Popping the base context is ignored rather than fatal: the stack always has one, so
-    // active_context() is never empty and never undefined.
-    void pop();
+    BasicInputRouter(std::span<Binding const> bindings, ContextEnum initial_context)
+        : bindings_(bindings.begin(), bindings.end()), stack_{initial_context}
+    {
+    }
 
-    InputContext active_context() const { return stack_.back(); }
+    void push(ContextEnum context) { stack_.push_back(context); }
 
-    // Recompute every action from this frame's device state. Call once per frame, after
-    // Window::poll_events() and before anything reads an action.
-    //
-    // Recomputed from scratch rather than updated in place, which has three consequences
-    // worth knowing: a context switch cannot strand a key that is still down (a key with no
-    // binding in the new context simply resolves to false), calling this twice in one frame
-    // gives the same answer both times, and no edge survives into a frame that did not
-    // produce it.
-    void update(InputState const &input);
+    void pop()
+    {
+        if (stack_.size() > 1)
+            stack_.pop_back();
+    }
 
-    // Combine all keys bound to this action in the active context:
-    //   held     -- at least one key is currently down.
-    //   pressed  -- at least one key was pressed this frame.
-    //   released -- at least one key was released this frame, and all are now up.
-    //
-    // Example: if W and Up both trigger this action, pressing Up while holding W
-    // reports pressed. Releasing W while holding Up does not report released;
-    // releasing the last held key does.
-    //
-    // A quick press and release within one frame reports both pressed and released
-    // with held = false, provided no other bound key remains down.
-    bool held(Action action) const { return flag(held_, action); }
+    ContextEnum active_context() const { return stack_.back(); }
 
-    bool pressed(Action action) const { return flag(pressed_, action); }
+    // Recomputes action state from scratch; repeated updates are idempotent.
+    // Call after device events and context changes, before querying actions.
+    void update(InputState const &input)
+    {
+        held_.fill(false);
+        pressed_.fill(false);
+        released_.fill(false);
+        for (auto const &binding : bindings_) {
+            if (binding.context != active_context())
+                continue;
+            auto const index = static_cast<std::size_t>(binding.action);
+            if (index >= action_count)
+                continue;
+            held_[index] = held_[index] || input.down(binding.key);
+            pressed_[index] = pressed_[index] || input.pressed(binding.key);
+            released_[index] = released_[index] || input.released(binding.key);
+        }
+        // Releasing one binding does not end an action held by another binding.
+        // A new press remains visible even while another binding is held.
+        for (std::size_t index = 0; index < action_count; ++index)
+            released_[index] = released_[index] && !held_[index];
+    }
 
-    bool released(Action action) const { return flag(released_, action); }
+    bool held(ActionEnum action) const { return flag(held_, action); }
+
+    bool pressed(ActionEnum action) const { return flag(pressed_, action); }
+
+    bool released(ActionEnum action) const { return flag(released_, action); }
 
   private:
-    static bool flag(std::array<bool, action_count> const &flags, Action action);
+    static constexpr std::size_t action_count = static_cast<std::size_t>(ActionEnum::Count);
+
+    static bool flag(std::array<bool, action_count> const &flags, ActionEnum action)
+    {
+        auto const index = static_cast<std::size_t>(action);
+        return index < action_count && flags[index];
+    }
 
     std::vector<Binding> bindings_;
-    std::vector<InputContext> stack_;
+    std::vector<ContextEnum> stack_;
     std::array<bool, action_count> held_{};
     std::array<bool, action_count> pressed_{};
     std::array<bool, action_count> released_{};

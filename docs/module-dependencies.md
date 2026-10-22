@@ -24,7 +24,7 @@ flowchart TB
     ui["调试 UI<br/>ImGui / imgui_backend"]
 
     subgraph engine["引擎 lc1_engine"]
-        platform["平台与基础设施<br/>Window / InputRouter / Stopwatch / Error"]
+        platform["平台与基础设施<br/>Window / BasicInputRouter / Stopwatch / Error"]
         assets["CPU 资源与模型<br/>Image / Mesh / Model / ResourceManager"]
         scene["场景表达<br/>变换、相机、对象、灯光、材质"]
         render["vk/render<br/>渲染算法与绘制接口"]
@@ -66,65 +66,66 @@ Vulkan 四层仍在同一个 `lc1_engine` 库内，并非四个独立库。`lc1`
 
 ```mermaid
 flowchart TB
-    app["Application<br/>事件轮询、路由更新与光标捕获"] --> session["GameSession<br/>动作解释 / GameLocation"]
-    session --> input["InputRouter 动作 / Window 指针状态"]
-    session --> continent["Continent<br/>大陆、区域、地点、道路、碰撞"]
-    session --> view["ContinentView<br/>地形与地点的绘制资源"]
-    session --> character["Character<br/>角色姿态与碰撞移动"]
-    session --> player["PlayerView<br/>视角模式与操作状态"]
-    session --> ai["AiCharacterController<br/>简单往返移动"]
-    session --> dialogs["DialogSystem<br/>并发会话、NPC 发起与冷却"]
-    dialogs --> catalog["DialogCatalog<br/>YAML 内容与状态入口规则"]
-    dialogs --> dialog["Dialog<br/>双方台词与回答选择"]
-    dialog --> character
-    session --> showcase["PbrShowcase<br/>游戏内 PBR 展示"]
-    session --> assets["Image / Model<br/>GPU 资源与绘制数据"]
-    player --> movement["FirstPersonCharacterController<br/>ThirdPersonCharacterController"]
-    player --> mapcamera["MapCameraController"]
-    player --> camera["scene::FpsCamera"]
-    movement --> character
-    movement --> continent
-    mapcamera --> continent
-    mapcamera --> camera
-    ai --> character
-    ai --> continent
-    character --> continent
-    character --> object["scene::Object"]
-    view --> continent
-    view --> assets
-    showcase --> continent
-    showcase --> assets
-    continent --> layout["大陆内容与布局<br/>present / prototype / continent-layout"]
-    layout --> land["continent-land.generated.hpp<br/>海陆数据"]
-
-    subgraph drafts["草稿，未接入游戏会话"]
-        party["Party<br/>队伍"] --> faction["Faction<br/>阵营"]
-    end
+    app["Application<br/>事件 / 路由 / 捕获 / 保存文件"] --> session["GameSession<br/>输入门控与阶段协调"]
+    session --> world["GameWorld<br/>世界装配 / 规则 / 快照"]
+    session --> view["WorldView<br/>绘制资源 / 灯光 / 世界标签 / 监听位置"]
+    session --> player["PlayerView<br/>控制意图 / 相机更新"]
+    session --> ui["GameUi<br/>菜单 / HUD / 请求"]
+    session --> music["MusicBrowser<br/>文件浏览 / 播放"]
+    session --> input["game/input: Action / InputContext / Binding / InputRouter"]
+    input --> router["引擎 BasicInputRouter / InputState"]
+    session --> platform_input["Window / ImGui capture"]
+    world --> continent["Continent<br/>地形 / 地点 / 碰撞"]
+    world --> commands["PlayerCommand / apply_player_command"]
+    player --> commands
+    world --> character["Character<br/>唯一变换 / 移动 / 物理"]
+    world --> party["Party<br/>成员 / 招募 / 命令"]
     party --> character
+    party --> faction["Faction"]
+    world --> dialogs["DialogSystem / DialogCatalog / Dialog"]
+    dialogs --> character
+    world --> save["Save / SerializedWorld"]
+    character --> transform["scene::Transform<br/>纯 CPU 数据"]
+    character --> continent
+    player --> character
+    player --> continent
+    player --> camera["相机 / 输入解析 / MapCameraController"]
+    view --> world
+    view --> terrain["ContinentView"]
+    view --> showcase["PbrShowcase"]
+    view --> gpu["GPU 字体 / 网格 / 纹理 / 材质"]
+    view --> audio["AudioContext / Listener"]
+    ui --> world
+    ui --> music
+    music --> audio
+    continent --> layout["present / prototype / continent-layout"]
+    layout --> land["continent-land.generated.hpp"]
 ```
 
 | 模块 | 位置与职责 |
 |---|---|
-| 游戏会话 | `game/game-session.*`：组织世界、玩家、资源、灯光和绘制列表 |
-| 世界规则与内容 | `game/continent.hpp`、`src/game/continent.cpp`；`continent-present.cpp`、`continent-prototype.cpp`、私有 `continent-layout.*` 和生成的海陆数据 |
-| 世界可绘制表示 | `game/continent-view.*`：把世界数据变成网格、纹理和绘制项 |
-| 角色 | `game/character.*`：`scene::Object` 保存唯一世界姿态，移动使用大陆碰撞 |
-| 玩家控制 | `game/player-controller.*`、`game/player-view.*`、`game/map-camera-controller.*`：移动、第一／第三人称切换、地图相机 |
-| 简单 AI | `game/ai-character-controller.hpp`：会话已使用的往返控制，不是完整寻路 |
-| 调试展示 | `game/debug/pbr-showcase.*`：同时被游戏和 PBR GPU 测试使用 |
-| 队伍、阵营 | `game/party.hpp`、`game/faction.hpp`：草稿，未接入 |
+| 会话协调 | `game/game-session.*`：输入门控、世界/视角/表现/UI 时序和请求转交 |
+| 世界运行 | `game/game-world.*`：实体所有权、Save 装配、稳定角色表、物理/对话和快照；不依赖窗口或 GPU |
+| 世界表现 | `game/world-view.*`：资源、绘制项、世界标签、灯光、展示与音频监听 |
+| 游戏界面 | `game/game-ui.*`：菜单/调试/HUD，返回保存与音量请求 |
+| 音乐工具 | `game/music-browser.*`：目录浏览与播放，借用表现层 audio context |
+| 世界规则与内容 | `continent.*`、`continent-present.cpp`、`continent-prototype.cpp`、私有 `continent-layout.*` 与生成海陆数据 |
+| 地形绘制 | `game/continent-view.*`：大陆到网格、纹理和绘制项 |
+| 角色 | `game/character.*`：`scene::Transform` 保存唯一世界姿态，移动使用大陆碰撞，无网格/材质/绘制接口 |
+| 玩家视角 | `game/player-view.*`、`player-controller.*`、`map-camera-controller.*`：世界更新前控制，之后跟随最终姿态 |
+| AI 与对话 | `ai-character-controller.hpp`、`dialog.*`、`interactable.*`：巡逻、交流与交互；没有完整寻路 |
+| 队伍与阵营 | `party.*`、`faction.hpp`：已接入世界、招募和命令 |
+| 调试展示 | `debug/pbr-showcase.*`：由会话组合其碰撞体、WorldView 管理绘制，GPU 测试共用 |
 
-表中的 `game/` 文件对位于 `include/lc1/game/` 和 `src/game/`，具体扩展名为 `.hpp`／`.cpp`。
-应用轮询事件并更新 `InputRouter`，`GameSession` 读取动作并处理游戏操作和 UI/焦点门控。
-当前 `GameSession` 还借用 `Window` 取得指针状态和尺寸，并构建游戏内 ImGui 界面。
-`PlayerView` 和角色控制器只消费会话解析后的输入，不读取 `Window` 或 `InputRouter`。
+文件对位于 `include/lc1/game/` 和 `src/game/`。详细生命周期、时间策略与调用顺序见
+[代码边界](code-layout.md)。当前仍是 `lc1_game` 单一链接目标，源码/运行期隔离不等于独立 CPU 构建目标。
 
 ## 3. 引擎基础、资源与场景
 
 ```mermaid
 flowchart TB
     subgraph platform["平台与通用设施"]
-        window["Window / FrameExtent"] --> input["InputState / InputRouter<br/>Key / Action / Binding / InputContext"]
+        window["Window / FrameExtent"] --> input["InputState / BasicInputRouter<br/>Key / BasicBinding"]
         window --> glfw["GLFW"]
         clock["Stopwatch<br/>game-clock.*"]
         error["Error / fail<br/>error.hpp"]
@@ -162,7 +163,8 @@ flowchart TB
 |---|---|
 | 错误与日志 | `include/lc1/error.hpp`，使用 spdlog |
 | 帧计时 | `game-clock.hpp`、`src/game-clock.cpp`，类型名是 `Stopwatch`，属于引擎而非游戏库 |
-| 输入 | `input.hpp`、`src/input.cpp`，不包含 GLFW／Vulkan 头文件 |
+| 输入机制 | `input.hpp`、`src/input.cpp`，设备状态和模板路由，不包含 GLFW／Vulkan 头文件 |
+| 游戏输入策略 | `game/input.*`，动作/context 枚举、类型别名和默认绑定 |
 | 窗口 | `window.hpp`、`src/window.cpp`，不包含 Vulkan 头文件 |
 | CPU 图像 | `image.hpp`、`src/stb-image.cpp`，stb 解码 |
 | 几何与切线 | `vertex.hpp`、`mesh.hpp`、`tangent-space.hpp`、`src/tangent-space.cpp`，使用 GLM／MikkTSpace |
@@ -328,7 +330,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    world["大陆、地图、角色、视角<br/>4 个 CPU C++ 测试"] --> game["lc1_game"]
+    world["世界、地图、角色、视角、对话、存档<br/>CPU C++ 测试"] --> game["lc1_game"]
     tangent["切线 CPU 测试"] --> engine["lc1_engine"]
     game --> engine
     pbr["PBR GPU 测试"] --> game
@@ -341,7 +343,7 @@ flowchart LR
 
 | 测试分类 | 构建目标／CTest 名称 | 实现 |
 |---|---|---|
-| CPU 世界与角色 | `lc1_world_map_tests`、`lc1_continent_tests`、`lc1_character_tests`、`lc1_player_view_tests` | `tests/world-map.cpp`、`continent.cpp`、`character.cpp`、`player-view.cpp` |
+| CPU 世界与角色 | `lc1_game_world_tests`、`lc1_world_map_tests`、`lc1_continent_tests`、`lc1_character_tests`、`lc1_player_view_tests` | `tests/game-world.cpp`、`world-map.cpp`、`continent.cpp`、`character.cpp`、`player-view.cpp` |
 | CPU 几何 | `lc1_tangent_tests` | `tests/tangent-space.cpp` |
 | Python 接口检查 | `descriptor_heap_shader_interfaces` | `tests/check_heap_shaders.py` |
 | Python 生成器验证 | `heap_struct_generator` | `tests/test_heap_struct_generator.py`、`tests/shaders/` |
@@ -373,7 +375,7 @@ flowchart TB
     runtime["ShaderObject"] --> spirv
     copy["copy_assets"] --> assets["runtime/assets/textures / runtime/assets/lc-res"]
     copy -.-> copied["构建目录 assets/"]
-    game["GameSession / Model / Image"] --> copied
+    game["WorldView / Model / Image"] --> copied
 ```
 
 ```mermaid

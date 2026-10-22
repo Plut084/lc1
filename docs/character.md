@@ -4,20 +4,20 @@
 `lc1::Character`；由玩家还是 AI 控制，不改变角色自身的类型。
 
 角色属于游戏层，声明在 `include/lc1/game/character.hpp`，实现在 `src/game/character.cpp`，
-与 `Continent` 和角色控制器一样使用 `lc1` 命名空间。角色组合 `scene::Object` 表达外观，
+与 `Continent` 和角色控制器一样使用 `lc1` 命名空间。角色持有唯一的 `scene::Transform`，外观资源和绘制由 `WorldView` 负责，
 场景层不负责角色的出生、行走或碰撞规则。
 
 ## 数据归属
 
 | 数据 | 所属对象 |
 |---|---|
-| 世界位置与身体朝向 | `Character` 内部的 `Object::transform`，只保存一份 |
+| 世界位置与身体朝向 | `Character` 内部的 `transform_`，只保存一份 |
 | 相对身体的观察角度 | `Character` |
 | 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterBody` |
 | 模型原点、单位、坐标轴的校正 | `Model`，在上传 GPU 前统一处理 |
 | CPU 顶点和索引 | `Model` |
-| GPU 顶点、索引和 BLAS | `GpuMesh`，多个角色可以借用同一份 |
-| 材质和网格的引用 | `Object`，引用不拥有资源 |
+| GPU 顶点、索引和 BLAS | `WorldView` 拥有的 `GpuMesh`，当前角色共享占位资源 |
+| 绘制资源引用 | `WorldView` 生成的 `DrawItem`，借用资源 |
 | 玩家输入和控制决策 | 玩家控制器；角色不包含 `InputRouter`、`Window` 或相机 |
 | 当前观察画面的相机 | 应用/场景，按需要读取角色眼睛位置和观察方向 |
 
@@ -30,36 +30,24 @@
 
 ## 构造和移动
 
-下面的网格和材质都必须比角色及其 GPU 绘制活得更久：
+角色构造只需要大陆、初始世界变换、配置和可选身体参数：
 
 ```cpp
-auto const model = lc1::Model::load_from_file(
-    asset_path, {.rotation = {-90.0F, 0.0F, 0.0F}});
-auto const mesh = model.gen_mesh(device);
-auto const material = renderer.make_material(texture);
-
 lc1::Character character{
     continent,
-    {.transform = {.position = continent.spawn()},
-     .mesh = &mesh,
-     .material = &material},
+    {.position = continent.spawn()},
     lc1::CharacterConfig{},
     lc1::CharacterBody{}};
 
 character.set_body_yaw(90.0F);
 character.set_look_angles(0.0F, 20.0F);
 character.move(continent, {0.0F, 0.0F, -0.5F});
-auto const draw = character.draw_item();
 ```
 
-−90° 的校正仅是 Z-up 模型转为 Y-up 的示例；已经符合坐标约定的资源不需要它。
-
-构造时校验出生点、身体参数、世界变换以及网格/材质配对。世界变换保持直立、单位缩放；
-模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterBody` 设置，避免视觉缩放
-悄悄改变身体大小。构造时显式传入 `Object` 和 `CharacterConfig`，`CharacterBody` 可省略，
-默认值同时用于占位网格和碰撞体，两者不会悄悄对不上；将出生位置设为
-`continent.spawn()`、网格和材质留空即可创建供 CPU 测试使用的模拟角色。
-对这种角色调用 `draw_item()` 会明确报错。
+构造时校验出生点、身体参数和世界变换。世界变换保持直立、单位缩放；
+模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterBody` 设置。
+`WorldView` 读取 `character.transform().model_matrix()` 生成绘制项；角色不提供绘制接口。
+默认身体参数同时用于当前世界角色和占位网格；未来支持不同体型时，表现资源也需要匹配相应体型。
 
 `move(continent, displacement)` 接受以米为单位的 `vec3` 世界位移，当前要求 y 为零。
 它借用大陆的碰撞查询，让身体沿障碍滑动，并把结果写回同一份世界位置。
@@ -108,16 +96,21 @@ XZ 坐标上重叠。`ContinentBlock::walkable_top` 标记可站立的体块顶�
 
 ## 控制与视角
 
-两个玩家控制器都借用 `Continent`，在 `update` 调用期间借用 `Character`，不保存角色位置。
-它们消费应用层提供的 `PlayerInput`，不直接读取窗口或键盘：
+`PlayerView` 直接读取 `InputRouter` 的游戏动作，结合会话提供的键鼠门控和鼠标增量生成
+`PlayerCommand`，不再组装中间输入结构。相机锁定和回中也在动作解析阶段处理；
+`update_pointer()` 解析滚轮及逻辑屏幕边缘，`MapCameraController` 仅提供锁定、缩放、回中、
+平移和跟随算法，不接收输入打包结构。下列数学解析函数接收移动向量和观察增量，不修改角色：
 
-- `FirstPersonCharacterController`：鼠标水平移动转动身体，垂直移动改变观察俯仰；
-  WASD 相对角色的水平观察方向移动。
-- `ThirdPersonCharacterController`：以外部传入的相机水平方向解释 WASD，并主动转身。
+- `resolve_first_person_input` 从只读角色及可选的记忆观察角计算鼠标观察和水平移动。
+- `resolve_third_person_input` 以相机水平方向解释 WASD，生成转身意图。
 
-应用层根据第一人称/斜视角模式、Gameplay/UI context 和窗口焦点决定是否提供控制输入。
-鼠标捕获是模式切换时对窗口的操作，不用于反推是否启用鼠标观察。
-M 切换时使用同一个角色，保存第一人称观察角度，并保留斜视角的缩放与锁定状态。
+`PlayerView::resolve_input()` 选择解析方式并生成世界空间 `PlayerCommand`；M 切换只改变
+视角状态，恢复身体/观察角的命令在接下来的世界更新中执行。`GameWorld::update()` 使用
+同一份受限时间应用移动、观察和跳跃，再推进物理与交互。`update_camera()` 随后读取最终姿态，
+因此跳跃和相机跟随在同一帧生效。两种视角使用同一个角色，保留斜视角缩放与锁定状态。
+
+会话按菜单状态、Gameplay/UI context、窗口焦点和 ImGui capture 决定是否提供控制输入。
+鼠标捕获由 Application 执行，菜单打开时释放，不用于反推是否启用鼠标观察。
 
 ## 后续动画边界
 

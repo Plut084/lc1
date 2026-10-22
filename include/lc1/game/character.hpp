@@ -7,7 +7,7 @@
 #include "lc1/game/party.hpp"
 #include "lc1/game/physics.hpp"
 #include "lc1/game/weapon.hpp"
-#include "lc1/scene/object.hpp"
+#include "lc1/scene/transform.hpp"
 
 #include <cstdint>
 #include <map>
@@ -59,11 +59,13 @@ struct CharacterConfig {
 };
 
 // One upright, ground-level character, independent of input devices and cameras.
-// scene::Object::transform is the sole world pose; its origin is at the character's feet.
+// transform_ is the sole world pose; its origin is at the character's feet.
 class Character {
   public:
-    Character(Continent const &continent, scene::Object object, CharacterConfig config,
+    Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
               CharacterBody body = {});
+
+    CharacterConfig &config() { return config_; }
 
     CharacterConfig const &config() const { return config_; }
 
@@ -73,16 +75,16 @@ class Character {
 
     float height() const { return body_.height; }
 
-    glm::vec3 position() const { return object_.transform.position; }
+    glm::vec3 position() const { return transform_.position; }
 
-    scene::Transform const &transform() const { return object_.transform; }
+    scene::Transform const &transform() const { return transform_; }
 
     void move(Continent const &continent, glm::vec3 displacement);
     void walk(Continent const &continent, glm::vec3 direction, float delta_seconds, bool running,
               bool face_movement = true);
 
     // Right-handed degrees about +Y. Zero faces -Z, independently of asset correction.
-    float body_yaw() const { return object_.transform.rotation.y; }
+    float body_yaw() const { return transform_.rotation.y; }
 
     void set_body_yaw(float degrees);
     void set_body_direction(glm::vec3 direction);
@@ -99,9 +101,6 @@ class Character {
     glm::vec3 heading() const; // Horizontal look direction, without pitch.
     glm::vec3 right() const;
     glm::vec3 eye_position() const;
-
-    // Requires an attached mesh and material; both are borrowed through scene::Object.
-    DrawItem draw_item() const;
 
     void request_jump() { jump_requested_ = true; }
 
@@ -143,7 +142,7 @@ class Character {
     bool on_ground_;
     glm::vec3 velocity_;
     bool jump_requested_ = false;
-    scene::Object object_;
+    scene::Transform transform_;
     std::unique_ptr<CharacterController> controller_;
     std::unique_ptr<Interactable> interactable_;
 };

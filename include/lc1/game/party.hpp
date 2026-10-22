@@ -1,7 +1,6 @@
 #pragma once
 
 #include "lc1/game/companion-order.hpp"
-#include "lc1/vk/render/draw-item.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -18,8 +17,6 @@ class Party {
   public:
     Party(std::uint32_t keyid, Faction *faction, Character *leader = nullptr,
           std::vector<Character *> members = {}, std::vector<Character *> captives = {});
-
-    std::vector<DrawItem> draw_items() const;
 
     std::uint32_t keyid() const { return keyid_; }
 

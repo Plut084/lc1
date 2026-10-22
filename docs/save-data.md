@@ -9,12 +9,10 @@ CMake 目标 `copy_saves` 只把缺失的种子文件复制进运行树，不覆
 启动时，目录里存在 `checkpoint.yaml` 就优先读取完整进度，否则读取六个初始 YAML。
 `LC1_SAVE_ROOT` 可以覆盖默认的 `runtime/saves/01`。退出不会自动保存。
 
-`Save` 与 `GameSession` 是平级的两块，都由 `Application` 拥有（`Save save_` 在
-`game_` 之前）：`Save` 只负责存档数据——记录类型、YAML 读写、编号与引用校验，不持有任何
-运行期对象；`GameSession` 在构造时用 `Save` 装配出自己的世界（`Faction`、`Equipment`、
-`Weapon`、`Party`、`Character`），之后不再引用它。因此 `Save` 可以脱离 device、大陆和
-窗口单独加载与测试。玩家和 AI 示例也是存档记录，身份由 `session.yaml` 指明，`GameSession`
-不把任何编号写死。
+`Application` 拥有 `Save` 与 `GameSession`，会话内部的 `GameWorld` 在构造时消费 Save，
+按依赖顺序装配势力、装备、武器、队伍和角色，不保留对 Save 的引用。
+Save 只负责 YAML 记录、文件读写及引用校验；GameWorld 负责运行对象和快照。
+两者都可以脱离 device、窗口和音频单独构造与测试。玩家和 AI 示例身份仍由 `session.yaml` 指明。
 
 ## 文件与记录
 
@@ -93,7 +91,7 @@ CMake 目标 `copy_saves` 只把缺失的种子文件复制进运行树，不覆
 | `equipment` | 装备槽位，每项为 `[装备类型, 装备编号]` 对 |
 | `weapon` | 武器槽位，每项为 `[武器类型, 武器编号]` 对 |
 
-编号 `1` 和 `2` 不是特殊编号。谁是玩家由 `session.yaml` 决定，`GameSession` 不再写死任何
+编号 `1` 和 `2` 不是特殊编号。谁是玩家由 `session.yaml` 决定，`GameWorld` 不再写死任何
 编号：玩家可以是任意一条角色记录，也可以整支队伍换人。种子数据里 `runtime/saves/01/session.yaml`
 把 1 号定为玩家、2 号定为 AI 示例。
 
@@ -117,19 +115,19 @@ example: 2
 
 ## 读取、校验与装配
 
-`Save` 先把六个文件全部读成记录，再校验，最后才由 `GameSession` 建对象：
+`Save` 先把六个文件全部读成记录，再校验，最后才由 `GameWorld` 建对象：
 
 1. `Save` 读六个文件，检查同类编号重复。
 2. `Save::validate_references` 检查每个引用：会话的 `player`、`example`，队伍的 `faction`、
    `leader`、`members`、`captives`，以及角色的 `party`、`equipment`、`weapon`。`player`
    为 `0` 或指向不存在的角色、`example` 与玩家同一个人，都在这一步失败。悬空引用是数据错误，
    在碰任何运行期对象之前就失败。
-3. `GameSession::build_world` 按依赖顺序建对象：势力 → 装备/武器 → 队伍 → 角色。因为第 2
+3. `GameWorld::build_world` 按依赖顺序建对象：势力 → 装备/武器 → 队伍 → 角色。因为第 2
    步已经保证引用成立，这里的查表不会再失败。
-4. `GameSession::link_party_members` 最后链接队长、成员和俘虏。
-5. `GameSession` 用 `save.player()` 从建好的角色表里取出玩家，用 `save.example()` 取出 AI
-   示例（`0` 时跳过），然后构造 `PlayerView`——视角需要玩家的起始位置，所以它不能在世界
-   建好之前初始化。
+4. `GameWorld::link_party_members` 最后链接队长、成员和俘虏。
+5. `GameWorld` 用 `save.player()` 从建好的角色表里取出玩家，用 `save.example()` 取出 AI
+   示例（`0` 时跳过）。随后 `GameSession` 构造 `PlayerView`；视角需要玩家的起始位置，
+   所以它不能在世界建好之前初始化。
 
 角色和队伍互相引用，所以队伍先建、成员后链；`Party` 因此允许暂时没有队长。
 
@@ -138,7 +136,7 @@ example: 2
 
 ## 运行进度与写入
 
-`GameSession::snapshot()` 从当前运行对象生成 `SerializedWorld`，不读取启动时的旧 `Save`。
+`GameWorld::snapshot()` 从当前运行对象生成 `SerializedWorld`，不读取启动时的旧 `Save`。
 `Application` 响应保存请求，将快照交给 `Save::write`，并把结果返回给界面。
 `Save` 与会话仍然平级；会话不借用存档，也不持有存档路径。
 

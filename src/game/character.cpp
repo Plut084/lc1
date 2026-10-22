@@ -23,9 +23,9 @@ glm::vec3 horizontal_direction(float degrees)
 
 } // namespace
 
-Character::Character(Continent const &continent, scene::Object object, CharacterConfig config,
+Character::Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
                      CharacterBody body)
-    : config_(std::move(config)), body_(body), on_ground_{}, velocity_{}, object_(object)
+    : config_(std::move(config)), body_(body), on_ground_{}, velocity_{}, transform_(transform)
 {
     if (!std::isfinite(body_.half_width) || body_.half_width <= 0.0F ||
         !std::isfinite(body_.height) || body_.height <= 0.0F || !std::isfinite(body_.eye_height) ||
@@ -36,14 +36,12 @@ Character::Character(Continent const &continent, scene::Object object, Character
         !std::isfinite(body_.ground_snap_distance) || body_.ground_snap_distance < 0.0F)
         fail("invalid character body");
 
-    auto const &pose = object_.transform;
+    auto const &pose = transform_;
     if (!finite(pose.position) || !finite(pose.rotation) || pose.rotation.x != 0.0F ||
         pose.rotation.z != 0.0F || pose.scale != glm::vec3{1.0F})
         fail("ground character needs an upright, unscaled world transform");
     if (!continent.can_stand(position(), body_.half_width, body_.height))
         fail("character spawn is obstructed or outside the continent");
-    if ((object_.mesh == nullptr) != (object_.material == nullptr))
-        fail("character drawable needs both a mesh and a material");
     set_body_yaw(pose.rotation.y);
     // Spawning in the air is valid: the first update will apply gravity and land the
     // character. If a support surface is already within step/snap range, start grounded
@@ -54,7 +52,7 @@ Character::Character(Continent const &continent, scene::Object object, Character
     if (support) {
         float const offset = support->height - position().y;
         if (offset >= -body_.ground_snap_distance && offset <= body_.step_height) {
-            object_.transform.position.y = support->height;
+            transform_.position.y = support->height;
             on_ground_ = true;
         }
     }
@@ -106,7 +104,7 @@ void Character::update(Continent const &continent, float delta_seconds, bool con
             body_.step_height + body_.ground_snap_distance, body_.half_width);
         if (support && support->height >= position().y - body_.ground_snap_distance &&
             support->height <= position().y + body_.step_height) {
-            object_.transform.position.y = support->height;
+            transform_.position.y = support->height;
             velocity_.y = 0.0F;
         }
         else {
@@ -117,7 +115,7 @@ void Character::update(Continent const &continent, float delta_seconds, bool con
     if (!on_ground_) {
         float const previous_height = position().y;
         // Constant-acceleration integration keeps the jump height independent of frame rate.
-        object_.transform.position.y += velocity_.y * elapsed - 0.5F * gravityf * elapsed * elapsed;
+        transform_.position.y += velocity_.y * elapsed - 0.5F * gravityf * elapsed * elapsed;
         velocity_.y -= gravityf * elapsed;
 
         // A fast uphill run can make the terrain rise into the body while the jump is
@@ -125,7 +123,7 @@ void Character::update(Continent const &continent, float delta_seconds, bool con
         // up below the height field and the downward support query can never find it.
         auto const terrain = continent.ground_height({position().x, position().z});
         if (terrain && position().y < *terrain) {
-            object_.transform.position.y = *terrain;
+            transform_.position.y = *terrain;
             velocity_.y = 0.0F;
             on_ground_ = true;
         }
@@ -137,7 +135,7 @@ void Character::update(Continent const &continent, float delta_seconds, bool con
                 continent.support_below({position().x, previous_height, position().z},
                                         fall_distance + 0.001F, body_.half_width);
             if (support && position().y <= support->height) {
-                object_.transform.position.y = support->height;
+                transform_.position.y = support->height;
                 velocity_.y = 0.0F;
                 on_ground_ = true;
             }
@@ -177,7 +175,7 @@ void Character::move(Continent const &continent, glm::vec3 displacement)
                     support->height <= feet.y + body_.step_height + 0.001F) {
                     glm::vec3 const candidate{stepped.x, support->height, stepped.z};
                     if (continent.can_stand(candidate, body_.half_width, body_.height)) {
-                        object_.transform.position = candidate;
+                        transform_.position = candidate;
                         return;
                     }
                 }
@@ -185,7 +183,7 @@ void Character::move(Continent const &continent, glm::vec3 displacement)
         }
     }
 
-    object_.transform.position = normal;
+    transform_.position = normal;
 }
 
 void Character::walk(Continent const &continent, glm::vec3 direction, float delta_seconds,
@@ -214,7 +212,7 @@ void Character::set_body_yaw(float degrees)
 {
     if (!std::isfinite(degrees))
         fail("character body yaw must be finite");
-    object_.transform.rotation.y = std::remainder(degrees, 360.0F);
+    transform_.rotation.y = std::remainder(degrees, 360.0F);
 }
 
 void Character::set_body_direction(glm::vec3 direction)
@@ -259,13 +257,6 @@ glm::vec3 Character::eye_position() const
 {
     // Character-space metres; independent of the source model's origin and units.
     return position() + glm::vec3{0.0F, body_.eye_height, 0.0F};
-}
-
-DrawItem Character::draw_item() const
-{
-    if (!object_.mesh || !object_.material)
-        fail("cannot draw a simulation-only character");
-    return object_.draw_item();
 }
 
 } // namespace lc1

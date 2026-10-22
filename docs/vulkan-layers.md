@@ -8,7 +8,7 @@ Vulkan 调用继续使用 `vk::raii`；目录分层不改变资源所有权、�
 | `core/` | Vulkan 绑定配置、loader、实例与设备创建、分配器 | `VulkanLoader`、`Instance`、`Device`、`memory.hpp` |
 | `resources/` | GPU 存储、上传、命令录制、描述符、shader object 与图像屏障 | `CommandBuffer`、`one-time-submit.hpp`、`GpuBuffer`、`GpuImage`、`GpuTexture`、`GpuMesh`、`AccelerationStructure`、`DescriptorHeap` / `DescriptorHeapCache`、`ShaderObject`、`RenderTarget` |
 | `presentation/` | 窗口表面、交换链策略、acquire/submit/present、帧槽同步 | `Surface`、`Swapchain`、`FrameLoop`、`swapchain-policy.hpp` |
-| `render/` | 具体渲染算法、shader 接口、材质和绘制数据 | `Renderer`、`GraphicsShaders`、`GraphicsState`、`MaterialInfo`、`DrawItem`、`FrameResources`、阴影与色调映射 |
+| `render/` | 渲染图调度、具体渲染算法、shader 接口、材质和绘制数据 | `Renderer`、`RenderGraph`、`GraphicsShaders`、`GraphicsState`、`MaterialInfo`、`DrawItem`、`FrameResources`、阴影与色调映射 |
 
 ## 依赖方向
 
@@ -50,6 +50,13 @@ flowchart TD
 具体灯光、阴影、HDR 附件和描述符集合组成的 `FrameResources` 属于 `render`。
 两者共享的 `RenderTarget` 只是非拥有的输出 image view 与 extent，放在 `resources`；
 曝光和输出编码策略单独放在 `render/output-settings.hpp`。
+
+应用的帧录制回调创建当帧 `RenderGraph`。`Renderer::add_passes()` 接收 `RayQueryShadows`
+注册的四个阴影节点，再注册 HDR 光照和色调映射，应用最后追加 ImGui overlay。
+离屏调用可用 `Renderer::record()` 创建并执行六个场景节点。图验证逻辑资源依赖并同步执行
+录制回调；图不拥有图片，也不接管 pass 内的 Vulkan 屏障或呈现层的 acquire／submit／present。
+回调随本次录制结束销毁，不在 Renderer 成员中保存帧槽、相机或目标的借用。
+资源版本、历史和验证约定见 [RenderGraph](render-graph.md)。
 
 `Pipeline`、`ShaderModule` 和 `ShaderStages` 已删除。通用 `ShaderObject` 在资源层读取
 SPIR-V 并持有 `vk::raii::ShaderEXT`；渲染层的 `GraphicsShaders` 管理各 pass 的顶点/可选

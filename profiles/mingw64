@@ -29,7 +29,15 @@ os=Windows
 compiler=gcc
 compiler.version=16
 compiler.cppstd=23
-compiler.libcxx=libstdc++
+# Use the C++11 ABI (GCC's default), not Conan's old `libstdc++` value.
+# Conan maps `libstdc++` to -D_GLIBCXX_USE_CXX11_ABI=0. Under that ABI,
+# MinGW-w64 GCC 16's libstdc++.a has a non-COMDAT definition of
+# std::logic_error's copy constructor in cow-stdexcept.o, while old-ABI
+# translation units such as OpenAL Soft's wasapi.cpp emit their own COMDAT
+# version. The MinGW linker then reports "multiple definition" at the final
+# link. `libstdc++11` selects the default ABI, where the copy constructor
+# stays in the library and no duplicate is emitted.
+compiler.libcxx=libstdc++11
 
 [options]
 # Environment-specific opt-out: avoid cross-compiling the large validation-layer
@@ -38,6 +46,9 @@ compiler.libcxx=libstdc++
 lc1/*:with_validation_layers=False
 
 [conf]
+# reflect-cpp Debug objects can exceed the ordinary PE/COFF section limit.
+# Pass big-obj to the MinGW assembler, including dependency builds in Conan.
+reflect-cpp/*:tools.build:cxxflags=["-Wa,-mbig-obj"]
 # The rc entry is not optional: CMake passes .rc files through windres on Windows, and
 # the unprefixed name does not exist on a Linux host.
 tools.build:compiler_executables={"c": "x86_64-w64-mingw32-gcc", "cpp": "x86_64-w64-mingw32-g++", "rc": "x86_64-w64-mingw32-windres"}

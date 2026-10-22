@@ -77,8 +77,12 @@ visibility = 未被遮挡的射线数 / shadow_sample_count
 
 ## 模块边界
 
-- `Renderer::record()` 只执行正常光照，输入为相机、灯光和绘制列表。
-- `RayQueryShadows` 管理 TLAS 更新、单采样可见度、时间累积和空间滤波；历史缓冲属于该模块。
+- `Renderer::add_passes()` 向当帧 `RenderGraph` 注册正常光照，输入为相机、灯光和绘制列表；
+  应用可以继续追加 UI 节点。离屏入口 `Renderer::record()` 创建并执行同样的场景渲染图。
+- `RayQueryShadows::add_passes()` 注册场景准备／TLAS、单采样可见度、时间累积和空间滤波四个
+  节点；历史缓冲和各通道的屏障仍属于该模块。空间滤波录制完毕后才轮换历史索引并更新上一帧信息。
+- 原始可见度和空间滤波结果使用不同的逻辑资源名；时间累积结果的依赖确保空间滤波覆盖原图前，
+  原始可见度已经被读取。具体图结构见 [RenderGraph](render-graph.md)。
 
 所有通道均使用 native descriptor heap，`PassData` 的 push data 选择 camera/lights/object、
 TLAS 以及当前与历史图片。每个 draw 在命令流中记录自己的 object 索引；
@@ -99,7 +103,8 @@ Slang 2026.18 将 `ResourceDescriptorHeap[index]` 转成 acceleration structure 
 仍导致 `ErrorDeviceLost`，内核记录 Xid 109。CPU 检查确认描述符内保存了正确地址，stride
 为 8；独立 GPU 原始地址回读却得到零。同一 TLAS 地址通过 push data 传入时可正常查询。
 原始 SPIR-V 通过 `spirv-val --target-env vulkan1.4`；这些结果定位了失败路径，尚不能据此
-确定 Slang 或驱动哪一方有缺陷。
+确定 Slang 或驱动哪一方有缺陷。同类"分不清编译器还是驱动"的记录集中在
+[外部缺陷记录](external-defects.md)。
 
 生产可见度通道因此让 `PassData.scene` 索引一个 heap uniform-buffer descriptor。
 每个帧槽的 `scene_address` 缓冲保存 8 字节 TLAS 地址，shader 读取

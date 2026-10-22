@@ -123,7 +123,8 @@ Instance::Instance(VulkanLoader const &loader, std::vector<char const *> extensi
         fail("Vulkan instance setup failed: {}", error.what());
     }
     catch (lc1::Error const &error) {
-        fail("Vulkan instance setup failed: {}", error.what());
+        throw Error(std::format("Vulkan instance setup failed: {}", error.what()),
+                    error.location());
     }
 }
 

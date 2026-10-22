@@ -3,6 +3,7 @@
 #include "lc1/error.hpp"
 #include "lc1/game-clock.hpp"
 #include "lc1/vk/presentation/swapchain-policy.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -193,7 +194,8 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      game_{device_, config.asset_root, output_settings(surface_format_.format)},
+      save_{config.save_root},
+      game_{device_, config.asset_root, save_, output_settings(surface_format_.format), &window_},
       frame_loop_{device_,
                   [this] { return renderer_.make_frame_resources(game_.object_capacity()); }}
 {
@@ -308,46 +310,6 @@ bool Application::prepare_swapchain()
     return true;
 }
 
-void Application::update_game(float delta_seconds)
-{
-    if (window_.focused() && router_.pressed(Action::ToggleCameraView)) {
-        game_.toggle_camera_view();
-        // Changing capture resets the baseline; read cursor deltas only afterwards.
-        window_.set_cursor_captured(game_.first_person());
-    }
-    auto const &input = window_.input();
-    GameInput game_input{
-        .player =
-            {
-                .movement = {static_cast<float>(router_.held(Action::MoveRight)) -
-                                 static_cast<float>(router_.held(Action::MoveLeft)),
-                             static_cast<float>(router_.held(Action::MoveForward)) -
-                                 static_cast<float>(router_.held(Action::MoveBackward))},
-                .look_delta = game_.first_person() ? input.cursor_delta() : glm::vec2{},
-                .running = router_.held(Action::Sprint),
-            },
-        .camera =
-            {
-                .enabled = router_.active_context() == InputContext::Gameplay && window_.focused(),
-                .toggle_lock = router_.pressed(Action::ToggleCameraLock),
-                .recenter = router_.held(Action::RecenterCamera),
-                .scroll = input.scroll().y,
-                .cursor = input.cursor(),
-                .viewport_size = window_.content_size(),
-                .pointer_active =
-                    window_.hovered() && window_.focused() && !window_.cursor_captured(),
-            },
-    };
-    if (window_.focused()) {
-        game_input.cycle_lighting = router_.pressed(Action::CycleLighting);
-        game_input.toggle_showcase_motion = router_.pressed(Action::ToggleShowcaseMotion);
-        game_input.exposure_steps = static_cast<int>(router_.pressed(Action::IncreaseExposure)) -
-                                    static_cast<int>(router_.pressed(Action::DecreaseExposure));
-    }
-    game_.update(game_input, delta_seconds);
-    update_title();
-}
-
 void Application::update_title()
 {
     auto const location = game_.location();
@@ -368,32 +330,53 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
-        renderer_.record(command_buffer, resources, target, game_.camera(), game_.lights(),
-                         game_.draws(), game_.output());
-
-        // Make tone mapping's writes visible to the UI attachment load and blending.
-        vk::MemoryBarrier2 const barrier{
-            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
-                             vk::AccessFlagBits2::eColorAttachmentWrite,
-        };
-        command_buffer.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
-        vk::RenderingAttachmentInfo const color{
-            .imageView = **target.view,
-            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .loadOp = vk::AttachmentLoadOp::eLoad,
-            .storeOp = vk::AttachmentStoreOp::eStore,
-        };
-        vk::RenderingInfo rendering{
-            .renderArea = {.offset = {.x = 0, .y = 0}, .extent = target.extent},
-            .layerCount = 1,
-        };
-        rendering.setColorAttachments(color);
-        command_buffer.raii().beginRendering(rendering);
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *command_buffer.raii());
-        command_buffer.raii().endRendering();
+        // The graph borrows this frame's computed draws until execute() returns.
+        auto const draws = game_.draws();
+        // Same contract for the HUD: the string and its single item outlive
+        // graph.execute(), and screen text is measured in pixels from the
+        // top-left corner of the frame.
+        auto const location = game_.location();
+        std::string const hud =
+            std::format("{} | {} / {}", game_.player_name(), location.region, location.place);
+        std::vector<ScreenTextItem> screen_texts;
+        // HUD
+        screen_texts.push_back(
+            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .line_height = 22.0F});
+        screen_texts.append_range(game_.screen_labels());
+        TextFrameInput const text{
+            .font = &game_.font(), .world = game_.world_labels(), .screen = screen_texts};
+        RenderGraph graph;
+        renderer_.add_passes(graph, resources, target, game_.camera(), game_.lights(), draws,
+                             game_.output(), text);
+        graph.add_pass(
+            "ImGui overlay", {"output.ui_text"}, {"output.ui"}, [target](CommandBuffer &commands) {
+                // Make the UI text's writes visible to this attachment load and blending.
+                vk::MemoryBarrier2 const barrier{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
+                                     vk::AccessFlagBits2::eColorAttachmentWrite,
+                };
+                commands.raii().pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
+                vk::RenderingAttachmentInfo const color{
+                    .imageView = **target.view,
+                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                    .loadOp = vk::AttachmentLoadOp::eLoad,
+                    .storeOp = vk::AttachmentStoreOp::eStore,
+                };
+                vk::RenderingInfo rendering{
+                    .renderArea = {.offset = {.x = 0, .y = 0}, .extent = target.extent},
+                    .layerCount = 1,
+                };
+                rendering.setColorAttachments(color);
+                commands.raii().beginRendering(rendering);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commands.raii());
+                commands.raii().endRendering();
+            });
+        if (auto result = graph.compile(); !result)
+            fail("Cannot compile frame render graph: {}", result.error());
+        graph.execute(command_buffer);
     };
 
     while (!window_.should_close() && !stop_requested()) {
@@ -402,22 +385,41 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         router_.update(window_.input());
         if (window_.should_close() || stop_requested())
             break;
-        // Exit is application policy; Window must not consume Escape.
-        if (window_.input().pressed(Key::Escape))
-            break;
 
         // Recreate only at the top of a frame, before acquiring an image.
         if (!prepare_swapchain())
             continue;
-        update_game(stopwatch.tick());
 
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        // Build the UI here.
-        ImGui::Text("fps: %.2f", stopwatch.fps());
-        ImGui::Text("position: %.2f, %.2f, %.2f", game_.camera().position().x,
-                    game_.camera().position().y, game_.camera().position().z);
+
+        auto const &input = window_.input();
+        // Exit is application policy; while ImGui owns the keyboard, Escape belongs to the UI.
+        if (!ImGui::GetIO().WantCaptureKeyboard && input.pressed(Key::Escape))
+            break;
+
+        auto const delta_seconds = stopwatch.tick();
+        game_.update_view_mode(router_);
+        // Capture changes reset the baseline; GameSession reads mouse deltas afterwards.
+        window_.set_cursor_captured(game_.first_person());
+        game_.update(router_, delta_seconds);
+        if (game_.take_save_request()) {
+            try {
+                Save::write(save_.directory(), game_.snapshot());
+                game_.set_save_status("Game saved. F6: Save again");
+            }
+            catch (Error const &error) {
+                spdlog::error("[save] {}", error.diagnostic());
+                game_.set_save_status("Save failed. Please try again.");
+            }
+            catch (std::exception const &error) {
+                spdlog::error("[save] {}", error.what());
+                game_.set_save_status("Save failed. Please try again.");
+            }
+        }
+        update_title();
+
         ImGui::Render();
 
         switch (frame_loop_.draw_frame(*swapchain_, record)) {

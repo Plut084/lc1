@@ -77,12 +77,11 @@ std::vector<std::uint8_t> render(lc1::Device const &device, lc1::Renderer &rende
     return pixels;
 }
 
-void exercise(lc1::Device const &device)
+void exercise(lc1::Device const &device, vk::SampleCountFlagBits samples)
 {
-    auto const samples = std::min(device.max_sample_count(), vk::SampleCountFlagBits::e4);
     lc1::Renderer renderer{device, {vk::Format::eR8G8B8A8Unorm}, samples};
-    lc1::GpuTexture texture{device,
-                            lc1::Image::load_from_file("assets/textures/prototype-white.png")};
+    lc1::GpuTexture texture{
+        device, lc1::Image::load_from_file("runtime/assets/textures/prototype-white.png")};
     auto material =
         lc1::MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
                           .base_color = {.texture = &texture}};
@@ -95,7 +94,7 @@ void exercise(lc1::Device const &device)
     std::array<std::uint32_t, 6> const indices{0, 1, 2, 0, 2, 3};
     lc1::GpuMesh mesh{device, std::span<lc1::Vertex const>{vertices},
                       std::span<std::uint32_t const>{indices}};
-    std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material}};
+    std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material, .depth_bias = false}};
     std::array const lights{
         lc1::scene::to_light(lc1::scene::DirectionalLight{.base = {}, .direction = {0, -1, 0}})};
     lc1::scene::FpsCamera camera;
@@ -110,6 +109,30 @@ void exercise(lc1::Device const &device)
           "normal rendering did not prepare ray-query resources");
     check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
           "fresh frame slot changed a static hard-lit scene");
+
+    // Rebuild the frame with empty input spans, then restore them on both slots.
+    // Stale callbacks must not retain the previous draws or skip clearing/tone mapping.
+    auto const empty = render(device, renderer, normal_frame, camera, {}, {});
+    check(normal_frame.ray_query.built_instances.empty(), "empty frame retained shadow casters");
+    check(empty != first_lit, "empty draw list retained the lit scene");
+    // The first pixel lies outside this fixture's ground plane and supplies its
+    // tone-mapped background color without depending on UNORM rounding.
+    for (std::size_t i = 0; i < empty.size(); ++i)
+        check(empty[i] == first_lit[i % 4], "empty frame did not clear the entire output");
+
+    constexpr vk::Extent2D unlit_extent{64, 64};
+    auto const unlit = render(device, renderer, second_frame, camera, {}, draws, unlit_extent);
+    constexpr auto center =
+        (unlit_extent.height / 2 * unlit_extent.width + unlit_extent.width / 2) * 4;
+    check(unlit[center] == 0 && unlit[center + 1] == 0 && unlit[center + 2] == 0 &&
+              unlit[center + 3] == 255,
+          "frame without lights retained stale lighting or skipped geometry");
+    check(render(device, renderer, normal_frame, camera, lights, draws) == first_lit,
+          "restoring geometry after an empty frame changed the lit scene");
+    check(normal_frame.ray_query.built_instances.size() == 1,
+          "restoring geometry after an empty frame did not rebuild the TLAS");
+    check(render(device, renderer, second_frame, camera, lights, draws) == first_lit,
+          "restoring lights changed the lit scene");
 
     // Printed labels remain visible without entering the shadow-caster path.
     // Exercise an empty TLAS and invalidate history when caster membership changes.
@@ -139,12 +162,13 @@ void exercise(lc1::Device const &device)
     // caster membership must change pixels, catching a missing/incorrect TLAS lookup.
     auto occlusion_frame = renderer.make_frame_resources(2);
     std::array occlusion_draws{
-        lc1::DrawItem{.mesh = &mesh, .material = &material},
+        lc1::DrawItem{.mesh = &mesh, .material = &material, .depth_bias = false},
         lc1::DrawItem{
             .mesh = &mesh,
             .material = &material,
             .model = glm::scale(glm::translate(glm::mat4{1}, glm::vec3{0, 1, 0}), glm::vec3{0.3F}),
-            .casts_shadow = false},
+            .casts_shadow = false,
+            .depth_bias = false},
     };
     auto const unshadowed =
         render(device, renderer, occlusion_frame, camera, lights, occlusion_draws);
@@ -179,8 +203,12 @@ int main()
         instance.setup_debug_messenger();
         lc1::Surface surface{instance, window};
         auto device = lc1::test::make_render_device(instance, *surface.raii());
-        exercise(device);
-        std::cout << "ray-query caster changes, frame slots, resize and rendering passed\n";
+        exercise(device, vk::SampleCountFlagBits::e1);
+        auto const samples = std::min(device.max_sample_count(), vk::SampleCountFlagBits::e4);
+        if (samples != vk::SampleCountFlagBits::e1)
+            exercise(device, samples);
+        std::cout
+            << "ray-query empty frames, caster changes, frame slots, resize and rendering passed\n";
     }
     catch (std::exception const &error) {
         std::cerr << error.what() << '\n';

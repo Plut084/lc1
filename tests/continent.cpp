@@ -1,5 +1,6 @@
 #include "lc1/game/continent.hpp"
 #include "lc1/game/character.hpp"
+#include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/map-camera-controller.hpp"
 #include "lc1/scene/camera.hpp"
 
@@ -35,7 +36,8 @@ lc1::ContinentData flat_world()
             .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain},
                         {lc1::RegionId{2}, "Sea", lc1::RegionType::Sea}},
             .locations = {},
-            .roads = {}};
+            .roads = {},
+            .height_samples = {}};
 }
 
 void grid_and_terrain()
@@ -149,20 +151,20 @@ void terrain_collision_candidates()
 void player_and_city()
 {
     lc1::Continent const flat{flat_world()};
-    lc1::Character straight{flat};
-    lc1::Character diagonal{flat};
+    lc1::Character straight{flat, {.transform = {.position = flat.spawn()}}, {}};
+    lc1::Character diagonal{flat, {.transform = {.position = flat.spawn()}}, {}};
     straight.walk(flat, {1, 0, 0}, 0.1F, false);
     diagonal.walk(flat, {1, 0, 1}, 0.1F, false);
     check(near(glm::length(straight.position()), glm::length(diagonal.position())),
           "diagonal movement must not be faster");
     check(near(straight.position().y, 0) && near(straight.eye_position().y, 1.65F),
           "feet and camera remain at ground level");
-    lc1::Character resumed{flat};
+    lc1::Character resumed{flat, {.transform = {.position = flat.spawn()}}, {}};
     resumed.walk(flat, {1, 0, 0}, 10.0F, false);
     check(near(resumed.position().x, 0.45F), "long stalls do not teleport the player");
 
     lc1::Continent const city = lc1::Continent::make_prototype();
-    lc1::Character player{city};
+    lc1::Character player{city, {.transform = {.position = city.spawn()}}, {}};
     for (int frame = 0; frame < 600; ++frame)
         player.walk(city, {0, 0, -1}, 1.0F / 60.0F, false);
     check(player.position().z < -10.0F, "WASD walk crosses the actual city gate");
@@ -177,9 +179,171 @@ void player_and_city()
     std::uniform_real_distribution<float> direction{-1.0F, 1.0F};
     for (int step = 0; step < 4000; ++step) {
         player.walk(city, {direction(random), 0, direction(random)}, 0.1F, true);
-        check(city.can_stand(player.position(), player.config().half_width, player.config().height),
+        check(city.can_stand(player.position(), player.half_width(), player.height()),
               "movement must preserve the nonpenetration invariant");
     }
+}
+
+void present_relief()
+{
+    lc1::Continent const world = lc1::Continent::make_present();
+    auto const hill = world.terrain_sample({96.0F, 32.0F});
+    check(hill && hill->height > 9.5F, "present scene contains a substantial terrain hill");
+    check(hill->normal.y < 0.999F, "terrain hill has a non-flat surface normal");
+    auto const spawn_height = world.ground_height({world.spawn().x, world.spawn().z});
+    check(spawn_height && near(*spawn_height, 0.0F), "spawn remains on flat traversable ground");
+    auto const showcase_edge = world.terrain_sample({22.0F, 32.0F});
+    check(showcase_edge && near(showcase_edge->height, 0.0F),
+          "terrain relief does not intrude into the PBR showcase footprint");
+
+    auto const approach = world.ground_height({70.0F, 32.0F});
+    check(approach.has_value(), "hill approach is walkable");
+    lc1::Character walker{world, {.transform = {.position = {70.0F, *approach, 32.0F}}}, {}};
+    for (int frame = 0; frame < 500; ++frame) {
+        walker.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, false);
+        walker.update(world, 1.0F / 60.0F);
+    }
+    check(walker.on_ground() && walker.position().y > 2.0F,
+          "character climbs the present scene relief instead of staying at Y=0");
+    auto const ground = world.ground_height({walker.position().x, walker.position().z});
+    check(ground && std::abs(walker.position().y - *ground) < 0.01F,
+          "character feet follow the sampled terrain height");
+
+    float const takeoff_height = walker.position().y;
+    walker.request_jump();
+    for (int frame = 0; frame < 300; ++frame)
+        walker.update(world, 1.0F / 60.0F);
+    check(walker.on_ground() && walker.position().y > takeoff_height - 1.0F,
+          "jumping on a terrain slope lands back on the hill instead of falling through");
+
+    // Match the game loop order: vertical update first, then controller-driven
+    // horizontal movement. A walking/running jump must not outrun the support query.
+    for (bool running : {false, true}) {
+        auto const start = world.ground_height({78.0F, 32.0F});
+        check(start.has_value(), "slope jump start is grounded");
+        lc1::Character slope_jumper{world, {.transform = {.position = {78.0F, *start, 32.0F}}}, {}};
+        slope_jumper.request_jump();
+        for (int frame = 0; frame < 600; ++frame) {
+            slope_jumper.update(world, 1.0F / 60.0F);
+            slope_jumper.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, running);
+        }
+        slope_jumper.update(world, 1.0F / 60.0F);
+        auto const landed_ground =
+            world.ground_height({slope_jumper.position().x, slope_jumper.position().z});
+        check(landed_ground && slope_jumper.on_ground() &&
+                  std::abs(slope_jumper.position().y - *landed_ground) < 0.01F,
+              "a moving jump on a hill lands on terrain rather than falling through");
+    }
+}
+
+void showcase_platform_jump()
+{
+    auto const blocks = lc1::demo::PbrShowcase::spawn_blocks();
+    lc1::Continent const world = lc1::Continent::make_present(blocks);
+
+    // The east front plinth is x in [6, 21], z in [14, 18], top at y=0.8.
+    lc1::Character character{world, {.transform = {.position = {13.5F, 0.0F, 18.8F}}}, {}};
+    character.request_jump();
+    bool reached_plinth = false;
+    for (int frame = 0; frame < 180; ++frame) {
+        character.update(world, 1.0F / 60.0F);
+        if (character.on_ground() && character.position().y > 0.7F) {
+            reached_plinth = true;
+            break;
+        }
+        if (character.position().z > 17.0F)
+            character.walk(world, {0.0F, 0.0F, -1.0F}, 1.0F / 60.0F, false);
+    }
+    check(reached_plinth, "jumping onto a showcase plinth lands on its walkable top");
+    check(character.position().x > 6.0F && character.position().x < 21.0F &&
+              character.position().z > 14.0F && character.position().z < 18.0F,
+          "showcase plinth landing stays within the platform footprint");
+
+    // Moving on the plinth must not treat the solid block underneath as an invalid start.
+    character.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, false);
+    character.update(world, 1.0F / 60.0F);
+    check(character.on_ground() && character.position().y > 0.7F,
+          "walking on a showcase plinth remains valid");
+
+    // Walk and jump off the east edge. The foot support must persist until the body
+    // footprint has cleared the plinth, otherwise the falling body clips its side and
+    // the next horizontal move starts from an invalid position.
+    character.request_jump();
+    bool reached_ground = false;
+    for (int frame = 0; frame < 300; ++frame) {
+        character.update(world, 1.0F / 60.0F);
+        character.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, true);
+        if (character.on_ground() && character.position().y < 0.1F) {
+            reached_ground = true;
+            break;
+        }
+    }
+    check(reached_ground, "jumping down from a showcase plinth lands on the ground");
+}
+
+void switchback_stairs()
+{
+    lc1::Continent const world = lc1::Continent::make_present();
+
+    // The southwest corner has open ground plus both stacked landings at one XZ.
+    auto const ground_level = world.support_below({29.0F, 0.5F, 65.0F}, 0.6F);
+    auto const middle_level = world.support_below({29.0F, 10.5F, 65.0F}, 1.0F);
+    auto const top_level = world.support_below({29.0F, 20.0F, 65.0F}, 1.0F);
+    check(ground_level && std::abs(ground_level->height) < 0.01F,
+          "spiral stair has a ground level at the southwest corner");
+    check(middle_level && std::abs(middle_level->height - 9.6F) < 0.01F,
+          "spiral stair has a middle landing at the same XZ");
+    check(top_level && std::abs(top_level->height - 19.2F) < 0.01F,
+          "spiral stair has a top landing at the same XZ");
+
+    // Flights from the two loops are also stacked above one another.
+    auto const lower_flight = world.support_below({29.0F, 1.5F, 62.1F}, 1.0F);
+    auto const upper_flight = world.support_below({29.0F, 11.0F, 62.1F}, 1.0F);
+    check(lower_flight && std::abs(lower_flight->height - 1.2F) < 0.01F,
+          "lower spiral flight is a walkable surface");
+    check(upper_flight && std::abs(upper_flight->height - 10.8F) < 0.01F,
+          "upper spiral flight is another walkable surface at the same XZ");
+
+    lc1::Character character{world, {.transform = {.position = {29.0F, 0.0F, 65.2F}}}, {}};
+    auto step_towards = [&](glm::vec3 direction, auto stop) {
+        for (int frame = 0; frame < 1600; ++frame) {
+            character.update(world, 1.0F / 60.0F);
+            character.walk(world, direction, 1.0F / 60.0F, false);
+            if (stop(character.position()))
+                break;
+        }
+    };
+    auto check_level = [&](float height, std::string_view message) {
+        check(character.on_ground() && std::abs(character.position().y - height) < 0.01F, message);
+    };
+
+    step_towards({0.0F, 0.0F, -1.0F},
+                 [](glm::vec3 const &position) { return position.z <= 59.2F; });
+    check_level(2.4F, "first flight reaches the 2.4 m northwest landing");
+
+    step_towards({1.0F, 0.0F, 0.0F}, [](glm::vec3 const &position) { return position.x >= 35.0F; });
+    check_level(4.8F, "second flight reaches the 4.8 m northeast landing");
+
+    step_towards({0.0F, 0.0F, 1.0F}, [](glm::vec3 const &position) { return position.z >= 65.0F; });
+    check_level(7.2F, "third flight reaches the 7.2 m southeast landing");
+
+    step_towards({-1.0F, 0.0F, 0.0F},
+                 [](glm::vec3 const &position) { return position.x <= 29.0F; });
+    check_level(9.6F, "fourth flight completes the 9.6 m lower loop");
+
+    step_towards({0.0F, 0.0F, -1.0F},
+                 [](glm::vec3 const &position) { return position.z <= 59.2F; });
+    check_level(12.0F, "fifth flight climbs above the lower loop");
+
+    step_towards({1.0F, 0.0F, 0.0F}, [](glm::vec3 const &position) { return position.x >= 35.0F; });
+    check_level(14.4F, "sixth flight reaches the 14.4 m northeast landing");
+
+    step_towards({0.0F, 0.0F, 1.0F}, [](glm::vec3 const &position) { return position.z >= 65.0F; });
+    check_level(16.8F, "seventh flight reaches the 16.8 m southeast landing");
+
+    step_towards({-1.0F, 0.0F, 0.0F},
+                 [](glm::vec3 const &position) { return position.x <= 29.0F; });
+    check_level(19.2F, "eighth flight completes the 19.2 m upper loop");
 }
 
 void camera_projection()
@@ -330,6 +494,9 @@ int main()
         collision_and_sliding();
         terrain_collision_candidates();
         player_and_city();
+        present_relief();
+        showcase_platform_jump();
+        switchback_stairs();
         camera_projection();
         perspective_camera_zoom();
         camera_lock_and_edge_pan();

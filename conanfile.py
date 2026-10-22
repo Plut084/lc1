@@ -48,6 +48,7 @@ class Lc1Recipe(ConanFile):
         "xkbcommon/*:with_x11": False,
         "vulkan-validationlayers/*:with_wsi_xcb": False,
         "vulkan-validationlayers/*:with_wsi_xlib": False,
+        "reflect-cpp/*:with_yaml": True,
     }
 
     def requirements(self):
@@ -61,6 +62,11 @@ class Lc1Recipe(ConanFile):
         self.requires("ktx/4.4.2")
         self.requires("mikktspace/cci.20200325")
         self.requires("imgui/1.92.9b")
+        self.requires("reflect-cpp/0.25.0")
+        self.requires("freetype/2.14.3")
+        self.requires("openal-soft/1.24.3")
+        self.requires("drmp3/0.6.38")
+        self.requires("drwav/0.13.14")
 
         # Validation layers are a debug-only dependency: nothing needs them in a
         # Release build, and building them from source is expensive.

@@ -53,8 +53,8 @@ VSOutput vertMain(VSInput input)
     ConstantBuffer<Camera> camera = ResourceDescriptorHeap[pass_data.camera];
     ConstantBuffer<ObjectData> object_data = ResourceDescriptorHeap[pass_data.object];
     VSOutput output;
-    // Read GLM's stored columns explicitly. Slang 2026.18's native heap path
-    // misreads aggregate matrix members passed directly to mul; see docs/lighting.md.
+    // Read GLM's stored columns explicitly: whole-matrix loads through heap
+    // (untyped Uniform) pointers are mishandled here; see docs/external-defects.md.
     float4 world_position = object_data.model[0] * input.position.x +
         object_data.model[1] * input.position.y + object_data.model[2] * input.position.z + object_data.model[3];
     float4 view_position = camera.view[0] * world_position.x + camera.view[1] * world_position.y + camera.view[2] * world_position.z + camera.view[3] * world_position.w;
@@ -84,7 +84,8 @@ ShadowOutput visibilityMain(VSOutput input)
         input.world_normal * rsqrt(max(dot(input.world_normal, input.world_normal), 1e-8));
     uint4 visibility = uint4(0xffffffffu);
     for (uint i = 0; i < min(lights.count, 10u); ++i) {
-        // Read fields before passing the light by value (same heap aggregate constraint).
+        // Read fields before passing the light by value: nested arrays read
+        // through a heap ConstantBuffer are mishandled; see docs/external-defects.md.
         Light light;
         light.position = lights.lights[i].position;
         light.type = lights.lights[i].type;

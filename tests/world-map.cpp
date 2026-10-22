@@ -47,7 +47,8 @@ lc1::ContinentData connected_world()
                        lc1::LocationId{10},
                        lc1::LocationId{20},
                        4,
-                       {{-20, 4}, {20, 4}}}}};
+                       {{-20, 4}, {20, 4}}}},
+            .height_samples = {}};
 }
 
 template <typename Edit> void rejects(Edit edit, std::string_view reason)

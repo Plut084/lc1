@@ -5,7 +5,6 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <stb_easy_font.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,29 +27,6 @@ struct Geometry {
         vertices.push_back({point + v, normal, color, {0, 0}});
         for (auto const index : {0U, 1U, 2U, 0U, 2U, 3U})
             indices.push_back(first + index);
-    }
-
-    void label(std::string text, glm::vec3 center, float height, float max_width)
-    {
-        // stb's CPU-only font produces quads; the existing Vulkan mesh path draws them.
-        struct FontVertex {
-            float x, y, z;
-            unsigned char color[4];
-        };
-
-        static_assert(sizeof(FontVertex) == 16);
-        std::vector<FontVertex> font(text.size() * 64);
-        float const width = static_cast<float>(stb_easy_font_width(text.data()));
-        float const scale = std::min(height / 12.0F, max_width / std::max(width, 1.0F));
-        auto const count = stb_easy_font_print(0, 0, text.data(), nullptr, font.data(),
-                                               static_cast<int>(font.size() * sizeof(FontVertex)));
-        center.x -= width * scale * 0.5F;
-        for (int i = 0; i < count; ++i) {
-            auto const &a = font[static_cast<std::size_t>(i) * 4];
-            auto const &b = font[static_cast<std::size_t>(i) * 4 + 2];
-            quad(center + glm::vec3{a.x * scale, -b.y * scale, 0}, {(b.x - a.x) * scale, 0, 0},
-                 {0, (b.y - a.y) * scale, 0});
-        }
     }
 
     GpuMesh upload(Device const &device, bool with_tangents = false) const
@@ -118,17 +94,20 @@ GpuMesh make_sphere(Device const &device)
 std::vector<ContinentBlock> PbrShowcase::spawn_blocks()
 {
     // Leave x in [-5.5, 5.5] and the original city/village road completely open.
-    std::vector<ContinentBlock> blocks{
-        {{-21, 0, -18}, {-5.5F, 0.8F, -14}, ContinentSurface::Stone},
-        {{-21, 0, -19}, {-5.5F, 7.1F, -18.5F}, ContinentSurface::Stone},
-        {{6, 0, -18}, {21, 0.8F, -14}, ContinentSurface::Stone},
-        {{6, 0, -19}, {21, 4.4F, -18.5F}, ContinentSurface::Stone},
-        {{6, 0, -11}, {21, 0.8F, -7}, ContinentSurface::Stone},
-        {{-21, 0, -11}, {-5.5F, 0.8F, -7}, ContinentSurface::Stone}};
+    // Low display plinths have walkable tops; the tall back walls and dividers do not.
+    auto block = [](glm::vec3 min, glm::vec3 max, bool walkable_top) {
+        return ContinentBlock{min, max, ContinentSurface::Stone, true, walkable_top};
+    };
+    std::vector<ContinentBlock> blocks{block({-21, 0, -18}, {-5.5F, 0.8F, -14}, true),
+                                       block({-21, 0, -19}, {-5.5F, 7.1F, -18.5F}, false),
+                                       block({6, 0, -18}, {21, 0.8F, -14}, true),
+                                       block({6, 0, -19}, {21, 4.4F, -18.5F}, false),
+                                       block({6, 0, -11}, {21, 0.8F, -7}, true),
+                                       block({-21, 0, -11}, {-5.5F, 0.8F, -7}, true)};
     for (float const x : {-13.0F, 13.0F}) {
-        blocks.push_back({{x - 6, 0, -4}, {x + 6, 0.75F, 6}, ContinentSurface::Stone});
-        blocks.push_back({{x - 7.5F, 0, 12}, {x + 7.5F, 0.8F, 18}, ContinentSurface::Stone});
-        blocks.push_back({{x - 7.5F, 0, 11.4F}, {x + 7.5F, 5.9F, 11.8F}, ContinentSurface::Stone});
+        blocks.push_back(block({x - 6, 0, -4}, {x + 6, 0.75F, 6}, true));
+        blocks.push_back(block({x - 7.5F, 0, 12}, {x + 7.5F, 0.8F, 18}, true));
+        blocks.push_back(block({x - 7.5F, 0, 11.4F}, {x + 7.5F, 5.9F, 11.8F}, false));
     }
     return blocks;
 }
@@ -219,10 +198,14 @@ PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     auto const &white = material({0.7F, 0.75F, 0.8F}, 0, 0.85F);
     auto const &dark = material({0.035F, 0.045F, 0.06F}, 0, 0.6F);
     auto const &trim = material({0, 0, 0}, 0, 1, {0.04F, 0.6F, 0.85F});
-    auto const &lettering = material({0, 0, 0}, 0, 1, {1.8F, 1.8F, 1.8F});
-    Geometry labels;
-    auto label = [&](std::string text, glm::vec3 center, float height, float width) {
-        labels.label(std::move(text), center, height, width);
+    // Panel lettering keeps the brightness the emissive material used to give it,
+    // and the showcase origin every exhibit is placed from.
+    auto label = [this](std::string text, glm::vec3 center, float line_height, float max_width) {
+        labels_.push_back({.text = label_text_.emplace_back(std::move(text)),
+                           .center = center + origin_,
+                           .line_height = line_height,
+                           .max_width = max_width,
+                           .color = {1.8F, 1.8F, 1.8F}});
     };
     MaterialInfo floor_info;
     floor_info.parameters.metallic_factor = 0;
@@ -389,9 +372,6 @@ PbrShowcase::PbrShowcase(Device const &device, glm::vec3 origin)
     label("F4 LIGHTS  /  F5 MOTION", {13, 4.55F, 11.86F}, 0.5F, 14);
     label("PGUP / PGDN EXPOSURE", {-13, 4.65F, 11.86F}, 0.5F, 14);
     label("PBR  /  MATERIAL WALK", {0, 0.4F, 20.5F}, 0.7F, 10);
-    labels_.emplace(labels.upload(device));
-    auto const labels_draw = place(*labels_, lettering, {0, 0, 0});
-    draws_[labels_draw].casts_shadow = false;
     update(0);
 }
 

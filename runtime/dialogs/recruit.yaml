@@ -1,0 +1,60 @@
+version: 2
+entry: greeting
+nodes:
+  - id: greeting
+    speaker: Target
+    respondent: Talker
+    text: "Hello, I am {target_name}!"
+    choices:
+      - id: invite
+        text: "Join my party."
+        condition: CanRecruit
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: offer
+      - id: goodbye
+        text: "Goodbye."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end
+  - id: offer
+    speaker: Target
+    respondent: Talker
+    text: "Do you want me to join your party, {talker_name}?"
+    choices:
+      - id: recruit
+        text: "Yes, join us."
+        condition: CanRecruit
+        action: Recruit
+        recruiter: Talker
+        npc_priority: 10
+        next: joined
+      - id: back
+        text: "Let me think about it."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: -1
+        next: greeting
+      - id: goodbye
+        text: "Goodbye."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end
+  - id: joined
+    speaker: Target
+    respondent: Talker
+    text: "I am now a member of your party."
+    choices:
+      - id: goodbye
+        text: "Welcome aboard."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end

@@ -7,11 +7,14 @@ namespace lc1 {
 class Continent;
 class Character;
 
-// Resolved gameplay input. The application supplies zero input when UI/focus gates it.
+// Resolved controller input. GameSession supplies zero input when UI/focus/context gates it.
 struct PlayerInput {
     glm::vec2 movement{};   // x: right, y: forward.
     glm::vec2 look_delta{}; // Cursor motion, supplied only while mouse look is enabled.
     bool running = false;
+    bool jumping = false;
+    bool interacting = false;
+    std::int32_t dialog_response_index = -1; // -1 means no response selected.
 };
 
 class FirstPersonCharacterController {

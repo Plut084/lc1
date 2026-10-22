@@ -13,7 +13,7 @@
 |---|---|
 | 世界位置与身体朝向 | `Character` 内部的 `Object::transform`，只保存一份 |
 | 相对身体的观察角度 | `Character` |
-| 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterConfig` |
+| 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterBody` |
 | 模型原点、单位、坐标轴的校正 | `Model`，在上传 GPU 前统一处理 |
 | CPU 顶点和索引 | `Model` |
 | GPU 顶点、索引和 BLAS | `GpuMesh`，多个角色可以借用同一份 |
@@ -42,7 +42,9 @@ lc1::Character character{
     continent,
     {.transform = {.position = continent.spawn()},
      .mesh = &mesh,
-     .material = &material}};
+     .material = &material},
+    lc1::CharacterConfig{},
+    lc1::CharacterBody{}};
 
 character.set_body_yaw(90.0F);
 character.set_look_angles(0.0F, 20.0F);
@@ -53,9 +55,11 @@ auto const draw = character.draw_item();
 −90° 的校正仅是 Z-up 模型转为 Y-up 的示例；已经符合坐标约定的资源不需要它。
 
 构造时校验出生点、身体参数、世界变换以及网格/材质配对。世界变换保持直立、单位缩放；
-模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterConfig` 设置，避免视觉缩放
-悄悄改变身体大小。`Character(continent)` 还可以创建没有可绘制资源的模拟角色，方便
-CPU 测试；对这种角色调用 `draw_item()` 会明确报错。
+模型尺寸通过资源校正处理，实际碰撞尺寸通过 `CharacterBody` 设置，避免视觉缩放
+悄悄改变身体大小。构造时显式传入 `Object` 和 `CharacterConfig`，`CharacterBody` 可省略，
+默认值同时用于占位网格和碰撞体，两者不会悄悄对不上；将出生位置设为
+`continent.spawn()`、网格和材质留空即可创建供 CPU 测试使用的模拟角色。
+对这种角色调用 `draw_item()` 会明确报错。
 
 `move(continent, displacement)` 接受以米为单位的 `vec3` 世界位移，当前要求 y 为零。
 它借用大陆的碰撞查询，让身体沿障碍滑动，并把结果写回同一份世界位置。
@@ -65,6 +69,27 @@ XZ 平面，长度超过 1 时归一化，保留较小输入的模拟量强度�
 避免断点或调整窗口造成瞬移。第一人称控制器使用 `heading()`，因此抬头不会减慢行走。
 
 这两个方法都不自动转身。第一人称可以侧移、后退；斜视角控制器则主动让身体朝向移动方向。
+
+## 跳跃与接地
+
+控制器通过 `request_jump()` 发出一次跳跃请求，由 `Character::update()` 更新竖直速度、
+高度和 `on_ground()` 状态。应用层使用按下事件而不是持续按住事件，避免落地后自动连跳；
+第一人称和斜视角控制器均支持该请求。当前 Space 也绑定了相机回中，斜视角下会同时触发
+原有回中行为，按键分离留待输入设计调整。
+
+地面高度来自 `Continent::support_below()`，不再固定为 y=0。构造时若脚下有支撑面，
+角色会贴到该表面；也可以直接在空中出生，第一次 `update(continent, delta_seconds)`
+会应用重力并落地。`update` 在着地时跟随缓坡和小台阶，离开边缘后进入下落，并在下落
+过程中查询支撑面落地。跳跃高度仍为 1 米，空中请求被丢弃，不支持二段跳或跳跃缓冲；
+零时间更新不消耗请求。
+
+`support_below()` 会忽略脚下高于当前高度的表面，因此桥面、平台和地面可以在同一
+XZ 坐标上重叠。`ContinentBlock::walkable_top` 标记可站立的体块顶面；普通墙体和建筑
+外壳不参与支撑查询。着地行走遇到低于 `step_height` 的可行走台面时，`Character::move()`
+会先尝试普通水平扫掠，再尝试抬高脚底扫掠，确认能站到更高支撑面后才上台阶；不会借机
+跨过不可站立的矮障碍。空中移动时还会检查地形是否已经从脚下“追上”身体，避免在陡坡上
+加速跳跃时穿入高度场后一直下落。当前仍未实现天花板碰撞、移动平台、坡面滑落和任意
+三角网格地形；这些需要继续扩展三维碰撞，而不是只调整接地高度。
 
 ## 模型校正
 

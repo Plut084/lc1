@@ -17,6 +17,7 @@ namespace lc1 {
 
 class Device;
 class CommandBuffer;
+class RenderGraph;
 struct FrameResources;
 
 namespace scene {
@@ -36,18 +37,26 @@ class RayQueryShadows {
   public:
     RayQueryShadows(Device const &device, vk::Format depth_format);
 
-    // Called after the slot fence. Uploads camera/light/object data shared with
-    // the subsequent material pass, and leaves visibility ready for sampling.
-    void record(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
-                scene::FpsCamera const &camera, std::span<scene::Light const> lights,
-                std::span<DrawItem const> draws);
+    // Adds scene preparation, visibility, temporal resolve and spatial filtering.
+    // Requires imported "frame.inputs" and produces "shadow.filtered_visibility".
+    // Call after the slot fence. This object and borrowed arguments must outlive
+    // execution; callers keep inputs unchanged until it finishes. Execute the
+    // graph once for this frame, before recording another frame on this object.
+    void add_passes(RenderGraph &graph, FrameResources &resources, vk::Extent2D extent,
+                    scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                    std::span<DrawItem const> draws);
 
   private:
+    void prepare_frame(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
+                       scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                       std::span<DrawItem const> draws);
+    void finish_frame(scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                      std::span<DrawItem const> draws);
     void ensure_attachments(FrameResources &resources, vk::Extent2D extent) const;
     void update_acceleration_structure(vk::raii::CommandBuffer const &commands,
                                        FrameResources &resources,
                                        std::span<DrawItem const> draws) const;
-    void record_visibility(CommandBuffer &commands, FrameResources &resources, vk::Extent2D extent,
+    void record_visibility(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
                            std::span<DrawItem const> draws) const;
     void prepare_history(vk::raii::CommandBuffer const &commands, FrameResources &resources,
                          vk::Extent2D extent);

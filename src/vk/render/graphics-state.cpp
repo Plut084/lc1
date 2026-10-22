@@ -44,7 +44,18 @@ void set_graphics_state(vk::raii::CommandBuffer const &commands, GraphicsState s
     commands.setAlphaToOneEnableEXT(vk::False);
     commands.setLogicOpEnableEXT(vk::False);
     for (std::uint32_t attachment = 0; attachment < state.color_attachment_count; ++attachment) {
-        commands.setColorBlendEnableEXT(attachment, vk::False);
+        commands.setColorBlendEnableEXT(attachment, state.blend ? vk::True : vk::False);
+        if (state.blend) {
+            commands.setColorBlendEquationEXT(
+                attachment, vk::ColorBlendEquationEXT{
+                                .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+                                .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+                                .colorBlendOp = vk::BlendOp::eAdd,
+                                .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+                                .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+                                .alphaBlendOp = vk::BlendOp::eAdd,
+                            });
+        }
         commands.setColorWriteMaskEXT(
             attachment, vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                             vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);

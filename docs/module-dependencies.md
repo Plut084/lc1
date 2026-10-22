@@ -66,12 +66,17 @@ Vulkan 四层仍在同一个 `lc1_engine` 库内，并非四个独立库。`lc1`
 
 ```mermaid
 flowchart TB
-    app["Application<br/>输入转换与光标策略"] --> session["GameSession<br/>GameInput / GameLocation"]
+    app["Application<br/>事件轮询、路由更新与光标捕获"] --> session["GameSession<br/>动作解释 / GameLocation"]
+    session --> input["InputRouter 动作 / Window 指针状态"]
     session --> continent["Continent<br/>大陆、区域、地点、道路、碰撞"]
     session --> view["ContinentView<br/>地形与地点的绘制资源"]
     session --> character["Character<br/>角色姿态与碰撞移动"]
     session --> player["PlayerView<br/>视角模式与操作状态"]
     session --> ai["AiCharacterController<br/>简单往返移动"]
+    session --> dialogs["DialogSystem<br/>并发会话、NPC 发起与冷却"]
+    dialogs --> catalog["DialogCatalog<br/>YAML 内容与状态入口规则"]
+    dialogs --> dialog["Dialog<br/>双方台词与回答选择"]
+    dialog --> character
     session --> showcase["PbrShowcase<br/>游戏内 PBR 展示"]
     session --> assets["Image / Model<br/>GPU 资源与绘制数据"]
     player --> movement["FirstPersonCharacterController<br/>ThirdPersonCharacterController"]
@@ -110,7 +115,9 @@ flowchart TB
 | 队伍、阵营 | `game/party.hpp`、`game/faction.hpp`：草稿，未接入 |
 
 表中的 `game/` 文件对位于 `include/lc1/game/` 和 `src/game/`，具体扩展名为 `.hpp`／`.cpp`。
-`GameSession`、`PlayerView` 和角色控制器不读取 `Window` 或 `InputRouter`；输入接入由应用负责。
+应用轮询事件并更新 `InputRouter`，`GameSession` 读取动作并处理游戏操作和 UI/焦点门控。
+当前 `GameSession` 还借用 `Window` 取得指针状态和尺寸，并构建游戏内 ImGui 界面。
+`PlayerView` 和角色控制器只消费会话解析后的输入，不读取 `Window` 或 `InputRouter`。
 
 ## 3. 引擎基础、资源与场景
 
@@ -237,12 +244,17 @@ flowchart TB
     stages --> shader["resources/ShaderObject"]
     stages --> command["resources/CommandBuffer"]
     frame --> resources["GPU 存储、加速结构与描述符"]
-    graph["RenderGraph<br/>草稿，未接入"]
+    renderer --> graph["RenderGraph<br/>当帧依赖编译与 pass 调度"]
+    ray --> graph
 ```
 
-正常渲染顺序是 TLAS／visibility → 时间累积 → 空间滤波 → 主 PBR／HDR／MSAA resolve → 色调映射。
+正常渲染由当帧 `RenderGraph` 按资源依赖调度：场景准备／TLAS → visibility → 时间累积 →
+空间滤波 → 主 PBR／HDR／MSAA resolve → 色调映射 → 应用层 ImGui overlay。
 `temporal-shadows.cpp` 是 `RayQueryShadows` 的成员实现，`tone-mapping.cpp` 是 Renderer 的成员实现，
-并不存在独立的 TemporalShadows 或 ToneMapper 公共类；RenderGraph 也没有调度当前 pass。
+并不存在独立的 TemporalShadows 或 ToneMapper 公共类。`RayQueryShadows::add_passes()` 注册前四个
+节点，`Renderer::add_passes()` 注册后两个场景节点，应用追加 UI 并同步编译、执行。
+离屏测试使用 `Renderer::record()` 创建只含场景节点的图；资源所有权与 Vulkan 屏障仍留在各 pass。
+图的逻辑资源版本与回调生命周期见 [RenderGraph](render-graph.md)。
 
 ### 4.4 Vulkan 文件索引
 
@@ -264,7 +276,7 @@ flowchart TB
 | render | shader 阶段与动态固定功能状态 | `graphics-shaders.hpp`、`graphics-state.hpp` |
 | render | 阴影 | `ray-query-shadows.hpp`、私有 `temporal-shadows.cpp` |
 | render | 色调映射与绘制辅助 | 私有 `tone-mapping.cpp`、`draw-validation.hpp`、`vertex-input.hpp` |
-| render | 渲染图草稿 | `render-graph.hpp`，未接入 |
+| render | 当帧渲染依赖与调度 | `render-graph.hpp` |
 
 ## 5. Slang shader 模块
 
@@ -359,7 +371,7 @@ flowchart TB
     slang --> source["生产与测试 .slang"]
     slang -.-> spirv["构建目录 shaders/*.spv"]
     runtime["ShaderObject"] --> spirv
-    copy["copy_assets"] --> assets["assets/textures / assets/lc-res"]
+    copy["copy_assets"] --> assets["runtime/assets/textures / runtime/assets/lc-res"]
     copy -.-> copied["构建目录 assets/"]
     game["GameSession / Model / Image"] --> copied
 ```
@@ -371,7 +383,7 @@ flowchart LR
     export -.-> land["src/game/continent-land.generated.hpp"]
     continent["Continent::make_present"] --> land
     raster["ImageMagick<br/>手动栅格化"] --> svg
-    raster -.-> texture["assets/textures/continent-present.png"]
+    raster -.-> texture["runtime/assets/textures/continent-present.png"]
     old["docs/map/generate_map.py"] -.-> world["world-map.svg"]
     world -.-> png["ImageMagick 产物<br/>world-map.png"]
 ```

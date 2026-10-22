@@ -1,6 +1,7 @@
 #include "lc1/game/player-view.hpp"
 
 #include "lc1/game/character.hpp"
+#include "lc1/game/continent.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -38,13 +39,14 @@ lc1::Continent make_world()
         .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain}},
         .locations = {},
         .roads = {},
+        .height_samples = {},
     }};
 }
 
 void shared_position_and_remembered_look()
 {
     auto const world = make_world();
-    lc1::Character player{world};
+    lc1::Character player{world, {.transform = {.position = world.spawn()}}, {}};
     lc1::PlayerView view{world, player.position()};
     check(view.oblique(), "a session starts in the oblique view");
     check(view.camera().position().y > player.eye_position().y,
@@ -85,7 +87,7 @@ void shared_position_and_remembered_look()
 void zoom_and_unlock_survive_switching()
 {
     auto const world = make_world();
-    lc1::Character player{world};
+    lc1::Character player{world, {.transform = {.position = world.spawn()}}, {}};
     lc1::PlayerView view{world, player.position()};
     auto const initial_camera = view.camera().position();
     view.update(player, {}, {.toggle_lock = true, .scroll = 2.0F}, 0.1F);
@@ -121,7 +123,7 @@ void zoom_and_unlock_survive_switching()
 void disabled_input_preserves_pose()
 {
     auto const world = make_world();
-    lc1::Character player{world};
+    lc1::Character player{world, {.transform = {.position = world.spawn()}}, {}};
     lc1::PlayerView view{world, player.position()};
     for (int mode = 0; mode < 2; ++mode) {
         auto const position = player.position();

@@ -12,6 +12,7 @@ struct PushData {
 PushData push_data;
 
 struct FrameBufferObject {
+    [[deprecated("no longer used")]]
     float4 clear_color; // TODO: For test only.
 
     uint camera_index; // view projection
@@ -58,38 +59,51 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertMain(VSInput input)
 {
-    ConstantBuffer<FrameBufferObject> frame_buffer = ResourceDescriptorHeap[push_data.frame_buffer_index];
+    ConstantBuffer<FrameBufferObject> frame_buffer =
+        ResourceDescriptorHeap[push_data.frame_buffer_index];
     ConstantBuffer<Camera> camera = ResourceDescriptorHeap[frame_buffer.camera_index];
     ConstantBuffer<ObjectData> object_data = ResourceDescriptorHeap[frame_buffer.object_data_index];
     VSOutput output;
-    // Read GLM's stored columns explicitly. Slang 2026.18's native heap path
-    // misreads aggregate matrix members passed directly to mul; see docs/lighting.md.
+    // Read GLM's stored columns explicitly: whole-matrix loads through heap
+    // (untyped Uniform) pointers are mishandled here; see docs/external-defects.md.
     float4 world_position = object_data.model[0] * input.position.x +
-        object_data.model[1] * input.position.y + object_data.model[2] * input.position.z + object_data.model[3];
-    float4 view_position = camera.view[0] * world_position.x + camera.view[1] * world_position.y + camera.view[2] * world_position.z + camera.view[3] * world_position.w;
-    output.pos = camera.proj[0] * view_position.x + camera.proj[1] * view_position.y + camera.proj[2] * view_position.z + camera.proj[3] * view_position.w;
+                            object_data.model[1] * input.position.y +
+                            object_data.model[2] * input.position.z + object_data.model[3];
+    float4 view_position = camera.view[0] * world_position.x + camera.view[1] * world_position.y +
+                           camera.view[2] * world_position.z + camera.view[3] * world_position.w;
+    output.pos = camera.proj[0] * view_position.x + camera.proj[1] * view_position.y +
+                 camera.proj[2] * view_position.z + camera.proj[3] * view_position.w;
     output.world_position = world_position.xyz;
     output.uv = input.uv;
     output.color = input.color;
-    output.world_normal = (object_data.normal_transform[0].xyz * input.normal.x + object_data.normal_transform[1].xyz * input.normal.y + object_data.normal_transform[2].xyz * input.normal.z);
-    float handedness = dot(object_data.model[0].xyz, cross(object_data.model[1].xyz, object_data.model[2].xyz)) < 0.0 ? -1.0 : 1.0;
-    output.world_tangent =
-        float4((object_data.model[0].xyz * input.tangent.x + object_data.model[1].xyz * input.tangent.y + object_data.model[2].xyz * input.tangent.z), input.tangent.w * handedness);
+    output.world_normal = (object_data.normal_transform[0].xyz * input.normal.x +
+                           object_data.normal_transform[1].xyz * input.normal.y +
+                           object_data.normal_transform[2].xyz * input.normal.z);
+    float handedness = dot(object_data.model[0].xyz,
+                           cross(object_data.model[1].xyz, object_data.model[2].xyz)) < 0.0
+                           ? -1.0
+                           : 1.0;
+    output.world_tangent = float4((object_data.model[0].xyz * input.tangent.x +
+                                   object_data.model[1].xyz * input.tangent.y +
+                                   object_data.model[2].xyz * input.tangent.z),
+                                  input.tangent.w * handedness);
     return output;
 }
 
 [shader("fragment")]
 [earlydepthstencil]
-float4 fragMain(VSOutput input, uint sample_index : SV_SampleIndex) : SV_TARGET
+float4 fragMain(VSOutput input, uint sample_index: SV_SampleIndex) : SV_TARGET
 {
-    ConstantBuffer<FrameBufferObject> frame_buffer = ResourceDescriptorHeap[push_data.frame_buffer_index];
+    ConstantBuffer<FrameBufferObject> frame_buffer =
+        ResourceDescriptorHeap[push_data.frame_buffer_index];
     ConstantBuffer<Camera> camera = ResourceDescriptorHeap[frame_buffer.camera_index];
     ConstantBuffer<LightsData> lights = ResourceDescriptorHeap[frame_buffer.lights_index];
     // Shader objects have no sampleShadingEnable state. A static SampleId read
     // enables full sample shading; evaluate UVs at that sample for texture detail.
     input.uv = EvaluateAttributeAtSample(input.uv, sample_index);
     Material material = load_material(frame_buffer.material_index);
-    Texture2D<uint4> shadow_visibility_values = ResourceDescriptorHeap[frame_buffer.shadow_visibility_index];
+    Texture2D<uint4> shadow_visibility_values =
+        ResourceDescriptorHeap[frame_buffer.shadow_visibility_index];
     uint4 visibility = shadow_visibility_values.Load(int3(int2(input.pos.xy), 0));
     float3 base_color = saturate(
         material.base_color_texture.Sample(material.base_color_texture_sampler, input.uv).rgb *
@@ -113,8 +127,19 @@ float4 fragMain(VSOutput input, uint sample_index : SV_SampleIndex) : SV_TARGET
     float3 color =
         material.emissive_texture.Sample(material.emissive_texture_sampler, input.uv).rgb *
         material.emissive_factor;
+    // Cheap hemisphere fill so unlit backsides retain readable form without pretending
+    // to be a full IBL solution. Keep a meaningful ground-bounce floor on steep slopes:
+    // a backlit hillside should be dark, not crushed to black. A weak ambient specular
+    // term keeps metals from losing their silhouette in shadow.
+    let sky_weight = saturate(normal.y * 0.5 + 0.5);
+    let ambient_irradiance =
+        lerp(float3(0.032, 0.036, 0.042), float3(0.095, 0.112, 0.140), sky_weight);
+    let ambient_f0 = lerp(0.04, base_color, metallic);
+    color += ambient_irradiance *
+             (base_color * (1.0 - metallic) + ambient_f0 * 0.05);
     for (uint i = 0; i < min(lights.count, 10u); ++i) {
-        // Read fields before passing the light by value (same heap aggregate constraint).
+        // Read fields before passing the light by value: nested arrays read
+        // through a heap ConstantBuffer are mishandled; see docs/external-defects.md.
         Light light;
         light.position = lights.lights[i].position;
         light.type = lights.lights[i].type;
@@ -142,3 +167,4 @@ float4 fragMain(VSOutput input, uint sample_index : SV_SampleIndex) : SV_TARGET
     // Opaque output; preserve HDR up to the largest finite RGBA16F value.
     return float4(min(color, float3(65504.0)), 1.0);
 }
+

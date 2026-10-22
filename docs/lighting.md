@@ -14,12 +14,17 @@ alpha = max(roughness, 0.045)²
 F0 = lerp(0.04, base_color, metallic)
 diffuse = (1 - F) * (1 - metallic) * base_color / pi
 specular = D * G * F / (4 * NdotV * NdotL)
-color = emissive + Σ visibility * radiance * (diffuse + specular) * NdotL
+color = emissive
+      + hemisphere_ambient(normal) * base_color * (1 - metallic)
+      + Σ visibility * radiance * (diffuse + specular) * NdotL
 ```
 
-背光、视线处于表面背侧或半程向量退化时，BRDF 为零。`sample_light` 已计算点光源的距离衰减和
+背光、视线处于表面背侧或半程向量退化时，直接光 BRDF 为零。`sample_light` 已计算点光源的距离衰减和
 聚光灯的锥角衰减，这些权重只应用一次。主通道保留最多 4× sample shading，按实际 HDR 和深度格式
-选择支持的采样数。当前没有 IBL，也没有固定环境补光；无灯且无发光的表面为黑色。
+选择支持的采样数。当前没有 IBL，但主通道加入了轻量半球环境补光：天空色主要照亮朝上的表面，
+地面反弹色为陡峭侧坡保留较低的最低亮度，背光坡和阴影中的物体不会完全变黑；金属另有一个很弱的
+环境高光项以保留轮廓。补光强度刻意低于主方向光，避免整体发灰。该补光不参与阴影，也不是完整
+的环境反射或间接光。
 
 `scene::PbrParameters` 保存线性参数，`scene::PbrMaterial` 另带非拥有的 CPU 图像引用。
 游戏持有 `MaterialInfo`（参数及 GPU 纹理/采样器借用），`DrawItem::material` 指向它。
@@ -109,7 +114,8 @@ occlusion 仍待 IBL 接入，非空贴图目前明确报未支持。
 没有实现对周围物体的间接照明；球形光仍是中心光照加软阴影近似。
 展区使用共享网格、共享贴图及创建后不变的材质，动画只更新对象矩阵。
 强波纹仅用于 NORMAL OFF／x1／x2 对照台；普通变换展品采用低幅度的细节法线，避免像深褶皱或穿孔。
-标牌文字作为印刷内容，通过 `DrawItem::casts_shadow = false` 保持可见并取消投影；
+标牌文字作为印刷内容，通过[文字渲染](text-rendering.md)的混合文字通道绘制：它在光照 pass 末尾
+与场景共享深度，因此仍会被遮挡，但不参与 ray-query 投影，也不再走不透明材质通道。
 ray-query 遵守此标志，切换投影资格时会重置阴影历史。
 
 沿用 WASD 移动、滚轮缩放、M 切换斜视／第一人称、Y 解锁镜头、Space 回到玩家。
@@ -149,13 +155,14 @@ GPU 测试另检查默认法线、强度零、缺失切线、错误色彩空间�
 PBR 数值、镜像/缩放法线、阴影投影开关及既有阴影 GPU 回归通过，验证与同步验证无报错。
 Windows Release 交叉构建通过；主程序使用细节法线和无文字投影的展区运行并正常退出。
 
-## Native heap 的字段读取验证
+## Native heap 的字段读取约定
 
-本机 Slang 2026.18 / NVIDIA 上，直接将 heap `ConstantBuffer` 中的矩阵或 `Light`
-聚合成员传给计算函数得到错误结果；相同字段的向量/标量读取可正常工作。
-主 shader 因而显式读取 GLM 存储的矩阵列，按列求线性组合，灯光逐字段读取后传给
-`sample_light`。镜像手性使用三列的混合积。这里记录的是该编译器/驱动组合的复现结果，
-没有据此断言 C++/Slang 语言禁止聚合访问或确定是某一方的缺陷。
+heap `ConstantBuffer` 中的矩阵与 `Light` 都**逐字段读取**，不整块传给 `mul` 或函数：
+矩阵按 GLM 存储的列逐列读取后求线性组合（镜像手性用三列混合积），灯光逐字段读进局部
+`Light` 再传给 `sample_light`。这不是风格偏好，而是绕开两个外部缺陷——NVIDIA 驱动对整块
+矩阵加载的处理，以及 Slang 对 heap 嵌套数组的寻址。现象、触发形状、最小复现、外部链接与
+复测方法见[外部缺陷记录](external-defects.md)第 1、2 条；`shaders/text.slang` 用四个
+`float4` push constant 传矩阵，因此不经过这两条路径。
 
 PBR GPU 测试覆盖投影、物体平移、逆转置法线、镜像/非均匀缩放、镜像 UV，以及不同光源。
 保留这些数值检查；升级 Slang 或改变 heap 读取写法时需重新运行，不能只检查编译成功。

@@ -120,6 +120,24 @@ struct FrameResources {
         return *slot;
     }
 
+    HeapIndex sampler_index(std::optional<HeapIndex> &slot, vk::SamplerCreateInfo const &info)
+    {
+        if (slot)
+            descriptor_heap->write_sampler(*slot, info);
+        else
+            slot = descriptor_heap->allocate_sampler(info);
+        return *slot;
+    }
+
+    // Text geometry for this slot. Host-visible and rebuilt by the text pass
+    // during recording; the two passes need separate buffers because the GPU
+    // reads them only after the whole frame has been recorded.
+    std::optional<GpuBuffer> world_text_vertices;
+    std::optional<GpuBuffer> screen_text_vertices;
+    // The frame's single font atlas and sampler, shared by both text passes.
+    std::optional<HeapIndex> font_atlas_index;
+    std::optional<HeapIndex> font_sampler_index;
+
     GpuBuffer camera_buffer;
     GpuBuffer lights_buffer;
     GpuBuffer temporal_buffer;

@@ -30,7 +30,7 @@ namespace lc1 {
 // The order is not load-bearing -- src/window.cpp's translation table names each Key
 // explicitly and is checked by static_assert -- with one exception: the mouse buttons
 // stay last, because that table stops at the first of them.
-enum class Key : std::uint16_t {
+enum class Key : std::uint8_t {
     A,
     B,
     C,
@@ -174,14 +174,18 @@ inline constexpr std::size_t keyboard_key_count = static_cast<std::size_t>(Key::
 class InputState {
   public:
     bool down(Key key) const { return flag(down_, key); }
+
     bool pressed(Key key) const { return flag(pressed_, key); }
+
     bool released(Key key) const { return flag(released_, key); }
 
     glm::vec2 cursor() const { return cursor_; }
+
     // Movement accumulated since the last frame boundary. Zero when the pointer did not
     // move, and also zero on the frame that capture or focus changed -- see
     // invalidate_cursor().
     glm::vec2 cursor_delta() const { return cursor_delta_; }
+
     glm::vec2 scroll() const { return scroll_; }
 
     // The frame boundary. Called by Window::poll_events() before pumping GLFW, and by
@@ -225,12 +229,14 @@ class InputState {
 // The enum lives in the engine because the engine and the app are one program today. The
 // day an action starts carrying game rules -- a cooldown, a target, a unit -- it belongs
 // to the game layer, and InputRouter does not have to change to let it move.
-enum class Action : std::uint16_t {
+enum class Action : std::uint8_t {
     MoveForward,
     MoveBackward,
     MoveLeft,
     MoveRight,
     Sprint,
+    Jump,
+    Interact,
     ToggleCameraView,
     CycleLighting,
     ToggleShowcaseMotion,
@@ -238,6 +244,11 @@ enum class Action : std::uint16_t {
     DecreaseExposure,
     ToggleCameraLock,
     RecenterCamera,
+    DialogResponse0,
+    DialogResponse1,
+    DialogResponse2,
+    DialogResponse3,
+    SaveGame,
     Count,
 };
 
@@ -288,6 +299,13 @@ constexpr std::vector<Binding> default_bindings()
         {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::D},
         {lc1::InputContext::Gameplay, lc1::Action::MoveRight, lc1::Key::Right},
         {lc1::InputContext::Gameplay, lc1::Action::Sprint, lc1::Key::LeftShift},
+        {lc1::InputContext::Gameplay, lc1::Action::Jump, lc1::Key::Space},
+        {lc1::InputContext::Gameplay, lc1::Action::Interact, lc1::Key::F},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse0, lc1::Key::Digit1},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse1, lc1::Key::Digit2},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse2, lc1::Key::Digit3},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse3, lc1::Key::Digit4},
+        {lc1::InputContext::Gameplay, lc1::Action::SaveGame, lc1::Key::F6},
         {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraView, lc1::Key::M},
         {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraLock, lc1::Key::Y},
         {lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Space},
@@ -315,6 +333,7 @@ class InputRouter {
     // Popping the base context is ignored rather than fatal: the stack always has one, so
     // active_context() is never empty and never undefined.
     void pop();
+
     InputContext active_context() const { return stack_.back(); }
 
     // Recompute every action from this frame's device state. Call once per frame, after
@@ -339,7 +358,9 @@ class InputRouter {
     // A quick press and release within one frame reports both pressed and released
     // with held = false, provided no other bound key remains down.
     bool held(Action action) const { return flag(held_, action); }
+
     bool pressed(Action action) const { return flag(pressed_, action); }
+
     bool released(Action action) const { return flag(released_, action); }
 
   private:

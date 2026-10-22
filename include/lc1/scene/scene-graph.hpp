@@ -89,8 +89,8 @@ class SceneModel {
         auto &anim = animations_[anim_index];
         anim.current_time += delta_time;
         for (auto &channel : anim.channels) {
-            // auto time = ;
             // TODO interpolate the channel's node transform based on the sampler and current_time.
+            (void)channel;
             fail("update_animation is not implemented yet");
         }
     }

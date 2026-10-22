@@ -254,12 +254,12 @@ FrameResult FrameLoop<GpuResource>::draw_frame(Swapchain &swapchain, RecordCallb
             // write, both in the color-attachment-output scope.
             .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         };
+        vk::CommandBufferSubmitInfo command_info{
+            .commandBuffer = frame.command_buffer.raii(),
+        };
         vk::SemaphoreSubmitInfo signal_info{
             .semaphore = image.render_finished,
             .stageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        };
-        vk::CommandBufferSubmitInfo command_info{
-            .commandBuffer = frame.command_buffer.raii(),
         };
 
         // Reset only after recording succeeds, immediately before submitting.

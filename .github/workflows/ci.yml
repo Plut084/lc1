@@ -86,7 +86,7 @@ jobs:
       - name: Configure and build
         run: |
           # Assets are not tracked; CPU tests use procedural fixtures.
-          mkdir -p assets
+          mkdir -p runtime/assets
           cmake --preset ${{ matrix.preset }} -DBUILD_TESTING=${{ matrix.testing }}
           cmake --build --preset ${{ matrix.preset }}
       - name: Run CPU tests
@@ -148,7 +148,7 @@ jobs:
         shell: cmd
         run: |
           rem Assets are not tracked; CPU tests use procedural fixtures.
-          if not exist assets mkdir assets
+          if not exist runtime\assets mkdir runtime\assets
           cmake --preset windows-x86_64-debug -DBUILD_TESTING=ON
           if errorlevel 1 exit /b 1
           cmake --build --preset windows-x86_64-debug

@@ -5,6 +5,7 @@
 #include "lc1/game/continent.hpp"
 #include "lc1/vk/render/draw-item.hpp"
 #include "lc1/vk/render/material.hpp"
+#include "lc1/vk/render/text-pass.hpp"
 #include "lc1/vk/resources/gpu-mesh.hpp"
 #include "lc1/vk/resources/gpu-texture.hpp"
 
@@ -24,6 +25,10 @@ class PbrShowcase {
 
     std::span<DrawItem const> draws() const { return draws_; }
 
+    // Panel text, laid out against the font each frame. The strings are owned
+    // here; the items only borrow them.
+    std::span<WorldTextItem const> labels() const { return labels_; }
+
     std::span<scene::Light const> lights() const { return lights_; }
 
     void update(float seconds);
@@ -41,11 +46,13 @@ class PbrShowcase {
     GpuMesh sphere_;
     GpuMesh cube_;
     GpuMesh vertex_colors_;
-    std::optional<GpuMesh> labels_;
     // Textures are declared before materials, which borrow them.
     std::vector<std::unique_ptr<GpuTexture>> textures_;
     std::deque<MaterialInfo> materials_;
     std::vector<DrawItem> draws_;
+    // The strings live in a deque so the views below survive every insertion.
+    std::deque<std::string> label_text_;
+    std::vector<WorldTextItem> labels_;
     std::vector<scene::Light> lights_;
     std::size_t rotating_draw_ = 0;
     std::size_t moving_shadow_draw_ = 0;

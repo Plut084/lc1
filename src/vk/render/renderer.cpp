@@ -1,6 +1,7 @@
 #include "lc1/vk/render/renderer.hpp"
 #include "draw-validation.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/resources/command-buffer.hpp"
@@ -67,7 +68,7 @@ Renderer::Renderer(Device const &device, std::vector<vk::Format> const &color_at
                   .samples = hdr_sample_count(device, depth_format_, samples),
                   .depth_test = true},
       shaders_{device, "shaders/shader.spv"}, tone_map_shaders_{device, "shaders/tone-map.spv"},
-      ray_query_shadows_{device, depth_format_},
+      text_pass_{device, main_state_.samples}, ray_query_shadows_{device, depth_format_},
       default_sampler_info_{Sampler::default_create_info(device)},
       white_srgb_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Srgb),
       white_linear_(device, {.width = 1, .height = 1}, white_pixel, TextureColorSpace::Linear),
@@ -86,8 +87,12 @@ FrameResources Renderer::make_frame_resources(std::uint32_t object_capacity) con
                              vk::BufferUsageFlagBits2::eShaderDeviceAddress,
                          vma::AllocationCreateFlagBits::eHostAccessSequentialWrite};
     };
+    // Samplers: five material slots per draw plus the texture cache's default and
+    // the text pass's clamped font sampler. Images: the same five per draw, the
+    // HDR resolve, shadow visibility and the font atlas. Buffers: three per draw,
+    // the camera/lights/temporal/tone-mapping uniforms and the TLAS address.
     auto heap =
-        std::make_unique<DescriptorHeap>(*device_, 5ULL * object_capacity + 1,
+        std::make_unique<DescriptorHeap>(*device_, 5ULL * object_capacity + 2,
                                          5ULL * object_capacity + 8, 3ULL * object_capacity + 6);
     FrameResources result{std::move(heap), make_buffer(sizeof(CameraData)),
                           make_buffer(sizeof(LightsData)), make_buffer(sizeof(TemporalShadowData)),
@@ -154,10 +159,21 @@ void Renderer::ensure_attachments(FrameResources &resources, vk::Extent2D extent
 
 void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarget const &target,
                       scene::FpsCamera const &camera, std::span<scene::Light const> lights,
-                      std::span<DrawItem const> draws, OutputSettings output)
+                      std::span<DrawItem const> draws, OutputSettings output, TextFrameInput text)
 {
-    auto &command_buffer = cmd.raii();
+    // Callbacks borrow this invocation's inputs and are destroyed before it returns.
+    RenderGraph graph;
+    add_passes(graph, resources, target, camera, lights, draws, output, text);
+    if (auto result = graph.compile(); !result)
+        fail("Cannot compile render graph: {}", result.error());
+    graph.execute(cmd);
+}
 
+void Renderer::add_passes(RenderGraph &graph, FrameResources &resources, RenderTarget const &target,
+                          scene::FpsCamera const &camera, std::span<scene::Light const> lights,
+                          std::span<DrawItem const> draws, OutputSettings output,
+                          TextFrameInput text)
+{
     validate_draws(resources, target.extent, draws);
     if (lights.size() > max_num_lights)
         fail("light count exceeds supported capacity {}", max_num_lights);
@@ -168,8 +184,32 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         color_format_ != vk::Format::eB8G8R8A8Unorm)
         fail("manual sRGB output requires an RGBA8/BGRA8 UNORM target");
 
-    ray_query_shadows_.record(cmd, resources, target.extent, camera, lights, draws);
-    ensure_attachments(resources, target.extent);
+    graph.import_resource("frame.inputs");
+    graph.import_resource("output.target");
+    ray_query_shadows_.add_passes(graph, resources, target.extent, camera, lights, draws);
+    graph.add_pass(
+        "HDR lighting", {"shadow.frame", "shadow.filtered_visibility"}, {"hdr.color"},
+        [this, &resources, extent = target.extent, draws, &camera, text](CommandBuffer &commands) {
+            record_hdr(commands, resources, extent, draws, camera, text);
+        });
+    graph.add_pass("Tone mapping", {"hdr.color", "output.target"}, {"output.color"},
+                   [this, &resources, target, output](CommandBuffer &commands) {
+                       tone_map(commands, resources, target, output);
+                   });
+    // Always registered, even with nothing to draw: the overlay passes consume its
+    // output name, and a conditionally absent producer would not compile.
+    graph.add_pass("UI text", {"output.color"}, {"output.ui_text"},
+                   [this, &resources, target, text](CommandBuffer &commands) {
+                       record_screen_text(commands, resources, target, text);
+                   });
+}
+
+void Renderer::record_hdr(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
+                          std::span<DrawItem const> draws, scene::FpsCamera const &camera,
+                          TextFrameInput const &text)
+{
+    auto &command_buffer = cmd.raii();
+    ensure_attachments(resources, extent);
     auto &heap = *resources.descriptor_heap;
     auto const &visibility = *resources.ray_query.visibility;
     if (resources.shadow_visibility_index)
@@ -194,7 +234,7 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         .renderArea =
             {
                 .offset = vk::Offset2D{.x = 0, .y = 0},
-                .extent = target.extent,
+                .extent = extent,
             },
         // must not be 0: VUID-VkRenderingInfo-viewMask-06069
         .layerCount = 1,
@@ -247,7 +287,6 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
     shaders_.bind_to_command_buffer(cmd);
     set_graphics_state(command_buffer, main_state_);
     // Render area, viewport and scissor use the same caller-provided extent.
-    vk::Extent2D const extent = target.extent;
     // Negative height flips Y for glm, whose clip-space Y points up where
     // Vulkan's points down. y moves to the bottom edge to match: with y = 0,
     // the flipped viewport would cover [-height, 0], entirely off-screen.
@@ -321,6 +360,14 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         cmd.push_data(std::span{&push_data, 1});
 
         DrawItem const &item = draws[i];
+        // Roads are separate decal draws. Negative constant/slope bias wins the depth
+        // test against the terrain at distance, where a centimetre of geometric lift is
+        // below the available depth resolution.
+        command_buffer.setDepthBiasEnable(item.depth_bias ? vk::True : vk::False);
+        if (item.depth_bias)
+            command_buffer.setDepthBias(-1.25F, 0.0F, -1.75F);
+        else
+            command_buffer.setDepthBias(0.0F, 0.0F, 0.0F);
         // A reflected model reverses winding; callers never need to flip cull mode.
         command_buffer.setFrontFace(glm::determinant(glm::mat3{item.model}) < 0.0F
                                         ? vk::FrontFace::eClockwise
@@ -328,13 +375,61 @@ void Renderer::record(CommandBuffer &cmd, FrameResources &resources, RenderTarge
         item.mesh->draw(command_buffer);
     }
 
+    // World text closes the scene: it shares this scope's colour and depth
+    // attachments, so it is occluded like any other scene geometry, needs no
+    // second resolve, and the transient MSAA attachment keeps loadOp Clear.
+    if (text.font != nullptr && !text.world.empty())
+        text_pass_.draw_world(cmd, resources, *text.font, text.world,
+                              camera.view_projection_matrix());
+
     command_buffer.endRendering();
     resources.hdr_image->transition_layout(
         command_buffer, vk::ImageLayout::eColorAttachmentOptimal,
         vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
         vk::AccessFlagBits2::eShaderSampledRead);
-    tone_map(cmd, resources, target, output);
+}
+
+void Renderer::record_screen_text(CommandBuffer &cmd, FrameResources &resources,
+                                  RenderTarget const &target, TextFrameInput const &text)
+{
+    if (text.font == nullptr || text.screen.empty())
+        return;
+    auto &command_buffer = cmd.raii();
+    // Make tone mapping's writes visible to this attachment load and blending, as
+    // the ImGui overlay does for its own draws.
+    vk::MemoryBarrier2 const barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .dstAccessMask =
+            vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite,
+    };
+    command_buffer.pipelineBarrier2(vk::DependencyInfo{}.setMemoryBarriers(barrier));
+    vk::RenderingAttachmentInfo const color{
+        .imageView = **target.view,
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+    };
+    vk::RenderingInfo rendering{
+        .renderArea = {.offset = {.x = 0, .y = 0}, .extent = target.extent},
+        .layerCount = 1,
+    };
+    rendering.setColorAttachments(color);
+    command_buffer.beginRendering(rendering);
+    command_buffer.setViewportWithCount(vk::Viewport{
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<float>(target.extent.width),
+        .height = static_cast<float>(target.extent.height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F,
+    });
+    command_buffer.setScissorWithCount(
+        vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = target.extent});
+    text_pass_.draw_screen(cmd, resources, target.extent, *text.font, text.screen);
+    command_buffer.endRendering();
 }
 
 void Renderer::record(CommandBuffer &command_buffer, FrameResources &resources,

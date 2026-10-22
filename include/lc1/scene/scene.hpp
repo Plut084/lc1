@@ -12,11 +12,9 @@
 
 namespace lc1::scene {
 
-class Renderer;
-
 class Scene {
   public:
-    // void render(Renderer &renderer);
+    // Passive scene data; Renderer consumes it and remains owned/scheduled by the application.
     FpsCamera const *active_camera() const { return active_camera_; }
 
     std::vector<Light> lights() const

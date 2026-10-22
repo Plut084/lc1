@@ -166,7 +166,6 @@ class Model {
             }
             // NOLINTEND
         }
-        // fail("glTF/GLB model loading is not supported yet: {}", path.string());
     }
 
     Model(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices,

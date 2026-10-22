@@ -91,6 +91,11 @@ find_package(TinyGLTF CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(reflectcpp CONFIG REQUIRED)
+find_package(freetype CONFIG REQUIRED)
+find_package(OpenAL CONFIG REQUIRED)
+find_package(drmp3 CONFIG REQUIRED)
+find_package(drwav CONFIG REQUIRED)
 
 add_subdirectory(shaders)
 
@@ -102,6 +107,14 @@ add_library(lc1_engine STATIC
     src/input.cpp
     src/tangent-space.cpp
     src/resource-manager.cpp
+
+    # Text rasterization and layout; FreeType only, no Vulkan.
+    src/text/glyph-atlas.cpp
+    src/text/text-layout.cpp
+    src/text/utf8.cpp
+
+    # Audio
+    src/audio/audio.cpp
 
     # Vulkan setup and dispatch.
     src/vk/core/common.cpp
@@ -115,6 +128,7 @@ add_library(lc1_engine STATIC
     src/vk/resources/descriptor-heap.cpp
     src/vk/resources/descriptor-heap-cache.cpp
     src/vk/resources/gpu-buffer.cpp
+    src/vk/resources/gpu-font.cpp
     src/vk/resources/gpu-image.cpp
     src/vk/resources/gpu-mesh.cpp
     src/vk/resources/gpu-texture.cpp
@@ -133,6 +147,7 @@ add_library(lc1_engine STATIC
     src/vk/render/ray-query-shadows.cpp
     src/vk/render/renderer.cpp
     src/vk/render/temporal-shadows.cpp
+    src/vk/render/text-pass.cpp
     src/vk/render/tone-mapping.cpp
 
     src/stb-image.cpp
@@ -154,6 +169,11 @@ target_link_libraries(lc1_engine PUBLIC
     tinyobjloader::tinyobjloader
     TinyGLTF::TinyGLTF
     KTX::ktx
+    reflectcpp::reflectcpp
+    Freetype::Freetype
+    OpenAL::OpenAL
+    drmp3::drmp3
+    drwav::drwav
 )
 target_link_libraries(lc1_engine PRIVATE
     mikktspace::mikktspace
@@ -194,14 +214,18 @@ add_library(lc1_game STATIC
     src/game/continent-present.cpp
     src/game/continent-layout.cpp
     src/game/character.cpp
+    src/game/party.cpp
+    src/game/save.cpp
     src/game/player-controller.cpp
     src/game/map-camera-controller.cpp
     src/game/continent-view.cpp
     src/game/game-session.cpp
     src/game/player-view.cpp
     src/game/debug/pbr-showcase.cpp
+    src/game/interactable.cpp
+    src/game/dialog.cpp
 )
-target_link_libraries(lc1_game PUBLIC lc1_engine)
+target_link_libraries(lc1_game PUBLIC lc1_engine imgui::imgui)
 
 # app: the game executable. Output name stays lc1 so the Makefile works.
 add_executable(lc1
@@ -231,10 +255,24 @@ endif()
 # Keep the runtime tree relocatable. Copy on each build so edited assets are refreshed.
 add_custom_target(copy_assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_BINARY_DIR}/assets"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/assets" "${CMAKE_CURRENT_BINARY_DIR}/runtime/assets"
     VERBATIM
 )
-add_dependencies(lc1 shaders copy_assets)
+# Dialogue scripts are authored content and refresh on each build, unlike saves.
+add_custom_target(copy_dialogs
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/dialogs" "${CMAKE_CURRENT_BINARY_DIR}/runtime/dialogs"
+    VERBATIM
+)
+# Install missing seed files without overwriting a player's existing save data.
+add_custom_target(copy_saves
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/runtime/saves"
+        "-DDESTINATION_DIR=${CMAKE_CURRENT_BINARY_DIR}/runtime/saves"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/seed-saves.cmake"
+    VERBATIM
+)
+add_dependencies(lc1 shaders copy_assets copy_saves copy_dialogs)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -246,11 +284,20 @@ if(BUILD_TESTING)
             "${PROJECT_BINARY_DIR}/shaders/visibility.spv"
             "${PROJECT_BINARY_DIR}/shaders/temporal-shadows.spv"
             "${PROJECT_BINARY_DIR}/shaders/spatial-shadows.spv"
-            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv")
+            "${PROJECT_BINARY_DIR}/shaders/tone-map.spv"
+            "${PROJECT_BINARY_DIR}/shaders/text.spv")
     add_test(NAME heap_struct_generator
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"
                 --slangc "${SLANGC_EXECUTABLE}")
+    add_test(NAME seed_save_preservation
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/test_seed_saves.py"
+                --cmake "${CMAKE_COMMAND}"
+                --script "${PROJECT_SOURCE_DIR}/scripts/seed-saves.cmake")
+    add_executable(lc1_error_tests tests/error.cpp)
+    target_include_directories(lc1_error_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    lc1_enable_warnings(lc1_error_tests)
+    add_test(NAME error_diagnostics COMMAND lc1_error_tests)
     add_executable(lc1_world_map_tests tests/world-map.cpp)
     target_link_libraries(lc1_world_map_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_world_map_tests)
@@ -260,18 +307,51 @@ if(BUILD_TESTING)
     add_executable(lc1_character_tests tests/character.cpp)
     target_link_libraries(lc1_character_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_character_tests)
+    add_dependencies(lc1_character_tests copy_dialogs)
+    add_executable(lc1_dialog_tests tests/dialog.cpp)
+    target_link_libraries(lc1_dialog_tests PRIVATE lc1_game)
+    lc1_enable_warnings(lc1_dialog_tests)
+    add_dependencies(lc1_dialog_tests copy_dialogs)
+    # Save tests use immutable fixtures, independent of the editable runtime saves.
+    add_executable(lc1_save_tests tests/save.cpp)
+    target_link_libraries(lc1_save_tests PRIVATE lc1_game)
+    lc1_enable_warnings(lc1_save_tests)
+    add_test(NAME save_data
+        COMMAND lc1_save_tests
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME runtime_save_data
+        COMMAND lc1_save_tests runtime/saves/01
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_dependencies(lc1_save_tests copy_saves)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_tangent_tests)
     add_executable(lc1_player_view_tests tests/player-view.cpp)
     target_link_libraries(lc1_player_view_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_player_view_tests)
+    add_executable(lc1_render_graph_tests tests/render-graph.cpp)
+    target_link_libraries(lc1_render_graph_tests PRIVATE lc1_engine)
+    lc1_enable_warnings(lc1_render_graph_tests)
+    # The font test reads runtime/assets/fonts like the game does, and skips a face that is
+    # absent (runtime/assets/ is not tracked in this repository).
+    add_executable(lc1_font_tests tests/font.cpp)
+    target_link_libraries(lc1_font_tests PRIVATE lc1_engine)
+    lc1_enable_warnings(lc1_font_tests)
+    add_test(NAME font_layout
+        COMMAND lc1_font_tests
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_dependencies(lc1_font_tests copy_assets)
     if(MINGW)
+        target_link_options(lc1_error_tests PRIVATE -static)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
         target_link_options(lc1_character_tests PRIVATE -static)
+        target_link_options(lc1_dialog_tests PRIVATE -static)
+        target_link_options(lc1_save_tests PRIVATE -static)
         target_link_options(lc1_tangent_tests PRIVATE -static)
         target_link_options(lc1_player_view_tests PRIVATE -static)
+        target_link_options(lc1_render_graph_tests PRIVATE -static)
+        target_link_options(lc1_font_tests PRIVATE -static)
     endif()
     if(NOT CMAKE_CROSSCOMPILING)
         add_executable(lc1_descriptor_heap_tests EXCLUDE_FROM_ALL tests/descriptor-heap.cpp)
@@ -295,12 +375,17 @@ if(BUILD_TESTING)
         add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp)
         target_link_libraries(lc1_pbr_tests PRIVATE lc1_game)
         lc1_enable_warnings(lc1_pbr_tests)
-        add_dependencies(lc1_pbr_tests shaders)
+        add_dependencies(lc1_pbr_tests shaders copy_assets)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
         add_test(NAME continent COMMAND lc1_continent_tests)
         add_test(NAME character COMMAND lc1_character_tests)
+        add_test(NAME dialog COMMAND lc1_dialog_tests
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/dialogs/catalog.yaml")
+        add_test(NAME runtime_dialog_data COMMAND lc1_dialog_tests
+            "${PROJECT_BINARY_DIR}/runtime/dialogs/catalog.yaml" --validate)
         add_test(NAME tangent_space COMMAND lc1_tangent_tests)
         add_test(NAME player_view COMMAND lc1_player_view_tests)
+        add_test(NAME render_graph COMMAND lc1_render_graph_tests)
     endif()
 endif()
 

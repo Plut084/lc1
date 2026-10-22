@@ -5,6 +5,7 @@
 #include "lc1/scene/camera.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
+#include "lc1/vk/render/render-graph.hpp"
 #include "lc1/vk/resources/command-buffer.hpp"
 
 #include <algorithm>
@@ -47,6 +48,41 @@ RayQueryShadows::RayQueryShadows(Device const &device, vk::Format depth_format)
 {
 }
 
+void RayQueryShadows::add_passes(RenderGraph &graph, FrameResources &resources, vk::Extent2D extent,
+                                 scene::FpsCamera const &camera,
+                                 std::span<scene::Light const> lights,
+                                 std::span<DrawItem const> draws)
+{
+    graph.add_pass("Shadow scene preparation", {"frame.inputs"},
+                   {"shadow.scene", "shadow.frame", "shadow.history"},
+                   [this, &resources, extent, &camera, lights, draws](CommandBuffer &cmd) {
+                       prepare_frame(cmd, resources, extent, camera, lights, draws);
+                   });
+    graph.add_pass("Shadow visibility", {"shadow.scene", "shadow.frame"},
+                   {"shadow.raw_visibility", "shadow.surface"},
+                   [this, &resources, extent, draws](CommandBuffer &cmd) {
+                       cmd.bind_descriptor_heap(*resources.descriptor_heap);
+                       record_visibility(cmd, resources, extent, draws);
+                   });
+    graph.add_pass("Temporal shadow resolve",
+                   {"shadow.raw_visibility", "shadow.surface", "shadow.history", "shadow.frame"},
+                   {"shadow.temporal_visibility", "shadow.temporal_surface"},
+                   [this, &resources, extent](CommandBuffer &cmd) {
+                       cmd.bind_descriptor_heap(*resources.descriptor_heap);
+                       resolve_history(cmd, resources, extent);
+                   });
+    // Temporal resolve must consume raw visibility before spatial filtering
+    // overwrites its image. The two resource names describe successive contents.
+    graph.add_pass("Spatial shadow filter",
+                   {"shadow.temporal_visibility", "shadow.surface", "shadow.frame"},
+                   {"shadow.filtered_visibility"},
+                   [this, &resources, extent, &camera, lights, draws](CommandBuffer &cmd) {
+                       cmd.bind_descriptor_heap(*resources.descriptor_heap);
+                       filter_history(cmd, resources, extent);
+                       finish_frame(camera, lights, draws);
+                   });
+}
+
 void RayQueryShadows::ensure_attachments(FrameResources &resources, vk::Extent2D extent) const
 {
     // The caller has waited for these resources. Other submissions use their
@@ -73,10 +109,10 @@ void RayQueryShadows::ensure_attachments(FrameResources &resources, vk::Extent2D
     }
 }
 
-void RayQueryShadows::record_visibility(CommandBuffer &wrapped, FrameResources &resources,
+void RayQueryShadows::record_visibility(CommandBuffer &cmd, FrameResources &resources,
                                         vk::Extent2D extent, std::span<DrawItem const> draws) const
 {
-    auto const &commands = wrapped.raii();
+    auto const &commands = cmd.raii();
     auto const &visibility = *resources.ray_query.visibility;
     auto const &depth = *resources.ray_query.depth;
     auto const &surface = *resources.ray_query.surface;
@@ -132,7 +168,7 @@ void RayQueryShadows::record_visibility(CommandBuffer &wrapped, FrameResources &
     std::array const attachments{color_attachment, surface_attachment};
     rendering.setColorAttachments(attachments);
     commands.beginRendering(rendering);
-    visibility_shaders_.bind_to_command_buffer(wrapped);
+    visibility_shaders_.bind_to_command_buffer(cmd);
     set_graphics_state(commands, visibility_state_);
     commands.setViewportWithCount(vk::Viewport{
         .y = static_cast<float>(extent.height),
@@ -149,7 +185,7 @@ void RayQueryShadows::record_visibility(CommandBuffer &wrapped, FrameResources &
                                   : vk::FrontFace::eCounterClockwise);
         auto pass = resources.pass_data;
         pass.object = resources.object_indices[i];
-        wrapped.push_data(std::span{&pass, 1});
+        cmd.push_data(std::span{&pass, 1});
         item.mesh->draw(commands);
     }
     commands.endRendering();
@@ -241,12 +277,12 @@ void RayQueryShadows::update_acceleration_structure(vk::raii::CommandBuffer cons
     }
 }
 
-void RayQueryShadows::record(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,
-                             scene::FpsCamera const &camera, std::span<scene::Light const> lights,
-                             std::span<DrawItem const> draws)
+void RayQueryShadows::prepare_frame(CommandBuffer &cmd, FrameResources &resources,
+                                    vk::Extent2D extent, scene::FpsCamera const &camera,
+                                    std::span<scene::Light const> lights,
+                                    std::span<DrawItem const> draws)
 {
     auto const &command_buffer = cmd.raii();
-    cmd.bind_descriptor_heap(*resources.descriptor_heap);
     validate_draws(resources, extent, draws);
     for (std::size_t i = 0; i < draws.size(); ++i) {
         ObjectData const object_data{
@@ -306,15 +342,20 @@ void RayQueryShadows::record(CommandBuffer &cmd, FrameResources &resources, vk::
                        sequence_++, 32U, lights_data.count},
     };
     resources.temporal_buffer.upload(std::as_bytes(std::span{&temporal, 1}));
-    record_visibility(cmd, resources, extent, draws);
-    resolve_history(cmd, resources, extent);
-    filter_history(cmd, resources, extent);
+}
+
+void RayQueryShadows::finish_frame(scene::FpsCamera const &camera,
+                                   std::span<scene::Light const> lights,
+                                   std::span<DrawItem const> draws)
+{
     history_write_index_ ^= 1U;
     history_valid_ = true;
-    previous_view_projection_ = ubo.proj * ubo.view;
+    previous_view_projection_ = camera.view_projection_matrix();
     previous_draws_.assign(draws.begin(), draws.end());
-    previous_lights_ = lights_data.lights;
-    previous_light_count_ = lights_data.count;
+    previous_lights_ = {};
+    previous_light_count_ =
+        static_cast<std::uint32_t>(std::min(lights.size(), previous_lights_.size()));
+    std::copy_n(lights.begin(), previous_light_count_, previous_lights_.begin());
 }
 
 } // namespace lc1

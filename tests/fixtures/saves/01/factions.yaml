@@ -1,0 +1,11 @@
+# Faction.docx treats "independent forces" as a category rather than a faction, so every
+# concrete faction gets its own keyid here. Ids are unique within the file and stable:
+# other records refer to a faction by keyid, never by name or position.
+- keyid: 1
+  name: Empire
+- keyid: 2
+  name: North Tribe
+- keyid: 3
+  name: Merchants Guild
+- keyid: 4
+  name: Mystic Order

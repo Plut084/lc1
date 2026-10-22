@@ -1,9 +1,9 @@
 #pragma once
 
+#include "lc1/game/companion-order.hpp"
 #include "lc1/vk/render/draw-item.hpp"
 
 #include <cstdint>
-#include <utility>
 #include <vector>
 
 namespace lc1 {
@@ -17,11 +17,7 @@ class Faction;
 class Party {
   public:
     Party(std::uint32_t keyid, Faction *faction, Character *leader = nullptr,
-          std::vector<Character *> members = {}, std::vector<Character *> captives = {})
-        : keyid_(keyid), faction_(faction), leader_(leader), members_(std::move(members)),
-          captives_(std::move(captives))
-    {
-    }
+          std::vector<Character *> members = {}, std::vector<Character *> captives = {});
 
     std::vector<DrawItem> draw_items() const;
 
@@ -39,11 +35,21 @@ class Party {
 
     // Load-time wiring. A party record lists character keyids; the characters
     // themselves only exist after every party has been created.
-    void set_leader(Character *leader) { leader_ = leader; }
+    void set_leader(Character *leader);
 
-    void add_member(Character *member) { members_.push_back(member); }
+    // Members exclude the separately stored leader; neither list may overlap the other.
+    void add_member(Character *member);
 
-    void add_captive(Character *captive) { captives_.push_back(captive); }
+    void add_captive(Character *captive);
+
+    // Only the leader commands ordinary members. Captives and other parties are excluded.
+    bool can_command(Character const &commander, Character const &member) const;
+    void command(Character const &commander, Character &member, CompanionOrder order);
+
+    bool can_recruit(Character const &recruiter, Character const &candidate) const;
+    // Requires can_recruit(). Transfers membership and releases our own captives.
+    // All borrowed characters and their parties must outlive this operation.
+    void recruit(Character &recruiter, Character &candidate);
 
   private:
     std::uint32_t keyid_;
@@ -51,7 +57,6 @@ class Party {
     Character *leader_ = nullptr;
     std::vector<Character *> members_;
     std::vector<Character *> captives_;
-    // Follow strategy, formation.
 };
 
 } // namespace lc1

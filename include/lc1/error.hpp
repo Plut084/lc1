@@ -1,25 +1,67 @@
 #pragma once
 
 #include <format>
+#include <source_location>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <utility>
 
 namespace lc1 {
 
-// Unrecoverable setup/runtime failure. main() catches this and prints it
-// without a stack trace -- these are configuration problems (missing layer, no
-// suitable device), not bugs to be debugged from a backtrace.
+// Project setup/runtime failure. Keep the message separate from its call site so UI
+// can show the message while diagnostic logs include file, line and function.
 class Error : public std::runtime_error {
   public:
-    using std::runtime_error::runtime_error;
+    explicit Error(std::string const &message,
+                   std::source_location location = std::source_location::current())
+        : std::runtime_error(message), location_(location)
+    {
+    }
+
+    std::source_location location() const noexcept { return location_; }
+
+    std::string diagnostic() const
+    {
+        return std::format("{}\n  at {}:{} in {}", what(), location_.file_name(), location_.line(),
+                           location_.function_name());
+    }
+
+  private:
+    std::source_location location_;
 };
 
-// Formats like std::println. The format string is checked at compile time, so a
-// message built at runtime cannot be the format; pass it as an argument:
-// fail("{}", message).
-template <typename... Args> [[noreturn]] void fail(std::format_string<Args...> fmt, Args &&...args)
+namespace detail {
+
+// Conversion at the call site captures its location before entering fail(). A trailing
+// default location parameter on fail() itself would interfere with pack deduction.
+template <typename... Args> struct LocatedFormat {
+    std::format_string<Args...> format;
+    std::source_location location;
+
+    // Already checked format strings can also be forwarded by ordinary functions.
+    constexpr LocatedFormat(std::format_string<Args...> text,
+                            std::source_location location = std::source_location::current())
+        : format(text), location(location)
+    {
+    }
+
+    template <typename Text>
+    consteval LocatedFormat(Text const &text,
+                            std::source_location location = std::source_location::current())
+        : format(text), location(location)
+    {
+    }
+};
+
+} // namespace detail
+
+// Formats like std::println, with compile-time format checking. For a message built
+// at runtime, use fail("{}", message). Logging belongs to the catching layer.
+template <typename... Args>
+[[noreturn]] void fail(detail::LocatedFormat<std::type_identity_t<Args>...> fmt, Args &&...args)
 {
-    throw Error(std::format(fmt, std::forward<Args>(args)...));
+    throw Error(std::format(fmt.format, std::forward<Args>(args)...), fmt.location);
 }
 
 } // namespace lc1

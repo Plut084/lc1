@@ -223,6 +223,7 @@ add_library(lc1_game STATIC
     src/game/player-view.cpp
     src/game/debug/pbr-showcase.cpp
     src/game/interactable.cpp
+    src/game/dialog.cpp
 )
 target_link_libraries(lc1_game PUBLIC lc1_engine imgui::imgui)
 
@@ -257,15 +258,21 @@ add_custom_target(copy_assets
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime/assets" "${CMAKE_CURRENT_BINARY_DIR}/runtime/assets"
     VERBATIM
 )
-# Save data is opened relative to the working directory, like shaders/. Nothing writes
-# saves yet, so the repository seed is refreshed on each build; once the game writes its
-# own saves, this must stop overwriting files that already exist.
-add_custom_target(copy_saves
+# Dialogue scripts are authored content and refresh on each build, unlike saves.
+add_custom_target(copy_dialogs
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/saves" "${CMAKE_CURRENT_BINARY_DIR}/runtime/saves"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/dialogs" "${CMAKE_CURRENT_BINARY_DIR}/runtime/dialogs"
     VERBATIM
 )
-add_dependencies(lc1 shaders copy_assets copy_saves)
+# Install missing seed files without overwriting a player's existing save data.
+add_custom_target(copy_saves
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/runtime/saves"
+        "-DDESTINATION_DIR=${CMAKE_CURRENT_BINARY_DIR}/runtime/saves"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/seed-saves.cmake"
+    VERBATIM
+)
+add_dependencies(lc1 shaders copy_assets copy_saves copy_dialogs)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -283,6 +290,14 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"
                 --slangc "${SLANGC_EXECUTABLE}")
+    add_test(NAME seed_save_preservation
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/test_seed_saves.py"
+                --cmake "${CMAKE_COMMAND}"
+                --script "${PROJECT_SOURCE_DIR}/scripts/seed-saves.cmake")
+    add_executable(lc1_error_tests tests/error.cpp)
+    target_include_directories(lc1_error_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    lc1_enable_warnings(lc1_error_tests)
+    add_test(NAME error_diagnostics COMMAND lc1_error_tests)
     add_executable(lc1_world_map_tests tests/world-map.cpp)
     target_link_libraries(lc1_world_map_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_world_map_tests)
@@ -292,6 +307,11 @@ if(BUILD_TESTING)
     add_executable(lc1_character_tests tests/character.cpp)
     target_link_libraries(lc1_character_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_character_tests)
+    add_dependencies(lc1_character_tests copy_dialogs)
+    add_executable(lc1_dialog_tests tests/dialog.cpp)
+    target_link_libraries(lc1_dialog_tests PRIVATE lc1_game)
+    lc1_enable_warnings(lc1_dialog_tests)
+    add_dependencies(lc1_dialog_tests copy_dialogs)
     # Save tests use immutable fixtures, independent of the editable runtime saves.
     add_executable(lc1_save_tests tests/save.cpp)
     target_link_libraries(lc1_save_tests PRIVATE lc1_game)
@@ -322,9 +342,11 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     add_dependencies(lc1_font_tests copy_assets)
     if(MINGW)
+        target_link_options(lc1_error_tests PRIVATE -static)
         target_link_options(lc1_world_map_tests PRIVATE -static)
         target_link_options(lc1_continent_tests PRIVATE -static)
         target_link_options(lc1_character_tests PRIVATE -static)
+        target_link_options(lc1_dialog_tests PRIVATE -static)
         target_link_options(lc1_save_tests PRIVATE -static)
         target_link_options(lc1_tangent_tests PRIVATE -static)
         target_link_options(lc1_player_view_tests PRIVATE -static)
@@ -357,6 +379,10 @@ if(BUILD_TESTING)
         add_test(NAME world_map COMMAND lc1_world_map_tests)
         add_test(NAME continent COMMAND lc1_continent_tests)
         add_test(NAME character COMMAND lc1_character_tests)
+        add_test(NAME dialog COMMAND lc1_dialog_tests
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/dialogs/catalog.yaml")
+        add_test(NAME runtime_dialog_data COMMAND lc1_dialog_tests
+            "${PROJECT_BINARY_DIR}/runtime/dialogs/catalog.yaml" --validate)
         add_test(NAME tangent_space COMMAND lc1_tangent_tests)
         add_test(NAME player_view COMMAND lc1_player_view_tests)
         add_test(NAME render_graph COMMAND lc1_render_graph_tests)

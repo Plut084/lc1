@@ -6,6 +6,9 @@ Read the linked documents when working on their subsystem.
 
 ## Engineering judgment
 
+- The code architecture is not finalized. Adapt module boundaries, ownership and interfaces to
+  requirements as needed; existing structure describes the current implementation, not an
+  immutable design. Keep affected documentation consistent with architectural changes.
 - Investigate implementation, configuration and the full diagnostic before concluding. Separate
   evidence from hypotheses; compiler behavior alone does not prove a C++ language rule. Check the
   applicable standard version and implementation support, using references or focused reproducers.
@@ -36,6 +39,17 @@ Read the linked documents when working on their subsystem.
 - Progression, combat and map systems each span 局内/局外 gameplay states. City building is one
   shared system for economic production and combat defenses/deployment. Each soldier owns their
   equipment. These distinctions do not imply separate maps, scales or cameras.
+- Long-term architecture separates an authoritative server from the client. Server `GameMode`
+  owns and advances authoritative gameplay rules/state; `GameClient` owns server communication;
+  client `ClientGameState` is a local replica containing only data needed for presentation and
+  permitted prediction. `GameModeView` (or equivalent presentation code) derives UI/render data
+  from that replica and does not communicate with the server. Client commands request actions;
+  the server validates them and publishes resulting state. This network architecture is a future
+  direction, not implemented yet; do not add speculative routing or placeholder network classes.
+- The current `GameSession` is a local prototype that combines gameplay updates with client-side
+  presentation resources and frame data. It is neither the future authoritative `GameMode` nor a
+  networked client-state replica. Keep this interim status explicit when changing it; extract
+  server-suitable rules from rendering/window/UI dependencies when server functionality is scoped.
 - Countryside, cities and combat share one traversable scale and WASD movement. Default view is
   fixed oblique perspective (Don't Starve / Red Alert style), visible cursor, vertical FOV 45°;
   wheel zoom moves the camera along its viewing direction. Loading strategy is undecided.
@@ -114,7 +128,9 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   `VULKAN_HPP_NO_STRUCT_CONSTRUCTORS`; retain setters for checked array/count pairs, and do not
   define `VULKAN_HPP_NO_SETTERS`.
 - Use `fail()`/`lc1::Error` for project diagnostics; add no subclasses or parallel error-code/out-param
-  scheme. Let `vk::SystemError` carry Vulkan diagnostics; wrapping every call is unnecessary.
+  scheme. `fail()` captures its call site automatically; use `Error::diagnostic()` in logs and
+  `what()` for UI/messages. When adding context to an existing Error, preserve its `location()`.
+  Let `vk::SystemError` carry Vulkan diagnostics; wrapping every call is unnecessary.
   `main` catches both `lc1::Error` and `std::exception`. Preserve the user's intentional Debug
   `throw;` in both handlers after logging; Release returns `EXIT_FAILURE`. Do not remove these
   rethrows to suppress `terminate` diagnostics.
@@ -135,8 +151,12 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   input routing, cursor capture, titles, swapchain recreation and scheduling. `Application` also
   owns the loaded `Save` (world data) as a peer of `GameSession`; `GameSession` consumes it once to
   build its runtime world and keeps no reference to it. `GameSession` owns
-  world/resources/player/lighting and consumes `GameInput`; `PlayerView` owns view modes and
-  remembered look. Neither game class reads Window or InputRouter.
+  world/resources/player/lighting and reads `InputRouter` actions; `PlayerView` owns view modes and
+  remembered look. Application polls Window events and updates InputRouter; the client-side
+  GameSession interprets actions, gates controls by focus/context/ImGui capture, and creates
+  PlayerInput/MapCameraInput for its controllers. It also reads Window's pointer state/dimensions
+  and builds in-game ImGui/music UI; this is an implementation detail of the local prototype, not a server
+  boundary. Keep `Application` responsible for window lifecycle, input routing and ImGui backend.
 - `Window`/`input.hpp` include no Vulkan headers; input also includes no GLFW headers. `Surface`
   bridges GLFW and Vulkan. Device borrows a raw surface only during selection, storing no Window
   or Surface; Swapchain borrows Surface and receives an explicit extent. Window sizes use

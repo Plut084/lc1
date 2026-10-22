@@ -7,6 +7,7 @@
 #include "lc1/game/party.hpp"
 #include "lc1/game/weapon.hpp"
 #include "lc1/image.hpp"
+#include "lc1/input.hpp"
 #include "lc1/model.hpp"
 #include "lc1/scene/lights/directional-light.hpp"
 #include "lc1/scene/lights/sphere-light.hpp"
@@ -148,8 +149,8 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
       player_material_{
           MaterialInfo{.parameters = {.metallic_factor = 0.0F, .roughness_factor = 0.8F},
                        .base_color = {.texture = &white_}}},
-      output_{output}, state_(State::MainMenu), volume_(50),
-      music_browser_path_{default_music_directory()}
+      output_{output}, dialogs_{std::filesystem::path{"runtime/dialogs/catalog.yaml"}},
+      state_(State::MainMenu), volume_(50), music_browser_path_{default_music_directory()}
 {
     scene::DirectionalLight const sun{
         .base = {.color = glm::vec3{1.0F, 0.95F, 0.9F}, .intensity = 0.3F},
@@ -191,9 +192,23 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
             {.position = continent_.spawn() + glm::vec3{-2.96F, 0.0F, -3.41F},
              .wait_seconds = 1.61F},
         };
-        example_->set_controller(std::make_unique<AiCharacterController>(continent_, waypoints));
-        example_->set_interactable(std::make_unique<InteractableCharacter>(example_, &dialog_));
+        if (save.states().empty() || save.states().at(save.example()).patrol)
+            example_->set_controller(
+                std::make_unique<AiCharacterController>(continent_, waypoints));
     }
+
+    for (auto const &[id, state] : save.states()) {
+        if (state.companion_order != CompanionOrder::None) {
+            auto *character = character_by_id(id, "companion order");
+            auto *party = character->config().party;
+            party->command(*party->leader(), *character, state.companion_order);
+        }
+    }
+
+    for (auto const &[_, character] : characters_)
+        if (character.get() != player_)
+            character->set_interactable(
+                std::make_unique<InteractableCharacter>(character.get(), &dialogs_));
 
     spdlog::info(
         "[world] {} regions, {} locations, {} roads, {} terrain chunks; fixed oblique view",
@@ -204,8 +219,8 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
     try {
         play_music("/home/shelpam/Music/Adele - Make You Feel My Love.mp3");
     }
-    catch (std::runtime_error const &error) {
-        ; // Left unhandled. just usable on my machine. Never mind.
+    catch (std::runtime_error const &) {
+        // Startup music is optional; playback errors are shown by the music browser.
     }
 }
 
@@ -242,8 +257,7 @@ void GameSession::build_world(Save const &save)
                       "party");
     }
 
-    // Save records carry no pose yet, so every one of them uses the prototype's transform
-    // and drawable.
+    // Seed records use the prototype pose; checkpoints restore explicit character poses.
     scene::Object const prototype{.transform = {.position = continent_.spawn()},
                                   .mesh = &player_mesh_,
                                   .material = &player_material_};
@@ -268,13 +282,65 @@ void GameSession::build_world(Save const &save)
         std::uint32_t const seed = record.keyid * 0x9E3779B9U;
         std::mt19937_64 rng{seed};
         std::uniform_real_distribution<float> dist{-5.0F, 5.0F};
-        actual.transform.position = continent_.spawn() + glm::vec3{dist(rng), 0.0F, dist(rng)};
-        insert_unique(characters_, record.keyid,
-                      std::make_unique<Character>(continent_, actual, std::move(config)),
-                      "character");
+        auto const offset = glm::vec3{dist(rng), 0.0F, dist(rng)};
+        actual.transform.position = continent_.spawn() + offset;
+        // Place the randomized seed body on the terrain at
+        // its XZ position so a nearby slope cannot leave it buried below the surface;
+        // the Character constructor itself still permits an airborne spawn.
+        if (auto const ground = continent_.ground_height(
+                {actual.transform.position.x, actual.transform.position.z}))
+            actual.transform.position.y = *ground;
+        auto const state = save.states().find(record.keyid);
+        if (state != save.states().end()) {
+            auto const &pose = state->second;
+            actual.transform.position = {pose.x, pose.y, pose.z};
+            actual.transform.rotation.y = pose.body_yaw;
+        }
+        auto character = std::make_unique<Character>(continent_, actual, std::move(config));
+        if (state != save.states().end())
+            character->set_look_angles(state->second.look_yaw, state->second.look_pitch);
+        insert_unique(characters_, record.keyid, std::move(character), "character");
     }
 
     link_party_members(save);
+    dialog_participants_.reserve(characters_.size());
+    for (auto const &[_, character] : characters_)
+        dialog_participants_.push_back(character.get());
+}
+
+SerializedWorld GameSession::snapshot() const
+{
+    SerializedWorld world{.version = 2,
+                          .session = {.player = player_->config().keyid,
+                                      .example = example_ ? example_->config().keyid : 0},
+                          .factions = {},
+                          .equipments = {},
+                          .weapons = {},
+                          .parties = {},
+                          .characters = {},
+                          .states = {}};
+    for (auto const &[id, faction] : factions_)
+        world.factions.push_back({.keyid = id, .name = faction->name()});
+    for (auto const &[id, equipment] : equipments_)
+        world.equipments.push_back(
+            {.keyid = id, .type = equipment->type(), .armor = equipment->property().armor});
+    for (auto const &[id, weapon] : weapons_)
+        world.weapons.push_back({.keyid = id,
+                                 .type = weapon->type(),
+                                 .attack = weapon->property().attack,
+                                 .range = weapon->property().range});
+    for (auto const &[_, party] : parties_)
+        world.parties.push_back(serialize_party(*party));
+    for (auto const &[_, character] : characters_) {
+        world.characters.push_back(serialize_character(*character));
+        world.states.push_back(serialize_character_state(*character));
+    }
+    return world;
+}
+
+bool GameSession::take_save_request()
+{
+    return std::exchange(save_requested_, false);
 }
 
 void GameSession::link_party_members(Save const &save)
@@ -327,6 +393,16 @@ std::vector<WorldTextItem> GameSession::world_labels() const
                        glm::vec3{0, character->height() + 0.5, 0}), // from center to cam
         });
 
+    for (auto const &[_, character] : characters_) {
+        auto const *dialog = dialogs_.find(*character);
+        if (!dialog || dialog->contains(*player_) || dialog->speaker() != character.get())
+            continue;
+        auto const center = character->position() + glm::vec3{0, character->height() + 1.0F, 0};
+        labels.push_back(WorldTextItem{.text = std::string{dialog->current_speech_text()},
+                                       .center = center,
+                                       .line_height = 0.25F,
+                                       .normal = camera().position() - center});
+    }
     return labels;
 }
 
@@ -336,7 +412,16 @@ std::vector<ScreenTextItem> GameSession::screen_labels() const
 
     std::vector<ScreenTextItem> labels;
 
-    if (interaction_target_) {
+    labels.push_back(ScreenTextItem{
+        .text = std::format("Party: {} companions", player_->config().party->members().size()),
+        .position = {24.0F, 78.0F},
+        .line_height = 22.0F,
+    });
+    labels.push_back(
+        ScreenTextItem{.text = save_status_, .position = {24.0F, 108.0F}, .line_height = 22.0F});
+
+    auto const *dialog = dialogs_.find(*player_);
+    if (interaction_target_ && !dialog) {
         ScreenTextItem interact_text{
             .text = std::format("Press F to interact with {}", interaction_target_->config().name),
             .line_height = font_.atlas().line_height_for_em(32),
@@ -348,29 +433,32 @@ std::vector<ScreenTextItem> GameSession::screen_labels() const
         labels.push_back(interact_text);
     }
 
-    if (dialog_.current_speaker()) {
+    if (dialog) {
         ScreenTextItem item{
-            .text = std::format("{}: {}", dialog_.current_speaker()->config().name,
-                                dialog_.current_speech_text()),
+            .text = std::format("{}: {}", dialog->speaker()->config().name,
+                                dialog->current_speech_text()),
             .line_height = font_.atlas().line_height_for_em(32),
         };
         auto const metrics = text::measure_text(font_.atlas(), item.text, item.line_height);
         item.position = {(extent.width - metrics.width) * 0.5F, extent.height * 0.7};
         labels.push_back(item);
 
-        for (auto const &[index, response] :
-             std::views::zip(std::views::iota(0), dialog_.candidate_responses())) {
-            ScreenTextItem response_item{
-                .text = std::format("{}. {}", index + 1, response),
-                .line_height = font_.atlas().line_height_for_em(24),
-            };
-            auto const response_metrics =
-                font_.atlas().measure(response_item.text, response_item.line_height);
-            response_item.position = {(extent.width - response_metrics.width) * 0.5F,
-                                      extent.height * 0.7 + metrics.height +
-                                          index * response_metrics.height};
-            labels.push_back(response_item);
-        }
+        labels.push_back(ScreenTextItem{
+            .text = "F: End conversation", .position = {24.0F, 138.0F}, .line_height = 22.0F});
+        if (dialog->respondent() == player_)
+            for (auto const &[index, response] :
+                 std::views::zip(std::views::iota(0), dialog->candidate_responses())) {
+                ScreenTextItem response_item{
+                    .text = std::format("{}. {}", index + 1, response),
+                    .line_height = font_.atlas().line_height_for_em(24),
+                };
+                auto const response_metrics =
+                    font_.atlas().measure(response_item.text, response_item.line_height);
+                response_item.position = {(extent.width - response_metrics.width) * 0.5F,
+                                          extent.height * 0.7 + metrics.height +
+                                              index * response_metrics.height};
+                labels.push_back(response_item);
+            }
     }
 
     return labels;
@@ -384,7 +472,6 @@ std::uint32_t GameSession::object_capacity() const
 
 Character *GameSession::find_interaction_target() const
 {
-    constexpr float max_distance = 4.0F;
     constexpr float min_alignment = 0.70710678F;
 
     // 斜视角使用身体朝向；第一人称使用水平观察方向。
@@ -410,9 +497,6 @@ Character *GameSession::find_interaction_target() const
         // 用完整距离限制，避免选择楼上或楼下的远处角色。
         float const distance_squared = glm::dot(offset, offset);
 
-        if (distance_squared > max_distance * max_distance)
-            continue;
-
         // 用水平方向判断“面向”，不受角色高低差影响。
         glm::vec3 const horizontal_offset{offset.x, 0.0F, offset.z};
         float const horizontal_distance_squared = glm::dot(horizontal_offset, horizontal_offset);
@@ -426,11 +510,6 @@ Character *GameSession::find_interaction_target() const
 
         if (alignment < min_alignment)
             continue;
-
-        // 正式使用时在这里加入遮挡检测：
-        // 从玩家眼睛到 NPC 躯干检查墙体等障碍。
-        // if (!has_line_of_sight(*player_, *candidate))
-        //     continue;
 
         bool const better =
             !best || alignment > best_alignment ||
@@ -448,15 +527,20 @@ Character *GameSession::find_interaction_target() const
     return best;
 }
 
-void GameSession::update_showcase(GameInput const &input, float delta_seconds)
+void GameSession::update_showcase(InputRouter const &input, bool controls_enabled,
+                                  float delta_seconds)
 {
-    if (input.cycle_lighting)
+    if (controls_enabled && input.pressed(Action::CycleLighting))
         lighting_mode_ = (lighting_mode_ + 1) % lighting_names.size();
-    if (input.toggle_showcase_motion)
+    if (controls_enabled && input.pressed(Action::ToggleShowcaseMotion))
         showcase_animated_ = !showcase_animated_;
-    output_.exposure =
-        std::clamp(output_.exposure * std::exp2(static_cast<float>(input.exposure_steps) * 0.5F),
-                   0.03125F, 16.0F);
+    if (controls_enabled) {
+        int const exposure_steps = static_cast<int>(input.pressed(Action::IncreaseExposure)) -
+                                   static_cast<int>(input.pressed(Action::DecreaseExposure));
+        output_.exposure =
+            std::clamp(output_.exposure * std::exp2(static_cast<float>(exposure_steps) * 0.5F),
+                       0.03125F, 16.0F);
+    }
     if (showcase_animated_)
         showcase_time_ += std::clamp(delta_seconds, 0.0F, 0.1F);
     showcase_.update(showcase_time_);
@@ -495,32 +579,84 @@ std::string_view GameSession::lighting_name() const
     return lighting_names[lighting_mode_];
 }
 
-void GameSession::update(GameInput const &input, float delta_seconds)
+void GameSession::update_view_mode(InputRouter const &input)
+{
+    if (window_->focused() && input.active_context() == InputContext::Gameplay &&
+        !ImGui::GetIO().WantCaptureKeyboard && input.pressed(Action::ToggleCameraView))
+        player_view_->toggle(*player_);
+}
+
+void GameSession::update(InputRouter const &input, float delta_seconds)
 {
     assert(player_);
     assert(player_view_);
 
-    for (auto const &[_, character] : characters_)
-        character->update(delta_seconds);
+    auto const &devices = window_->input();
+    auto const &ui = ImGui::GetIO();
+    bool const controls_enabled =
+        window_->focused() && input.active_context() == InputContext::Gameplay;
+    bool const keyboard_enabled = controls_enabled && !ui.WantCaptureKeyboard;
+    bool const mouse_enabled = controls_enabled && !ui.WantCaptureMouse;
+    if (keyboard_enabled && input.pressed(Action::SaveGame))
+        save_requested_ = true;
+    PlayerInput const player_input{
+        .movement = keyboard_enabled
+                        ? glm::vec2{static_cast<float>(input.held(Action::MoveRight)) -
+                                        static_cast<float>(input.held(Action::MoveLeft)),
+                                    static_cast<float>(input.held(Action::MoveForward)) -
+                                        static_cast<float>(input.held(Action::MoveBackward))}
+                        : glm::vec2{},
+        .look_delta = first_person() && mouse_enabled ? devices.cursor_delta() : glm::vec2{},
+        .running = keyboard_enabled && input.held(Action::Sprint),
+        .jumping = keyboard_enabled && input.pressed(Action::Jump),
+        .interacting = keyboard_enabled && input.pressed(Action::Interact),
+        .dialog_response_index = !keyboard_enabled                        ? -1
+                                 : input.pressed(Action::DialogResponse0) ? 0
+                                 : input.pressed(Action::DialogResponse1) ? 1
+                                 : input.pressed(Action::DialogResponse2) ? 2
+                                 : input.pressed(Action::DialogResponse3) ? 3
+                                                                          : -1,
+    };
+    MapCameraInput const camera_input{
+        .enabled = controls_enabled,
+        .toggle_lock = keyboard_enabled && input.pressed(Action::ToggleCameraLock),
+        .recenter = keyboard_enabled && input.held(Action::RecenterCamera),
+        .scroll = mouse_enabled ? devices.scroll().y : 0.0F,
+        .cursor = devices.cursor(),
+        .viewport_size = window_->content_size(),
+        .pointer_active = mouse_enabled && window_->hovered() && !window_->cursor_captured(),
+    };
 
-    update_showcase(input, delta_seconds);
-    player_view_->update(*player_, input.player, input.camera, delta_seconds);
+    for (auto const &[_, character] : characters_) {
+        auto const *dialog = dialogs_.find(*character);
+        if (dialog && character.get() != player_) {
+            auto const *partner =
+                dialog->talker() == character.get() ? dialog->target() : dialog->talker();
+            character->set_body_direction(partner->position() - character->position());
+        }
+        character->update(continent_, delta_seconds, !dialog && character.get() != player_);
+    }
+
+    update_showcase(input, keyboard_enabled, delta_seconds);
+    player_view_->update(*player_, player_input, camera_input, delta_seconds);
     update_audio_listener();
     update_lighting();
 
     interaction_target_ = find_interaction_target();
-    if (input.player.interacting && interaction_target_) {
+    if (auto *dialog = dialogs_.find(*player_)) {
+        if (player_input.interacting)
+            dialogs_.interrupt(*player_);
+        else
+            dialog->respond(*player_, player_input.dialog_response_index);
+    }
+    else if (player_input.interacting && interaction_target_) {
         interaction_target_->interactable()->interact(*player_);
     }
-    // Too far away from the player to interact, so clear the interaction target.
-    if (dialog_.current_speaker() != nullptr &&
-        glm::distance(dialog_.current_speaker()->position(), player_->position()) > 5) {
-        dialog_.clear();
-    }
-    if (input.player.dialog_response_index >= 0 && dialog_.current_speaker() != nullptr) {
-        dialog_.choose_response(input.player.dialog_response);
-    }
-
+    // Player movement can end an existing conversation, but does not invite an interruption.
+    bool const allow_player_requests = keyboard_enabled && player_input.movement == glm::vec2{} &&
+                                       !player_input.jumping && !player_input.running &&
+                                       player_->on_ground();
+    dialogs_.update(dialog_participants_, player_, delta_seconds, allow_player_requests);
     update_ui();
 }
 
@@ -543,6 +679,9 @@ void GameSession::update_ui()
     ImGui::TextUnformatted(std::format("FPS: {}", ImGui::GetIO().Framerate).c_str());
     ImGui::TextUnformatted(std::format("Lighting: {}", lighting_name()).c_str());
     ImGui::Text("Exposure: %.2f", output_.exposure);
+    if (ImGui::Button("Save game (F6)"))
+        save_requested_ = true;
+    ImGui::TextUnformatted(save_status_.c_str());
     ImGui::TextUnformatted(
         std::format("Showcase motion: {}", showcase_animated_ ? "on" : "off").c_str());
     ImGui::TextUnformatted(
@@ -572,7 +711,6 @@ void GameSession::update_ui()
     case State::MainMenu:
         ImGui::Begin("lc1 main menu##menu");
         ImGui::Button("Start Game");
-        // ImGui::Button("Load Game");
         if (ImGui::Button("Settings"))
             state_ = State::InSettings;
         ImGui::Button("Quit");
@@ -725,6 +863,10 @@ void GameSession::play_music(std::filesystem::path const &path)
         current_music_name_ = path.filename().string();
         music_error_.clear();
         spdlog::info("[music] playing {}", path.string());
+    }
+    catch (Error const &error) {
+        music_error_ = error.what();
+        spdlog::warn("[music] cannot play {}: {}", path.string(), error.diagnostic());
     }
     catch (std::exception const &error) {
         music_error_ = error.what();

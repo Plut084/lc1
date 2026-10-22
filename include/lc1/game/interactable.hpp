@@ -15,13 +15,16 @@ class Interactable {
     Interactable &operator=(Interactable &&) = delete;
 
     virtual ~Interactable() = default;
-    virtual void interact(Character &actor) = 0;
-    virtual bool can_interact(Character &actor) const = 0;
+    virtual void interact(Character &talker) = 0;
+    virtual bool can_interact(Character &talker) const = 0;
 };
 
 class InteractableCharacter : public Interactable {
   public:
-    InteractableCharacter(Character *character, Dialog *dialog) : me_(character), dialog_(dialog) {}
+    InteractableCharacter(Character *character, DialogSystem *dialogs)
+        : me_(character), dialogs_(dialogs)
+    {
+    }
 
     InteractableCharacter(InteractableCharacter const &) = delete;
     InteractableCharacter(InteractableCharacter &&) = delete;
@@ -30,12 +33,13 @@ class InteractableCharacter : public Interactable {
 
     ~InteractableCharacter() override = default;
 
-    void interact(Character &actor) override;
-    bool can_interact(Character &actor) const override;
+    void interact(Character &talker) override;
+    bool can_interact(Character &talker) const override;
 
   private:
+    // Required non-null borrows; the character and dialog system outlive this interaction.
     Character *me_;
-    Dialog *dialog_;
+    DialogSystem *dialogs_;
 };
 
 } // namespace lc1

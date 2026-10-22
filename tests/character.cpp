@@ -1,12 +1,19 @@
 #include "lc1/game/character.hpp"
+#include "lc1/game/ai-character-controller.hpp"
 #include "lc1/game/continent.hpp"
+#include "lc1/game/faction.hpp"
 #include "lc1/game/player-controller.hpp"
+#include "lc1/game/save.hpp"
+#include "lc1/input.hpp"
 #include "lc1/model.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -41,9 +48,9 @@ template <typename Function> void rejects(Function function, std::string_view me
     check(rejected, message);
 }
 
-lc1::Continent make_world()
+lc1::ContinentData make_world_data()
 {
-    return lc1::Continent{{
+    return {
         .origin = {-16.0F, -16.0F},
         .tile_size = 16.0F,
         .tiles = std::vector(2, std::vector<lc1::TileData>(2)),
@@ -53,7 +60,370 @@ lc1::Continent make_world()
         .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain}},
         .locations = {},
         .roads = {},
-    }};
+        .height_samples = {},
+    };
+}
+
+lc1::Continent make_world()
+{
+    return lc1::Continent{make_world_data()};
+}
+
+void dialog_script_validation()
+{
+    auto const path = std::filesystem::path{"runtime/dialogs/recruit.yaml"};
+    auto const script = lc1::DialogScript::load(path);
+    auto invalid = [&](auto change, std::string_view message) {
+        auto copy = script;
+        change(copy);
+        rejects([&] { copy.validate(); }, message);
+    };
+    invalid([](auto &s) { s.version = 3; }, "unsupported script version is rejected");
+    invalid([](auto &s) { s.entry = "missing"; }, "missing entry is rejected");
+    invalid([](auto &s) { s.nodes.push_back(s.nodes.front()); }, "duplicate nodes are rejected");
+    invalid([](auto &s) { s.nodes[0].id = "end"; }, "end is a reserved node id");
+    invalid([](auto &s) { s.nodes[0].choices[0].next = "missing"; },
+            "dangling transitions are rejected");
+    invalid([](auto &s) { s.nodes[0].choices[1].id = s.nodes[0].choices[0].id; },
+            "duplicate choice ids are rejected");
+    invalid([](auto &s) { s.nodes[0].choices.resize(1); },
+            "a node needs an always available fallback");
+    invalid([](auto &s) { s.nodes[0].choices.clear(); }, "empty choices are rejected");
+    invalid([](auto &s) { s.nodes[0].choices.resize(5); }, "five choices are rejected");
+    invalid([](auto &s) { s.nodes[0].text = "Hello {unknown}"; },
+            "unknown placeholders are rejected");
+    invalid([](auto &s) { s.nodes[0].text = "Hello }"; }, "unmatched braces are rejected");
+
+    struct TemporaryFile {
+        std::filesystem::path path =
+            std::filesystem::temp_directory_path() /
+            ("lc1-dialog-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml");
+
+        ~TemporaryFile()
+        {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } temporary;
+
+    auto input = std::ifstream{path};
+    std::string const original{std::istreambuf_iterator<char>{input},
+                               std::istreambuf_iterator<char>{}};
+    auto malformed = [&](std::string text, std::string_view message) {
+        {
+            auto output = std::ofstream{temporary.path};
+            output << text;
+        }
+        rejects([&] { lc1::DialogScript::load(temporary.path); }, message);
+    };
+    malformed(original + "unexpected: true\n", "unknown YAML fields are rejected");
+    auto replaced = [&](std::string_view from, std::string_view to) {
+        auto text = original;
+        auto const at = text.find(from);
+        check(at != std::string::npos, "test replacement exists in script");
+        text.replace(at, from.size(), to);
+        return text;
+    };
+    malformed(replaced("condition: CanRecruit", "condition: Unknown"),
+              "unknown condition names are rejected");
+    malformed(replaced("action: Recruit", "action: Unknown"), "unknown action names are rejected");
+    malformed(replaced("        action: Recruit\n", ""), "missing fields are rejected");
+    malformed(replaced("        action: Recruit", "        typo: Recruit"),
+              "nested unknown fields are rejected");
+    malformed("nodes: [", "malformed YAML is rejected");
+    rejects([&] { lc1::DialogScript::load(temporary.path / "missing"); },
+            "missing files are rejected");
+}
+
+// Finish the spoken response so assertions can inspect the following node.
+void choose(lc1::Dialog &dialog, lc1::Character &character, int index)
+{
+    dialog.respond(character, index);
+    if (dialog.displaying_response())
+        dialog.update(1.5F, &character, 1.5F);
+}
+
+void companion_orders()
+{
+    auto const world = make_world();
+    lc1::Faction faction{1, "Faction"};
+    lc1::Party party{1, &faction};
+    lc1::Party other{2, &faction};
+    auto config = [](std::uint32_t id, lc1::Party &owner) {
+        return lc1::CharacterConfig{.keyid = id,
+                                    .name = "Character",
+                                    .sex = false,
+                                    .age = 18,
+                                    .party = &owner,
+                                    .level = 1,
+                                    .equipment = {},
+                                    .weapon = {}};
+    };
+    lc1::Character leader{world, {.transform = {.position = {0, 0, 0}}}, config(1, party)};
+    lc1::Character member{world, {.transform = {.position = {-8, 0, 0}}}, config(2, party)};
+    lc1::Character captive{world, {.transform = {.position = {-6, 0, 0}}}, config(3, party)};
+    lc1::Character stranger{world, {.transform = {.position = {-4, 0, 0}}}, config(4, other)};
+    party.set_leader(&leader);
+    party.add_member(&member);
+    party.add_captive(&captive);
+    check(!party.can_command(member, leader) && !party.can_command(leader, captive) &&
+              !party.can_command(leader, stranger) && !party.can_command(leader, leader),
+          "commands require a leader and an ordinary member of the same party");
+    rejects([&] { party.command(member, leader, lc1::CompanionOrder::Follow); },
+            "members cannot command their leader");
+    rejects([&] { party.command(leader, captive, lc1::CompanionOrder::Follow); },
+            "captives cannot receive orders");
+    rejects([&] { party.command(leader, member, lc1::CompanionOrder::None); },
+            "orders cannot re-enable a discarded patrol");
+    member.set_controller(std::make_unique<lc1::AiCharacterController>(
+        world, std::vector<lc1::Waypoint>{{.position = {-8, 0, 0}}, {.position = {-12, 0, 0}}}));
+    party.command(leader, member, lc1::CompanionOrder::Follow);
+    check(!member.controller(), "following replaces the previous patrol");
+    member.update(world, 0.1F, false);
+    check(near(member.position().x, -8.0F), "a conversation pauses following");
+    member.update(world, 0.1F);
+    check(member.position().x > -8.0F, "followers move toward their leader");
+    for (int i = 0; i < 100; ++i)
+        member.update(world, 0.1F);
+    check(near(member.position(), {-2, 0, 0}), "followers stop at two metres without overshooting");
+    auto const stopped = member.position();
+    member.update(world, 10.0F);
+    check(near(member.position(), stopped), "a long frame does not move a settled follower");
+    party.command(leader, member, lc1::CompanionOrder::Wait);
+    leader.move(world, {-4, 0, 0});
+    member.update(world, 0.1F);
+    check(near(member.position(), stopped), "waiting members stay when their leader moves");
+    member.request_jump();
+    member.update(world, 0.1F);
+    check(!member.on_ground(), "waiting preserves gravity and jumping");
+    for (int i = 0; i < 30; ++i)
+        member.update(world, 0.1F);
+    check(member.on_ground(), "waiting members still land");
+    party.command(leader, member, lc1::CompanionOrder::Follow);
+    lc1::Character far_leader{world, {.transform = {.position = {10, 0, 0}}}, config(5, party)};
+    party.set_leader(&far_leader);
+    for (int i = 0; i < 100; ++i)
+        member.update(world, 0.1F);
+    check(member.position().x <= 4.701F && member.position().x > 4.6F,
+          "following obeys collision and cannot cross a wall without a path");
+    auto const saved = lc1::serialize_character_state(member);
+    check(saved.companion_order == lc1::CompanionOrder::Follow && !saved.patrol,
+          "a follow order is serialized independently of the patrol controller");
+    party.set_leader(&leader);
+    party.command(leader, member, lc1::CompanionOrder::Wait);
+    check(lc1::serialize_character_state(member).companion_order == lc1::CompanionOrder::Wait,
+          "wait is distinguishable from a stopped patrol");
+
+    auto const script = lc1::DialogScript::load("runtime/dialogs/companion.yaml");
+    lc1::Dialog dialog{script};
+    check(dialog.start(leader, member), "leaders can talk to their members");
+    auto choose_id = [&](std::string_view id) {
+        for (std::size_t i = 0; i < dialog.candidate_responses().size(); ++i)
+            if (dialog.response_id(i) == id) {
+                dialog.respond(leader, static_cast<int>(i));
+                return;
+            }
+        throw std::runtime_error("missing companion command");
+    };
+    choose_id("follow");
+    check(member.companion_order() == lc1::CompanionOrder::Follow && dialog.displaying_response(),
+          "the authored follow response issues an order");
+    dialog.update(1.5F, &leader, 1.5F);
+    check(!dialog.target(), "a companion command closes after displaying the response");
+    dialog.start(leader, member);
+    choose_id("wait");
+    check(member.companion_order() == lc1::CompanionOrder::Wait,
+          "the authored wait response issues an order");
+    dialog.update(1.5F, &leader, 1.5F);
+    dialog.start(leader, member);
+    party.set_leader(nullptr);
+    choose_id("follow");
+    check(member.companion_order() == lc1::CompanionOrder::Wait && !dialog.displaying_response(),
+          "stale command choices recheck authority before changing orders");
+    check(dialog.candidate_responses().size() == 2,
+          "unauthorized speakers see chat and goodbye without command choices");
+}
+
+void recruitment_dialog()
+{
+    auto const world = make_world();
+    lc1::Faction faction{1, "Faction"};
+    lc1::Party party{1, &faction};
+    lc1::Party other{2, &faction};
+    auto const config = [](std::uint32_t keyid, std::string_view name, lc1::Party &owner) {
+        return lc1::CharacterConfig{.keyid = keyid,
+                                    .name = std::string{name},
+                                    .sex = false,
+                                    .age = 18,
+                                    .party = &owner,
+                                    .level = 1,
+                                    .equipment = {},
+                                    .weapon = {}};
+    };
+    lc1::Character player{
+        world, {.transform = {.position = world.spawn()}}, config(1, "Player", party)};
+    lc1::Character npc{
+        world, {.transform = {.position = world.spawn()}}, config(2, "Recruit", party)};
+    lc1::Character stranger{
+        world, {.transform = {.position = world.spawn()}}, config(3, "Stranger", other)};
+    party.set_leader(&player);
+    rejects([&] { party.add_member(&player); }, "the leader cannot also be an ordinary member");
+    rejects([&] { party.add_captive(&player); }, "the leader cannot also be a captive");
+    party.add_captive(&npc);
+    rejects([&] { party.set_leader(&npc); }, "a captive cannot also be the leader");
+    other.set_leader(&stranger);
+    npc.set_controller(std::make_unique<lc1::AiCharacterController>(
+        world, std::vector<lc1::Waypoint>{{.position = world.spawn()}}));
+
+    // Exercise authored transitions and reordered choices before changing party state.
+    auto script = lc1::DialogScript::load("runtime/dialogs/recruit.yaml");
+    script.nodes.resize(1);
+    script.nodes[0].choices[0].id = "recruit";
+    script.nodes[0].choices[0].action = lc1::DialogAction::Recruit;
+    script.nodes[0].choices[0].next = "end";
+    auto follow_up = script.nodes.front();
+    follow_up.id = "details";
+    follow_up.text = "Welcome, {talker_name}.";
+    std::ranges::reverse(follow_up.choices);
+    script.nodes.push_back(std::move(follow_up));
+    script.nodes[0].choices.insert(script.nodes[0].choices.begin(),
+                                   {.id = "details",
+                                    .text = "Tell me more, {target_name}.",
+                                    .condition = lc1::DialogCondition::Always,
+                                    .action = lc1::DialogAction::None,
+                                    .recruiter = lc1::DialogRole::Talker,
+                                    .npc_priority = 0,
+                                    .next = "details"});
+    lc1::Dialog branching{script};
+    branching.start(player, npc);
+    check(branching.current_speech_text() == "Hello, I am Recruit!" &&
+              branching.candidate_responses()[0] == "Tell me more, Recruit.",
+          "target placeholders expand in speech and choices");
+    check(branching.response_id(0) == "details" && branching.response_id(99).empty(),
+          "visible choices retain stable ids and invalid indices are empty");
+    choose(branching, player, 0);
+    check(branching.current_node_id() == "details" &&
+              branching.current_speech_text() == "Welcome, Player." &&
+              branching.response_id(0) == "goodbye" && branching.response_id(1) == "recruit",
+          "a choice jumps to its authored node and preserves authored choice order");
+    choose(branching, player, 0);
+    check(!branching.target() && branching.current_node_id().empty(),
+          "goodbye in the first position does not recruit");
+
+    auto const recruitment_script = lc1::DialogScript::load("runtime/dialogs/recruit.yaml");
+    lc1::Dialog dialog{recruitment_script};
+    dialog.start(player, npc);
+    check(dialog.target() == &npc && dialog.candidate_responses().size() == 2,
+          "an own captive offers recruitment and goodbye");
+    choose(dialog, player, -1);
+    choose(dialog, player, 2);
+    choose(dialog, stranger, 0);
+    check(party.members().empty() && dialog.target() == &npc,
+          "invalid choices and other talkers cannot recruit or close the conversation");
+    choose(dialog, player, 1);
+    check(!dialog.target() && dialog.candidate_responses().empty() &&
+              dialog.current_speech_text().empty() && party.captives().size() == 1 &&
+              npc.controller(),
+          "goodbye clears all dialogue state without changing the NPC");
+
+    dialog.start(player, npc);
+    auto const bindings = lc1::default_bindings();
+    lc1::InputRouter router{bindings, lc1::InputContext::Gameplay};
+    lc1::InputState input;
+    input.on_key(lc1::Key::Digit1, true);
+    router.update(input);
+    check(router.pressed(lc1::Action::DialogResponse0), "key 1 selects the first response");
+    if (router.pressed(lc1::Action::DialogResponse0))
+        choose(dialog, player, 0);
+    check(dialog.current_node_id() == "offer" && party.members().empty() &&
+              party.captives().size() == 1,
+          "an invitation advances to confirmation without recruiting");
+    choose(dialog, player, 1);
+    check(dialog.current_node_id() == "greeting" && party.members().empty(),
+          "the player can return to the previous round without recruiting");
+    choose(dialog, player, 0);
+    choose(dialog, player, 0);
+    check(dialog.current_node_id() == "joined" && party.members().size() == 1 &&
+              party.members().front() == &npc && party.captives().empty() &&
+              npc.config().party == &party && !npc.controller() &&
+              npc.companion_order() == lc1::CompanionOrder::Follow,
+          "recruiting releases an own captive, adds membership and stops the old patrol");
+    check(dialog.candidate_responses().size() == 1 && dialog.response_id(0) == "goodbye",
+          "successful recruitment advances to an acknowledgement round");
+    choose(dialog, player, 0);
+    check(!dialog.target(), "the final response closes the multi-round dialogue");
+    choose(dialog, player, 0);
+    dialog.start(player, npc);
+    check(dialog.candidate_responses().size() == 1, "an existing companion only offers goodbye");
+    choose(dialog, player, 0);
+    check(party.members().size() == 1, "repeated responses cannot duplicate membership");
+    rejects([&] { party.recruit(player, npc); }, "duplicate recruitment is rejected");
+    check(!party.can_recruit(player, player) && !party.can_recruit(player, stranger) &&
+              !party.can_recruit(npc, stranger),
+          "self, foreign leaders and nonleader recruiters cannot recruit");
+
+    lc1::Character outsider{
+        world, {.transform = {.position = world.spawn()}}, config(4, "Outsider", other)};
+    other.add_member(&outsider);
+    rejects([&] { other.set_leader(&outsider); }, "an ordinary member cannot also be the leader");
+    check(party.can_recruit(player, outsider), "another party's ordinary member is eligible");
+    dialog.start(player, outsider);
+    choose(dialog, player, 0);
+    party.recruit(player, outsider);
+    choose(dialog, player, 0);
+    check(dialog.target() == &outsider && dialog.candidate_responses().size() == 2 &&
+              dialog.current_node_id() == "offer" && party.members().size() == 2 &&
+              other.members().empty() && outsider.config().party == &party &&
+              other.leader() == &stranger,
+          "stale choices refresh without a second transfer and preserve the source leader");
+    choose(dialog, player, 1);
+    check(!dialog.target(), "a stale confirmation can still exit the dialogue");
+
+    auto const roster = lc1::serialize_party(party);
+    auto const saved_npc = lc1::serialize_character(npc);
+    auto const saved_state = lc1::serialize_character_state(npc);
+    check(roster.leader == 1 && roster.members.size() == 2 &&
+              !std::ranges::contains(roster.members, 1U) && roster.captives.empty() &&
+              saved_npc.party == 1 && !saved_state.patrol && near(saved_state.x, npc.position().x),
+          "serialization retains recruitment, a separate leader and the stopped patrol");
+
+    lc1::Character captive{
+        world, {.transform = {.position = world.spawn()}}, config(5, "Captive", other)};
+    other.add_captive(&captive);
+    rejects([&] { party.recruit(player, captive); }, "foreign captives cannot be recruited");
+    check(captive.config().party == &other && other.captives().size() == 1 &&
+              party.members().size() == 2,
+          "a rejected transfer leaves both parties unchanged");
+    lc1::Character reordered_recruit{
+        world, {.transform = {.position = world.spawn()}}, config(6, "New recruit", other)};
+    other.add_member(&reordered_recruit);
+    // Always does not bypass the action's own eligibility check.
+    auto reordered_script = script;
+    reordered_script.nodes[1].choices[1].condition = lc1::DialogCondition::Always;
+    lc1::Dialog reordered{reordered_script};
+    reordered.start(player, reordered_recruit);
+    choose(reordered, player, 0);
+    choose(reordered, player, 1);
+    check(!reordered.target() && reordered_recruit.config().party == &party,
+          "recruitment executes by authored action rather than visible index");
+    reordered.start(player, reordered_recruit);
+    choose(reordered, player, 0);
+    check(reordered.candidate_responses().size() == 1 && reordered.response_id(0) == "goodbye",
+          "an Always recruit choice still checks gameplay eligibility");
+    reordered.clear();
+
+    dialog.start(player, player);
+    check(!dialog.target(), "self conversation is ignored");
+
+    input.begin_frame();
+    input.on_key(lc1::Key::Digit2, true);
+    router.push(lc1::InputContext::Ui);
+    router.update(input);
+    check(!router.pressed(lc1::Action::DialogResponse1), "UI context gates response input");
+    router.pop();
+    router.update(input);
+    check(router.pressed(lc1::Action::DialogResponse1), "key 2 selects the second response");
 }
 
 void jumping()
@@ -65,9 +435,9 @@ void jumping()
     auto character = make_character();
     check(character.on_ground(), "spawn starts grounded");
     character.request_jump();
-    character.update(0.0F);
+    character.update(world, 0.0F);
     check(character.on_ground(), "zero-time update does not start a jump");
-    character.update(0.01F);
+    character.update(world, 0.01F);
     check(!character.on_ground() && character.position().y > 0.0F, "jump leaves the ground");
     float const airborne_height = character.position().y;
     character.walk(world, {1, 0, 0}, 0.01F, false);
@@ -76,17 +446,17 @@ void jumping()
     character.move(world, {10, 0, 0});
     check(character.position().x < 4.701F, "jump retains ground-plane obstacle blocking");
     character.request_jump();
-    character.update(0.01F);
+    character.update(world, 0.01F);
     float const expected_height =
         std::sqrt(2.0F * lc1::gravityf) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
     check(near(character.position().y, expected_height), "airborne request cannot double jump");
     for (int i = 0; i < 200; ++i)
-        character.update(0.01F);
+        character.update(world, 0.01F);
     check(character.on_ground() && character.position().y == 0.0F, "landing clamps to ground");
-    character.update(0.1F);
+    character.update(world, 0.1F);
     check(character.position().y == 0.0F, "landing clears falling velocity");
     character.request_jump();
-    character.update(0.01F);
+    character.update(world, 0.01F);
     check(near(character.position().y, airborne_height), "subsequent jump has the same impulse");
 
     for (float const step : {1.0F / 30.0F, 1.0F / 60.0F, 1.0F / 144.0F}) {
@@ -94,7 +464,7 @@ void jumping()
         jumper.request_jump();
         float peak = 0.0F;
         for (int i = 0; i < 300; ++i) {
-            jumper.update(step);
+            jumper.update(world, step);
             peak = std::max(peak, jumper.position().y);
         }
         check(std::abs(peak - 1.0F) < 0.002F, "jump height is stable across frame rates");
@@ -104,22 +474,22 @@ void jumping()
     auto regular = make_character();
     capped.request_jump();
     regular.request_jump();
-    capped.update(10.0F);
-    regular.update(0.1F);
+    capped.update(world, 10.0F);
+    regular.update(world, 0.1F);
     check(near(capped.position(), regular.position()), "update caps stalled frame time");
-    rejects([&] { character.update(-1.0F); }, "negative update time is rejected");
-    rejects([&] { character.update(std::numeric_limits<float>::quiet_NaN()); },
+    rejects([&] { character.update(world, -1.0F); }, "negative update time is rejected");
+    rejects([&] { character.update(world, std::numeric_limits<float>::quiet_NaN()); },
             "nonfinite update time is rejected");
 
     lc1::FirstPersonCharacterController first_person{world};
     auto first = make_character();
     first_person.update(0.01F, {.jumping = true}, first);
-    first.update(0.01F);
+    first.update(world, 0.01F);
     check(!first.on_ground(), "first-person controller requests jump");
     lc1::ThirdPersonCharacterController third_person{world};
     auto third = make_character();
     third_person.update(0.01F, {.jumping = true}, {0, 0, -1}, third);
-    third.update(0.01F);
+    third.update(world, 0.01F);
     check(!third.on_ground(), "third-person controller requests jump");
 }
 
@@ -183,6 +553,84 @@ void pose_and_movement()
             "visual unit correction cannot silently scale a collision body");
     rejects([&] { lc1::Character invalid{world, {}, {}, {.height = 0}}; },
             "invalid body configuration is rejected");
+}
+
+void height_and_support()
+{
+    auto data = make_world_data();
+    data.origin = {-32.0F, -32.0F};
+    data.tile_size = 16.0F;
+    data.tiles = std::vector(4, std::vector<lc1::TileData>(4));
+    data.spawn = {0.0F, 0.0F, 0.0F};
+    data.blocks.clear();
+    data.height_samples.assign(5, std::vector<float>(5, 0.0F));
+    for (std::size_t z = 0; z < data.height_samples.size(); ++z) {
+        for (std::size_t x = 0; x < data.height_samples[z].size(); ++x) {
+            float const world_x = data.origin.x + static_cast<float>(x) * data.tile_size;
+            data.height_samples[z][x] = std::clamp((world_x - 0.0F) * 0.25F, 0.0F, 4.0F);
+        }
+    }
+    lc1::Continent const world{std::move(data)};
+
+    auto const slope = world.terrain_sample({8.0F, 0.0F});
+    check(slope && near(slope->height, 2.0F), "terrain height is bilinearly interpolated");
+    check(slope->normal.y < 0.999F && slope->normal.x < 0.0F,
+          "terrain normal points uphill from the rising slope");
+
+    auto const support = world.support_below({8.0F, 2.5F, 0.0F}, 1.0F);
+    check(support && near(support->height, 2.0F), "support query finds the slope under the feet");
+    check(!world.support_below({8.0F, 5.0F, 0.0F}, 1.0F),
+          "support query does not snap to a surface farther below than requested");
+
+    lc1::Character walker{world, {.transform = {.position = {0.0F, 0.0F, 0.0F}}}, {}};
+    check(walker.on_ground() && near(walker.position().y, 0.0F),
+          "character spawns on the sampled ground height");
+
+    lc1::Character slightly_above{world, {.transform = {.position = {0.0F, 0.2F, 0.0F}}}, {}};
+    check(slightly_above.on_ground() && near(slightly_above.position().y, 0.0F),
+          "spawn within step range snaps down to the support surface");
+
+    lc1::Character airborne{world, {.transform = {.position = {0.0F, 5.0F, 0.0F}}}, {}};
+    check(!airborne.on_ground() && near(airborne.position().y, 5.0F),
+          "spawning in the air is allowed and does not fail construction");
+    for (int frame = 0; frame < 300; ++frame)
+        airborne.update(world, 1.0F / 60.0F);
+    check(airborne.on_ground() && near(airborne.position().y, 0.0F),
+          "an airborne character falls and lands on the sampled ground");
+    for (int frame = 0; frame < 30; ++frame) {
+        walker.walk(world, {1.0F, 0.0F, 0.0F}, 0.1F, false);
+        walker.update(world, 0.1F);
+    }
+    check(walker.position().y > 2.0F && walker.on_ground(),
+          "grounded character follows a rising terrain surface");
+    float const uphill_height = walker.position().y;
+
+    for (int frame = 0; frame < 30; ++frame) {
+        walker.walk(world, {-1.0F, 0.0F, 0.0F}, 0.1F, false);
+        walker.update(world, 0.1F);
+    }
+    check(walker.position().y < uphill_height && walker.on_ground(),
+          "grounded character follows a descending terrain surface");
+
+    auto platform_data = make_world_data();
+    platform_data.blocks.clear();
+    platform_data.blocks.push_back(
+        {{0.0F, 0.0F, -5.0F}, {10.0F, 3.0F, 5.0F}, lc1::ContinentSurface::Stone, true, true});
+    lc1::Continent const platform_world{std::move(platform_data)};
+    lc1::Character on_platform{platform_world, {.transform = {.position = {5.0F, 3.0F, 0.0F}}}, {}};
+    check(on_platform.on_ground() && near(on_platform.position().y, 3.0F),
+          "character can spawn on a walkable block top");
+    auto const beneath = platform_world.support_below({5.0F, 3.0F, 0.0F}, 0.1F);
+    check(beneath && near(beneath->height, 3.0F),
+          "block tops participate in the same support query as terrain");
+    on_platform.request_jump();
+    on_platform.update(platform_world, 0.01F);
+    check(!on_platform.on_ground() && on_platform.position().y > 3.0F,
+          "jumping from a raised platform leaves the platform surface");
+    for (int frame = 0; frame < 300; ++frame)
+        on_platform.update(platform_world, 0.01F);
+    check(on_platform.on_ground() && near(on_platform.position().y, 3.0F),
+          "jumping on a raised platform lands back on the platform, not world Y=0");
 }
 
 void player_controllers()
@@ -285,7 +733,11 @@ void model_correction()
 int main()
 {
     try {
+        dialog_script_validation();
+        recruitment_dialog();
+        companion_orders();
         jumping();
+        height_and_support();
         pose_and_movement();
         player_controllers();
         model_correction();

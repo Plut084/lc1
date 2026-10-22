@@ -17,7 +17,8 @@ struct Object {
         return {.mesh = mesh,
                 .material = material,
                 .model = transform.model_matrix(),
-                .casts_shadow = casts_shadow};
+                .casts_shadow = casts_shadow,
+                .depth_bias = false};
     }
 };
 

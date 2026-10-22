@@ -17,6 +17,9 @@ struct DrawItem {
     // Content that renders without casting, such as flat ground decals. Text is
     // never a draw item: it is drawn by the text pass and casts nothing.
     bool casts_shadow = true;
+    // Pulls coplanar decals toward the camera in depth without moving their geometry.
+    // Road overlays use this instead of relying on a large visual lift.
+    bool depth_bias = false;
 };
 
 } // namespace lc1

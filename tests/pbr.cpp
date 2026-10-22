@@ -173,7 +173,7 @@ void material_tests(lc1::Device const &device, vk::SampleCountFlagBits samples)
                                std::span<lc1::scene::Light const> active_lights,
                                lc1::OutputSettings settings = {}) {
         auto material = info;
-        std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material}};
+        std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material, .depth_bias = false}};
         return capture(device, renderer, frame, camera, active_lights, draws,
                        {.width = 65, .height = 65}, settings);
     };
@@ -293,11 +293,13 @@ void mutable_material_tests(lc1::Device const &device)
         lc1::DrawItem{.mesh = &mesh,
                       .material = &left,
                       .model = glm::translate(glm::mat4{1}, glm::vec3{-0.8F, 0, 0}),
-                      .casts_shadow = false},
+                      .casts_shadow = false,
+                      .depth_bias = false},
         lc1::DrawItem{.mesh = &mesh,
                       .material = &right,
                       .model = glm::translate(glm::mat4{1}, glm::vec3{0.8F, 0, 0}),
-                      .casts_shadow = false},
+                      .casts_shadow = false,
+                      .depth_bias = false},
     };
     auto check_pair = [&](lc1::FrameResources &frame, glm::vec3 expected_left,
                           glm::vec3 expected_right) {
@@ -360,8 +362,8 @@ void normal_map_tests(lc1::Device const &device, vk::SampleCountFlagBits samples
     auto render = [&](lc1::GpuMesh const &geometry, lc1::MaterialInfo const &parameters,
                       glm::mat4 transform = glm::mat4{1}) {
         auto material = parameters;
-        std::array draws{
-            lc1::DrawItem{.mesh = &geometry, .material = &material, .model = transform}};
+        std::array draws{lc1::DrawItem{
+            .mesh = &geometry, .material = &material, .model = transform, .depth_bias = false}};
         return capture(device, renderer, frame, camera, lights, draws);
     };
     auto const baseline = render(no_tangents, info).center();

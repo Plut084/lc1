@@ -12,6 +12,8 @@ compile_commands.json
 
 # Huge files assets
 runtime/assets/
+runtime/saves/*/checkpoint.yaml
+runtime/saves/*/checkpoint.yaml.tmp
 
 # AI
 .claude/

@@ -15,9 +15,15 @@ bool finite(glm::vec2 value)
 {
     return std::isfinite(value.x) && std::isfinite(value.y);
 }
+
 bool finite(glm::vec3 value)
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+glm::vec3 terrain_normal(float dx, float dz)
+{
+    return glm::normalize(glm::vec3{-dx, 1.0F, -dz});
 }
 
 bool valid(GroundBounds bounds)
@@ -161,9 +167,23 @@ Continent::Continent(ContinentData data) : data_(std::move(data))
                 fail("continent tile references an unknown region");
         }
     }
-    if (!valid(bounds()) || !finite(data_.spawn) ||
-        !ground_height({data_.spawn.x, data_.spawn.z}) || data_.spawn.y != 0.0F)
+    if (!data_.height_samples.empty()) {
+        if (data_.height_samples.size() != rows() + 1)
+            fail("continent height samples must have one more row than the tile grid");
+        for (auto const &row : data_.height_samples) {
+            if (row.size() != columns() + 1)
+                fail("continent height samples must have one more column than the tile grid");
+            for (float const height : row) {
+                if (!std::isfinite(height))
+                    fail("continent height samples must be finite");
+            }
+        }
+    }
+    if (!valid(bounds()) || !finite(data_.spawn))
         fail("invalid continent bounds or spawn");
+    auto const spawn_height = ground_height({data_.spawn.x, data_.spawn.z});
+    if (!spawn_height || std::abs(*spawn_height - data_.spawn.y) > 0.001F)
+        fail("spawn is outside walkable terrain or not on the ground surface");
     blocked_tiles_.reserve(rows() * columns());
     for (auto const &row : data_.tiles)
         for (auto const &tile : row)
@@ -183,8 +203,11 @@ Continent::Continent(ContinentData data) : data_(std::move(data))
             glm::any(glm::lessThan(place.entrance, place.bounds.min)) ||
             glm::any(glm::greaterThan(place.entrance, place.bounds.max)) || !region(place.region) ||
             region_at(place.entrance) != region(place.region) || place.type < LocationType::City ||
-            place.type > LocationType::Wilderness ||
-            !can_stand({place.entrance.x, 0, place.entrance.y}, 0.3F, 1.8F))
+            place.type > LocationType::Wilderness)
+            fail("invalid location layout or obstructed entrance: {}", place.name);
+        auto const entrance_height = ground_height(place.entrance);
+        if (!entrance_height ||
+            !can_stand({place.entrance.x, *entrance_height, place.entrance.y}, 0.3F, 1.8F))
             fail("invalid location layout or obstructed entrance: {}", place.name);
     }
     for (auto const &path : data_.roads) {
@@ -218,10 +241,12 @@ Region const *Continent::region(RegionId id) const
 {
     return find_id(data_.regions, id);
 }
+
 Location const *Continent::location(LocationId id) const
 {
     return find_id(data_.locations, id);
 }
+
 Road const *Continent::road(RoadId id) const
 {
     return find_id(data_.roads, id);
@@ -289,18 +314,82 @@ std::optional<TileData> Continent::tile_at(glm::vec2 position) const
     return data_.tiles[z][x];
 }
 
+std::optional<GroundSample> Continent::terrain_sample(glm::vec2 position) const
+{
+    GroundBounds const area = bounds();
+    if (!finite(position) || glm::any(glm::lessThan(position, area.min)) ||
+        glm::any(glm::greaterThan(position, area.max)))
+        return std::nullopt;
+
+    if (data_.height_samples.empty())
+        return GroundSample{};
+
+    glm::vec2 const grid = (position - area.min) / tile_size();
+    auto const x = std::min(static_cast<std::size_t>(grid.x), columns() - 1);
+    auto const z = std::min(static_cast<std::size_t>(grid.y), rows() - 1);
+    float const fx = grid.x - static_cast<float>(x);
+    float const fz = grid.y - static_cast<float>(z);
+
+    float const h00 = data_.height_samples[z][x];
+    float const h10 = data_.height_samples[z][x + 1];
+    float const h01 = data_.height_samples[z + 1][x];
+    float const h11 = data_.height_samples[z + 1][x + 1];
+    float const height = glm::mix(glm::mix(h00, h10, fx), glm::mix(h01, h11, fx), fz);
+
+    // Heights are stored at cell corners, so the slope is constant inside a cell.
+    float const dx = ((h10 - h00) * (1.0F - fz) + (h11 - h01) * fz) / tile_size();
+    float const dz = ((h01 - h00) * (1.0F - fx) + (h11 - h10) * fx) / tile_size();
+    return GroundSample{.height = height, .normal = terrain_normal(dx, dz)};
+}
+
 std::optional<float> Continent::ground_height(glm::vec2 position) const
 {
     auto const area = region_at(position);
     if (!area || !area->walkable())
         return std::nullopt;
-    return 0.0F;
+    auto const sample = terrain_sample(position);
+    return sample ? std::optional<float>{sample->height} : std::nullopt;
+}
+
+std::optional<GroundSample> Continent::support_below(glm::vec3 feet, float max_distance,
+                                                     float footprint_radius) const
+{
+    if (!finite(feet) || !std::isfinite(max_distance) || max_distance < 0.0F ||
+        !std::isfinite(footprint_radius) || footprint_radius < 0.0F)
+        fail("invalid ground support query");
+
+    constexpr float tolerance = 0.001F;
+    float const lowest = feet.y - max_distance - tolerance;
+    float const highest = feet.y + tolerance;
+
+    std::optional<GroundSample> best;
+    auto consider = [&](GroundSample sample) {
+        if (sample.height < lowest || sample.height > highest)
+            return;
+        if (!best || sample.height > best->height)
+            best = sample;
+    };
+
+    if (auto const sample = terrain_sample({feet.x, feet.z})) {
+        auto const *area = region_at({feet.x, feet.z});
+        if (area && area->walkable())
+            consider(*sample);
+    }
+    for (auto const &block : data_.blocks) {
+        if (!block.walkable_top)
+            continue;
+        if (feet.x + footprint_radius <= block.min.x || feet.x - footprint_radius >= block.max.x ||
+            feet.z + footprint_radius <= block.min.z || feet.z - footprint_radius >= block.max.z)
+            continue;
+        consider({.height = block.max.y, .normal = {0.0F, 1.0F, 0.0F}});
+    }
+    return best;
 }
 
 bool Continent::can_stand(glm::vec3 feet, float half_width, float height) const
 {
     if (!finite(feet) || !std::isfinite(half_width) || !std::isfinite(height) ||
-        half_width <= 0.0F || height <= 0.0F || feet.y != 0.0F)
+        half_width <= 0.0F || height <= 0.0F)
         return false;
     glm::vec2 const position{feet.x, feet.z};
     auto const area = bounds();
@@ -369,7 +458,7 @@ glm::vec3 Continent::move(glm::vec3 feet, glm::vec2 displacement, float half_wid
         remaining -= contact.normal * glm::dot(remaining, contact.normal);
     }
     position = glm::clamp(position, limits.min, limits.max);
-    return {position.x, 0.0F, position.y};
+    return {position.x, feet.y, position.y};
 }
 
 } // namespace lc1

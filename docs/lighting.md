@@ -14,12 +14,17 @@ alpha = max(roughness, 0.045)²
 F0 = lerp(0.04, base_color, metallic)
 diffuse = (1 - F) * (1 - metallic) * base_color / pi
 specular = D * G * F / (4 * NdotV * NdotL)
-color = emissive + Σ visibility * radiance * (diffuse + specular) * NdotL
+color = emissive
+      + hemisphere_ambient(normal) * base_color * (1 - metallic)
+      + Σ visibility * radiance * (diffuse + specular) * NdotL
 ```
 
-背光、视线处于表面背侧或半程向量退化时，BRDF 为零。`sample_light` 已计算点光源的距离衰减和
+背光、视线处于表面背侧或半程向量退化时，直接光 BRDF 为零。`sample_light` 已计算点光源的距离衰减和
 聚光灯的锥角衰减，这些权重只应用一次。主通道保留最多 4× sample shading，按实际 HDR 和深度格式
-选择支持的采样数。当前没有 IBL，也没有固定环境补光；无灯且无发光的表面为黑色。
+选择支持的采样数。当前没有 IBL，但主通道加入了轻量半球环境补光：天空色主要照亮朝上的表面，
+地面反弹色为陡峭侧坡保留较低的最低亮度，背光坡和阴影中的物体不会完全变黑；金属另有一个很弱的
+环境高光项以保留轮廓。补光强度刻意低于主方向光，避免整体发灰。该补光不参与阴影，也不是完整
+的环境反射或间接光。
 
 `scene::PbrParameters` 保存线性参数，`scene::PbrMaterial` 另带非拥有的 CPU 图像引用。
 游戏持有 `MaterialInfo`（参数及 GPU 纹理/采样器借用），`DrawItem::material` 指向它。

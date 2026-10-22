@@ -6,8 +6,8 @@
 
 namespace lc1 {
 
-// Both views share one character. The application supplies focus-gated input and
-// applies cursor capture when the view changes; this class owns no window.
+// Both views share one character. GameSession supplies gated controller input; Application
+// applies cursor capture when the view changes. This class owns no window or input router.
 class PlayerView {
   public:
     PlayerView(Continent const &continent, glm::vec3 player_position);

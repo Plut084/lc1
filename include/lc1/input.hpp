@@ -244,11 +244,12 @@ enum class Action : std::uint8_t {
     DecreaseExposure,
     ToggleCameraLock,
     RecenterCamera,
-    Count,
     DialogResponse0,
     DialogResponse1,
     DialogResponse2,
     DialogResponse3,
+    SaveGame,
+    Count,
 };
 
 inline constexpr std::size_t action_count = static_cast<std::size_t>(Action::Count);
@@ -300,6 +301,11 @@ constexpr std::vector<Binding> default_bindings()
         {lc1::InputContext::Gameplay, lc1::Action::Sprint, lc1::Key::LeftShift},
         {lc1::InputContext::Gameplay, lc1::Action::Jump, lc1::Key::Space},
         {lc1::InputContext::Gameplay, lc1::Action::Interact, lc1::Key::F},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse0, lc1::Key::Digit1},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse1, lc1::Key::Digit2},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse2, lc1::Key::Digit3},
+        {lc1::InputContext::Gameplay, lc1::Action::DialogResponse3, lc1::Key::Digit4},
+        {lc1::InputContext::Gameplay, lc1::Action::SaveGame, lc1::Key::F6},
         {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraView, lc1::Key::M},
         {lc1::InputContext::Gameplay, lc1::Action::ToggleCameraLock, lc1::Key::Y},
         {lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Space},

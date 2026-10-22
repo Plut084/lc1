@@ -38,13 +38,15 @@ int main()
             config.enable_validation = false;
         if (auto const *asset_root = std::getenv("LC1_ASSET_ROOT"))
             config.asset_root = asset_root;
+        if (auto const *save_root = std::getenv("LC1_SAVE_ROOT"))
+            config.save_root = save_root;
 
         lc1::app::Application application{config};
         application.run([] { return interrupted != 0; });
     }
     catch (lc1::Error const &error) {
-        std::println(stderr, "[lc1] fatal: {}", error.what());
-        // In debug builds, we'll check exceptions rather than process them.
+        std::println(stderr, "[lc1] fatal: {}", error.diagnostic());
+        // Keep the original throw site visible in Debug builds.
 #ifndef NDEBUG
         throw;
 #endif

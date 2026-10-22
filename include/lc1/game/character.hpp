@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lc1/game/character-controller.hpp"
+#include "lc1/game/companion-order.hpp"
 #include "lc1/game/equipment.hpp"
 #include "lc1/game/interactable.hpp"
 #include "lc1/game/party.hpp"
@@ -35,6 +36,10 @@ struct CharacterBody {
     float eye_height = 1.65F;
     float walk_speed = 4.5F;
     float run_speed = 18.0F;
+    // Maximum ledge/ramp rise followed while grounded, and maximum distance the body
+    // snaps downward to remain attached to a slope.
+    float step_height = 0.35F;
+    float ground_snap_distance = 0.35F;
 };
 
 struct CharacterConfig {
@@ -102,9 +107,14 @@ class Character {
 
     bool on_ground() const { return on_ground_; }
 
-    void update(float delta_seconds);
+    // Pausing a controller keeps physics active and preserves its patrol state.
+    void update(Continent const &continent, float delta_seconds, bool controller_enabled = true);
+
+    CompanionOrder companion_order() const { return companion_order_; }
 
     CharacterController *controller() { return controller_.get(); }
+
+    CharacterController const *controller() const { return controller_.get(); }
 
     void set_controller(std::unique_ptr<CharacterController> controller)
     {
@@ -121,6 +131,10 @@ class Character {
     Faction const *faction() const { return this->config_.party->faction(); }
 
   private:
+    // Party updates both sides of membership together during recruitment.
+    friend class Party;
+
+    CompanionOrder companion_order_ = CompanionOrder::None;
     CharacterConfig config_;
     CharacterBody body_;
 

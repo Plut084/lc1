@@ -394,72 +394,30 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGuiIO const &imgui_io = ImGui::GetIO();
-        bool const imgui_captures_mouse = imgui_io.WantCaptureMouse;
-        bool const imgui_captures_keyboard = imgui_io.WantCaptureKeyboard;
-        bool const game_keyboard_enabled = !imgui_captures_keyboard;
-
         auto const &input = window_.input();
         // Exit is application policy; while ImGui owns the keyboard, Escape belongs to the UI.
-        if (game_keyboard_enabled && input.pressed(Key::Escape))
+        if (!ImGui::GetIO().WantCaptureKeyboard && input.pressed(Key::Escape))
             break;
 
-        // TODO: Move input into game.
         auto const delta_seconds = stopwatch.tick();
-        if (window_.focused() && game_keyboard_enabled &&
-            router_.pressed(Action::ToggleCameraView)) {
-            game_.toggle_camera_view();
-            // Changing capture resets the baseline; read cursor deltas only afterwards.
-            window_.set_cursor_captured(game_.first_person());
+        game_.update_view_mode(router_);
+        // Capture changes reset the baseline; GameSession reads mouse deltas afterwards.
+        window_.set_cursor_captured(game_.first_person());
+        game_.update(router_, delta_seconds);
+        if (game_.take_save_request()) {
+            try {
+                Save::write(save_.directory(), game_.snapshot());
+                game_.set_save_status("Game saved. F6: Save again");
+            }
+            catch (Error const &error) {
+                spdlog::error("[save] {}", error.diagnostic());
+                game_.set_save_status("Save failed. Please try again.");
+            }
+            catch (std::exception const &error) {
+                spdlog::error("[save] {}", error.what());
+                game_.set_save_status("Save failed. Please try again.");
+            }
         }
-
-        // ImGui consumes wheel/mouse input while the pointer is over an ImGui window.
-        // Zero those values before they reach the camera; otherwise scrolling a debug
-        // panel's scrollbar also zooms the game camera. Keyboard actions are masked the
-        // same way when ImGui claims the keyboard.
-        glm::vec2 const player_movement =
-            game_keyboard_enabled
-                ? glm::vec2{static_cast<float>(router_.held(Action::MoveRight)) -
-                                static_cast<float>(router_.held(Action::MoveLeft)),
-                            static_cast<float>(router_.held(Action::MoveForward)) -
-                                static_cast<float>(router_.held(Action::MoveBackward))}
-                : glm::vec2{};
-        GameInput game_input{
-            .player =
-                {
-                    .movement = player_movement,
-                    .look_delta = game_.first_person() ? input.cursor_delta() : glm::vec2{},
-                    .running = game_keyboard_enabled && router_.held(Action::Sprint),
-                    .jumping = game_keyboard_enabled && router_.pressed(Action::Jump),
-                    .interacting = game_keyboard_enabled && router_.pressed(Action::Interact),
-                    .dialog_response_index = router_.pressed(Action::DialogResponse0)   ? 0
-                                             : router_.pressed(Action::DialogResponse1) ? 1
-                                             : router_.pressed(Action::DialogResponse2) ? 2
-                                             : router_.pressed(Action::DialogResponse3) ? 3
-                                                                                        : -1,
-                },
-            .camera =
-                {
-                    .enabled =
-                        router_.active_context() == InputContext::Gameplay && window_.focused(),
-                    .toggle_lock =
-                        game_keyboard_enabled && router_.pressed(Action::ToggleCameraLock),
-                    .recenter = game_keyboard_enabled && router_.held(Action::RecenterCamera),
-                    .scroll = imgui_captures_mouse ? 0.0F : input.scroll().y,
-                    .cursor = input.cursor(),
-                    .viewport_size = window_.content_size(),
-                    .pointer_active = window_.hovered() && window_.focused() &&
-                                      !window_.cursor_captured() && !imgui_captures_mouse,
-                },
-        };
-        if (window_.focused() && game_keyboard_enabled) {
-            game_input.cycle_lighting = router_.pressed(Action::CycleLighting);
-            game_input.toggle_showcase_motion = router_.pressed(Action::ToggleShowcaseMotion);
-            game_input.exposure_steps =
-                static_cast<int>(router_.pressed(Action::IncreaseExposure)) -
-                static_cast<int>(router_.pressed(Action::DecreaseExposure));
-        }
-        game_.update(game_input, delta_seconds);
         update_title();
 
         ImGui::Render();

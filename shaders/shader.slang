@@ -127,6 +127,16 @@ float4 fragMain(VSOutput input, uint sample_index: SV_SampleIndex) : SV_TARGET
     float3 color =
         material.emissive_texture.Sample(material.emissive_texture_sampler, input.uv).rgb *
         material.emissive_factor;
+    // Cheap hemisphere fill so unlit backsides retain readable form without pretending
+    // to be a full IBL solution. Keep a meaningful ground-bounce floor on steep slopes:
+    // a backlit hillside should be dark, not crushed to black. A weak ambient specular
+    // term keeps metals from losing their silhouette in shadow.
+    let sky_weight = saturate(normal.y * 0.5 + 0.5);
+    let ambient_irradiance =
+        lerp(float3(0.032, 0.036, 0.042), float3(0.095, 0.112, 0.140), sky_weight);
+    let ambient_f0 = lerp(0.04, base_color, metallic);
+    color += ambient_irradiance *
+             (base_color * (1.0 - metallic) + ambient_f0 * 0.05);
     for (uint i = 0; i < min(lights.count, 10u); ++i) {
         // Read fields before passing the light by value: nested arrays read
         // through a heap ConstantBuffer are mishandled; see docs/external-defects.md.

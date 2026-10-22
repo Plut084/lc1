@@ -27,7 +27,8 @@ struct ApplicationConfig {
     std::filesystem::path save_root = "runtime/saves/01";
 };
 
-// Owns the graphics lifetime and presentation loop. GameSession owns gameplay.
+// Owns platform/graphics lifetime, input routing and presentation. GameSession owns the local
+// prototype's gameplay state and in-session UI.
 class Application {
   public:
     explicit Application(ApplicationConfig const &config);

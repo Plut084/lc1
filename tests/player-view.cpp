@@ -39,6 +39,7 @@ lc1::Continent make_world()
         .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain}},
         .locations = {},
         .roads = {},
+        .height_samples = {},
     }};
 }
 

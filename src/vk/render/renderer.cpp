@@ -360,6 +360,14 @@ void Renderer::record_hdr(CommandBuffer &cmd, FrameResources &resources, vk::Ext
         cmd.push_data(std::span{&push_data, 1});
 
         DrawItem const &item = draws[i];
+        // Roads are separate decal draws. Negative constant/slope bias wins the depth
+        // test against the terrain at distance, where a centimetre of geometric lift is
+        // below the available depth resolution.
+        command_buffer.setDepthBiasEnable(item.depth_bias ? vk::True : vk::False);
+        if (item.depth_bias)
+            command_buffer.setDepthBias(-1.25F, 0.0F, -1.75F);
+        else
+            command_buffer.setDepthBias(0.0F, 0.0F, 0.0F);
         // A reflected model reverses winding; callers never need to flip cull mode.
         command_buffer.setFrontFace(glm::determinant(glm::mat3{item.model}) < 0.0F
                                         ? vk::FrontFace::eClockwise

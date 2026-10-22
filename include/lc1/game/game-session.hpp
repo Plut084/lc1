@@ -28,22 +28,15 @@
 namespace lc1 {
 
 class Window;
-
-// Resolved game commands. The application supplies focus/context-gated input.
-struct GameInput {
-    PlayerInput player;
-    MapCameraInput camera;
-    bool cycle_lighting = false;
-    bool toggle_showcase_motion = false;
-    int exposure_steps = 0;
-};
+class InputRouter;
 
 struct GameLocation {
     std::string_view region;
     std::string_view place;
 };
 
-// The playable prototype: world resources, player, camera and exhibit state.
+// Local playable prototype: gameplay updates and client-side presentation resources in one owner.
+// This is not the future authoritative server GameMode or a networked ClientGameState.
 // Device must outlive the session; wait for rendering before teardown.
 class GameSession {
   public:
@@ -53,12 +46,17 @@ class GameSession {
     GameSession &operator=(GameSession const &) = delete;
     GameSession(GameSession &&) = delete;
     GameSession &operator=(GameSession &&) = delete;
-    ~GameSession() = default;
 
-    void update(GameInput const &input, float delta_seconds);
+    ~GameSession() { dialogs_.clear(); }
 
-    // Apply cursor capture after toggling, before collecting this frame's look delta.
-    void toggle_camera_view() { player_view_->toggle(*player_); }
+    void update(InputRouter const &input, float delta_seconds);
+    SerializedWorld snapshot() const;
+    bool take_save_request();
+
+    void set_save_status(std::string status) { save_status_ = std::move(status); }
+
+    // Call before applying cursor capture and update(): capture changes reset the mouse baseline.
+    void update_view_mode(InputRouter const &input);
 
     bool first_person() const { return !player_view_->oblique(); }
 
@@ -102,7 +100,7 @@ class GameSession {
     void link_party_members(Save const &save);
     Character *character_by_id(std::uint32_t keyid, std::string_view what) const;
 
-    void update_showcase(GameInput const &input, float delta_seconds);
+    void update_showcase(InputRouter const &input, bool controls_enabled, float delta_seconds);
     void update_lighting();
     void update_audio_listener();
     void update_ui();
@@ -110,9 +108,12 @@ class GameSession {
     void refresh_music_browser();
     void play_music(std::filesystem::path const &path);
 
+    // Non-owning and non-null; Application's Window outlives this session. Window provides input
+    // state and dimensions; Application owns event polling and cursor capture.
+    Window const *window_;
+
     // Owners precede their borrowers: materials reference textures, draws reference
     // meshes/materials, and the character/controllers reference the continent.
-    Window const *window_;
     GpuFont const font_;
     GpuTexture const white_;
     Continent const continent_;
@@ -132,10 +133,17 @@ class GameSession {
     std::unordered_map<std::uint32_t, std::unique_ptr<Faction>> factions_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Equipment>> equipments_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Weapon>> weapons_;
+    // Interactions borrow this owner; it does not dereference participants during teardown.
+    DialogSystem dialogs_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Character>> characters_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Party>> parties_;
+    // Borrows the fixed character roster; rebuild if runtime spawning/removal is introduced.
+    std::vector<Character *> dialog_participants_;
 
+    // Prototype in-session UI state and music-browser state; ImGui's Vulkan backend stays in app.
     State state_;
+    bool save_requested_ = false;
+    std::string save_status_ = "F6: Save game";
     float volume_;
 
     struct MusicBrowserEntry {
@@ -150,7 +158,6 @@ class GameSession {
     std::filesystem::path current_music_path_;
     bool music_browser_open_ = false;
     bool music_browser_loaded_ = false;
-
     // Borrowed from the character table once the world is built: every character, the
     // player included, comes from save data. The view is built at the same point, because
     // it needs the player's start position.
@@ -160,8 +167,6 @@ class GameSession {
     Character *example_ = nullptr;
 
     Character *interaction_target_{};
-
-    Dialog dialog_;
 
     audio::AudioContext audio_context_;
     audio::Listener audio_listener_{audio_context_};

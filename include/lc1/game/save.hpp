@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lc1/game/companion-order.hpp"
 #include "lc1/game/equipment.hpp"
 #include "lc1/game/weapon.hpp"
 
@@ -13,9 +14,12 @@
 
 namespace lc1 {
 
-// The records below are the file format, one per file, plus the session record that says
-// which character the player controls. Every record holds keyids where the runtime object
-// holds a borrowed pointer, so a file never depends on address or on load order. See
+class Character;
+class Party;
+
+// Seed files store one record kind per file; checkpoints store the complete world together.
+// The session record says which character the player controls. Records hold keyids where runtime
+// objects holds a borrowed pointer, so a file never depends on address or on load order. See
 // docs/save-data.md.
 struct SerializedFaction {
     std::uint32_t keyid;
@@ -38,8 +42,8 @@ struct SerializedWeapon {
 struct SerializedParty {
     std::uint32_t keyid;
     std::uint32_t faction;
-    std::uint32_t leader; // 0 means the party has no leader yet.
-    std::vector<std::uint32_t> members;
+    std::uint32_t leader;               // 0 means the party has no leader yet.
+    std::vector<std::uint32_t> members; // Ordinary members only; excludes the leader.
     std::vector<std::uint32_t> captives;
 };
 
@@ -64,6 +68,35 @@ struct SerializedCharacterConfig {
     std::map<WeaponType, std::uint32_t> weapon;
 };
 
+struct SerializedCharacterState {
+    std::uint32_t keyid;
+    float x;
+    float y;
+    float z;
+    float body_yaw;
+    float look_yaw;
+    float look_pitch;
+    bool patrol;
+    CompanionOrder companion_order = CompanionOrder::None;
+};
+
+// One complete checkpoint: membership and character records are committed together.
+struct SerializedWorld {
+    std::uint32_t version = 2;
+    SerializedSession session;
+    std::vector<SerializedFaction> factions;
+    std::vector<SerializedEquipment> equipments;
+    std::vector<SerializedWeapon> weapons;
+    std::vector<SerializedParty> parties;
+    std::vector<SerializedCharacterConfig> characters;
+    std::vector<SerializedCharacterState> states;
+};
+
+// Runtime worlds must supply valid non-null party/faction and equipment/weapon links.
+SerializedCharacterConfig serialize_character(Character const &character);
+SerializedCharacterState serialize_character_state(Character const &character);
+SerializedParty serialize_party(Party const &party);
+
 // The saved world as data: one directory of YAML files, decoded once and checked for
 // duplicate ids and dangling references. The session file names the player, so no character
 // keyid is special to the game code. Save owns no runtime object, so it can be loaded
@@ -72,6 +105,10 @@ struct SerializedCharacterConfig {
 class Save {
   public:
     explicit Save(std::filesystem::path directory);
+
+    // Validate before writing; commit a complete checkpoint by renaming a closed staging file.
+    static void write(std::filesystem::path const &directory, SerializedWorld const &world);
+    SerializedWorld data() const;
 
     std::filesystem::path const &directory() const { return directory_; }
 
@@ -92,7 +129,11 @@ class Save {
 
     auto const &characters() const { return characters_; }
 
+    auto const &states() const { return states_; }
+
   private:
+    Save(std::filesystem::path directory, SerializedWorld const &world);
+    void read_world(SerializedWorld const &world);
     void read_factions();
     void read_equipments();
     void read_weapons();
@@ -113,6 +154,7 @@ class Save {
     std::unordered_map<std::uint32_t, SerializedWeapon> weapons_;
     std::unordered_map<std::uint32_t, SerializedParty> parties_;
     std::unordered_map<std::uint32_t, SerializedCharacterConfig> characters_;
+    std::unordered_map<std::uint32_t, SerializedCharacterState> states_;
 };
 
 } // namespace lc1

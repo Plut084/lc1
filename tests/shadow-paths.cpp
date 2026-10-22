@@ -94,7 +94,7 @@ void exercise(lc1::Device const &device, vk::SampleCountFlagBits samples)
     std::array<std::uint32_t, 6> const indices{0, 1, 2, 0, 2, 3};
     lc1::GpuMesh mesh{device, std::span<lc1::Vertex const>{vertices},
                       std::span<std::uint32_t const>{indices}};
-    std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material}};
+    std::array draws{lc1::DrawItem{.mesh = &mesh, .material = &material, .depth_bias = false}};
     std::array const lights{
         lc1::scene::to_light(lc1::scene::DirectionalLight{.base = {}, .direction = {0, -1, 0}})};
     lc1::scene::FpsCamera camera;
@@ -162,12 +162,13 @@ void exercise(lc1::Device const &device, vk::SampleCountFlagBits samples)
     // caster membership must change pixels, catching a missing/incorrect TLAS lookup.
     auto occlusion_frame = renderer.make_frame_resources(2);
     std::array occlusion_draws{
-        lc1::DrawItem{.mesh = &mesh, .material = &material},
+        lc1::DrawItem{.mesh = &mesh, .material = &material, .depth_bias = false},
         lc1::DrawItem{
             .mesh = &mesh,
             .material = &material,
             .model = glm::scale(glm::translate(glm::mat4{1}, glm::vec3{0, 1, 0}), glm::vec3{0.3F}),
-            .casts_shadow = false},
+            .casts_shadow = false,
+            .depth_bias = false},
     };
     auto const unshadowed =
         render(device, renderer, occlusion_frame, camera, lights, occlusion_draws);

@@ -1,15 +1,20 @@
 #include "lc1/game/save.hpp"
 
 #include "lc1/error.hpp"
+#include "lc1/game/character.hpp"
+#include "lc1/game/faction.hpp"
 
 #include <rfl/yaml.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <spdlog/spdlog.h>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -45,18 +50,94 @@ Record read_save_file_single(std::filesystem::path const &directory, std::string
     return *records;
 }
 
+// Version 1 predates companion commands. Keep its exact shape so all old required
+// fields are still checked rather than accepting missing fields in version 2.
+struct CheckpointHeader {
+    std::uint32_t version;
+};
+
+struct LegacyCharacterState {
+    std::uint32_t keyid;
+    float x;
+    float y;
+    float z;
+    float body_yaw;
+    float look_yaw;
+    float look_pitch;
+    bool patrol;
+};
+
+struct LegacyWorld {
+    std::uint32_t version;
+    SerializedSession session;
+    std::vector<SerializedFaction> factions;
+    std::vector<SerializedEquipment> equipments;
+    std::vector<SerializedWeapon> weapons;
+    std::vector<SerializedParty> parties;
+    std::vector<SerializedCharacterConfig> characters;
+    std::vector<LegacyCharacterState> states;
+};
+
+SerializedWorld read_checkpoint(std::filesystem::path const &directory)
+{
+    auto const version =
+        read_save_file_single<CheckpointHeader>(directory, "checkpoint.yaml").version;
+    if (version == 2)
+        return read_save_file_single<SerializedWorld>(directory, "checkpoint.yaml");
+    if (version != 1)
+        fail("unsupported checkpoint version {}", version);
+    auto legacy = read_save_file_single<LegacyWorld>(directory, "checkpoint.yaml");
+    SerializedWorld world{.version = 2,
+                          .session = legacy.session,
+                          .factions = std::move(legacy.factions),
+                          .equipments = std::move(legacy.equipments),
+                          .weapons = std::move(legacy.weapons),
+                          .parties = std::move(legacy.parties),
+                          .characters = std::move(legacy.characters),
+                          .states = {}};
+    for (auto const &state : legacy.states)
+        world.states.push_back({.keyid = state.keyid,
+                                .x = state.x,
+                                .y = state.y,
+                                .z = state.z,
+                                .body_yaw = state.body_yaw,
+                                .look_yaw = state.look_yaw,
+                                .look_pitch = state.look_pitch,
+                                .patrol = state.patrol,
+                                .companion_order = CompanionOrder::None});
+    return world;
+}
+
 // A duplicate keyid means two records claim the same identity; keeping either one
 // silently would make every reference ambiguous.
 template <typename Map> void insert_unique(Map &map, auto const &record, std::string_view kind)
 {
+    if (record.keyid == 0)
+        fail("{} keyid must be nonzero", kind);
     if (!map.try_emplace(record.keyid, record).second)
         fail("duplicate {} keyid {}", kind, record.keyid);
+}
+
+template <typename Map> auto sorted_records(Map const &map)
+{
+    using Record = typename Map::mapped_type;
+    std::vector<Record> records;
+    records.reserve(map.size());
+    for (auto const &[_, record] : map)
+        records.push_back(record);
+    std::ranges::sort(records, {}, &Record::keyid);
+    return records;
 }
 
 } // namespace
 
 Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, session_{}
 {
+    if (std::filesystem::exists(directory_ / "checkpoint.yaml")) {
+        read_world(read_checkpoint(directory_));
+        validate_references();
+        return;
+    }
     read_factions();
     read_equipments();
     read_weapons();
@@ -64,6 +145,113 @@ Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, 
     read_characters();
     read_session();
     validate_references();
+}
+
+Save::Save(std::filesystem::path directory, SerializedWorld const &world)
+    : directory_{std::move(directory)}, session_{}
+{
+    read_world(world);
+    validate_references();
+}
+
+void Save::read_world(SerializedWorld const &world)
+{
+    if (world.version != 2)
+        fail("unsupported checkpoint version {}", world.version);
+    session_ = world.session;
+    for (auto const &record : world.factions)
+        insert_unique(factions_, record, "faction");
+    for (auto const &record : world.equipments)
+        insert_unique(equipments_, record, "equipment");
+    for (auto const &record : world.weapons)
+        insert_unique(weapons_, record, "weapon");
+    for (auto const &record : world.parties)
+        insert_unique(parties_, record, "party");
+    for (auto const &record : world.characters)
+        insert_unique(characters_, record, "character");
+    for (auto const &record : world.states)
+        insert_unique(states_, record, "character state");
+    if (states_.size() != characters_.size())
+        fail("checkpoint must contain one state per character");
+}
+
+SerializedWorld Save::data() const
+{
+    return {.version = 2,
+            .session = session_,
+            .factions = sorted_records(factions_),
+            .equipments = sorted_records(equipments_),
+            .weapons = sorted_records(weapons_),
+            .parties = sorted_records(parties_),
+            .characters = sorted_records(characters_),
+            .states = sorted_records(states_)};
+}
+
+void Save::write(std::filesystem::path const &directory, SerializedWorld const &world)
+{
+    Save const checked{directory, world};
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (error)
+        fail("cannot create save directory {}: {}", directory.string(), error.message());
+    auto const staging = directory / "checkpoint.yaml.tmp";
+    auto stream = std::ofstream{staging, std::ios::binary | std::ios::trunc};
+    if (!stream)
+        fail("cannot open checkpoint staging file {}", staging.string());
+    rfl::yaml::write(checked.data(), stream);
+    stream.close();
+    if (!stream)
+        fail("cannot write checkpoint staging file {}", staging.string());
+    std::filesystem::rename(staging, directory / "checkpoint.yaml", error);
+    if (error)
+        fail("cannot commit checkpoint in {}: {}", directory.string(), error.message());
+    spdlog::info("[save] checkpoint saved to {}", directory.string());
+}
+
+SerializedCharacterConfig serialize_character(Character const &character)
+{
+    auto const &config = character.config();
+    SerializedCharacterConfig record{.keyid = config.keyid,
+                                     .name = config.name,
+                                     .sex = config.sex,
+                                     .age = config.age,
+                                     .party = config.party->keyid(),
+                                     .level = config.level,
+                                     .equipment = {},
+                                     .weapon = {}};
+    for (auto const &[slot, equipment] : config.equipment)
+        record.equipment.emplace(slot, equipment->keyid());
+    for (auto const &[slot, weapon] : config.weapon)
+        record.weapon.emplace(slot, weapon->keyid());
+    return record;
+}
+
+SerializedCharacterState serialize_character_state(Character const &character)
+{
+    auto const position = character.position();
+    return {.keyid = character.config().keyid,
+            .x = position.x,
+            .y = position.y,
+            .z = position.z,
+            .body_yaw = character.body_yaw(),
+            .look_yaw = character.look_yaw(),
+            .look_pitch = character.look_pitch(),
+            .patrol = character.controller() != nullptr,
+            .companion_order = character.companion_order()};
+}
+
+SerializedParty serialize_party(Party const &party)
+{
+    SerializedParty record{.keyid = party.keyid(),
+                           .faction = party.faction()->keyid(),
+                           .leader = party.leader() ? party.leader()->config().keyid : 0,
+                           .members = {},
+                           .captives = {}};
+    for (auto const *member : party.members())
+        record.members.push_back(member->config().keyid);
+    for (auto const *captive : party.captives())
+        record.captives.push_back(captive->config().keyid);
+    return record;
 }
 
 void Save::read_factions()
@@ -127,6 +315,8 @@ void Save::read_session()
 
 void Save::validate_references() const
 {
+    if (session_.player == 0)
+        fail("session.yaml must name the player character");
     // The session goes first: a save that cannot say who the player is has no business
     // building a world, and the zero sentinel would otherwise report character 0.
     character(session_.player, "session player");
@@ -159,6 +349,62 @@ void Save::validate_references() const
             if (!weapons_.contains(slot.second))
                 fail("character {} refers to unknown weapon {}", character_record.keyid,
                      slot.second);
+    }
+    // Keep referential diagnostics above independent of membership checks below.
+    for (auto const &[_, party] : parties_) {
+        auto check_owner = [&](std::uint32_t id) {
+            if (characters_.at(id).party != party.keyid)
+                fail("party {} lists character {} belonging to another party", party.keyid, id);
+        };
+        if (party.leader != 0)
+            check_owner(party.leader);
+        std::unordered_set<std::uint32_t> members;
+        for (auto id : party.members) {
+            check_owner(id);
+            if (id == party.leader)
+                fail("party {} leader {} must not appear in members", party.keyid, id);
+            if (!members.insert(id).second)
+                fail("party {} has duplicate member {}", party.keyid, id);
+        }
+        std::unordered_set<std::uint32_t> captives;
+        for (auto id : party.captives) {
+            check_owner(id);
+            if (!captives.insert(id).second)
+                fail("party {} has duplicate captive {}", party.keyid, id);
+            if (id == party.leader || members.contains(id))
+                fail("party {} character {} is both a companion and captive", party.keyid, id);
+        }
+    }
+    for (auto const &[id, record] : characters_) {
+        auto const &party = parties_.at(record.party);
+        if (party.leader != id && !std::ranges::contains(party.members, id) &&
+            !std::ranges::contains(party.captives, id))
+            fail("character {} is not listed in its party {}", id, party.keyid);
+        for (auto const &[slot, id] : record.equipment)
+            if (equipments_.at(id).type != slot)
+                fail("character {} equipment {} does not match its slot", record.keyid, id);
+        for (auto const &[slot, id] : record.weapon)
+            if (weapons_.at(id).type != slot)
+                fail("character {} weapon {} does not match its slot", record.keyid, id);
+    }
+    for (auto const &[id, state] : states_) {
+        character(id, "checkpoint state");
+        if (!std::isfinite(state.x) || !std::isfinite(state.y) || !std::isfinite(state.z) ||
+            !std::isfinite(state.body_yaw) || !std::isfinite(state.look_yaw) ||
+            !std::isfinite(state.look_pitch) || std::abs(state.look_yaw) > 85.0F ||
+            std::abs(state.look_pitch) > 89.0F)
+            fail("character {} has invalid saved pose", id);
+        if (state.patrol && id != session_.example)
+            fail("character {} is not the patrol example", id);
+        if (state.companion_order != CompanionOrder::None &&
+            state.companion_order != CompanionOrder::Follow &&
+            state.companion_order != CompanionOrder::Wait)
+            fail("character {} has an invalid companion order", id);
+        if (state.companion_order != CompanionOrder::None) {
+            auto const &party = parties_.at(characters_.at(id).party);
+            if (state.patrol || party.leader == 0 || !std::ranges::contains(party.members, id))
+                fail("character {} has an ineligible companion order", id);
+        }
     }
 }
 

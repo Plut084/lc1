@@ -1,0 +1,34 @@
+version: 2
+entry: request
+nodes:
+  - id: request
+    speaker: Talker
+    respondent: Target
+    text: "Hello, {target_name}. Do you have a moment?"
+    choices:
+      - id: accept
+        text: "Of course. How are you?"
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 10
+        next: reply
+      - id: decline
+        text: "Not now."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end
+  - id: reply
+    speaker: Talker
+    respondent: Target
+    text: "I am well. It is good to see you."
+    choices:
+      - id: goodbye
+        text: "You too. Take care."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end

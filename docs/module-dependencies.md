@@ -66,12 +66,17 @@ Vulkan 四层仍在同一个 `lc1_engine` 库内，并非四个独立库。`lc1`
 
 ```mermaid
 flowchart TB
-    app["Application<br/>输入转换与光标策略"] --> session["GameSession<br/>GameInput / GameLocation"]
+    app["Application<br/>事件轮询、路由更新与光标捕获"] --> session["GameSession<br/>动作解释 / GameLocation"]
+    session --> input["InputRouter 动作 / Window 指针状态"]
     session --> continent["Continent<br/>大陆、区域、地点、道路、碰撞"]
     session --> view["ContinentView<br/>地形与地点的绘制资源"]
     session --> character["Character<br/>角色姿态与碰撞移动"]
     session --> player["PlayerView<br/>视角模式与操作状态"]
     session --> ai["AiCharacterController<br/>简单往返移动"]
+    session --> dialogs["DialogSystem<br/>并发会话、NPC 发起与冷却"]
+    dialogs --> catalog["DialogCatalog<br/>YAML 内容与状态入口规则"]
+    dialogs --> dialog["Dialog<br/>双方台词与回答选择"]
+    dialog --> character
     session --> showcase["PbrShowcase<br/>游戏内 PBR 展示"]
     session --> assets["Image / Model<br/>GPU 资源与绘制数据"]
     player --> movement["FirstPersonCharacterController<br/>ThirdPersonCharacterController"]
@@ -110,7 +115,9 @@ flowchart TB
 | 队伍、阵营 | `game/party.hpp`、`game/faction.hpp`：草稿，未接入 |
 
 表中的 `game/` 文件对位于 `include/lc1/game/` 和 `src/game/`，具体扩展名为 `.hpp`／`.cpp`。
-`GameSession`、`PlayerView` 和角色控制器不读取 `Window` 或 `InputRouter`；输入接入由应用负责。
+应用轮询事件并更新 `InputRouter`，`GameSession` 读取动作并处理游戏操作和 UI/焦点门控。
+当前 `GameSession` 还借用 `Window` 取得指针状态和尺寸，并构建游戏内 ImGui 界面。
+`PlayerView` 和角色控制器只消费会话解析后的输入，不读取 `Window` 或 `InputRouter`。
 
 ## 3. 引擎基础、资源与场景
 

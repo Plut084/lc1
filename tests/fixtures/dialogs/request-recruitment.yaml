@@ -1,0 +1,34 @@
+version: 2
+entry: request
+nodes:
+  - id: request
+    speaker: Talker
+    respondent: Target
+    text: "{target_name}, may I join your party?"
+    choices:
+      - id: accept
+        text: "Yes, join us."
+        condition: CanBeRecruited
+        action: Recruit
+        recruiter: Target
+        npc_priority: 10
+        next: joined
+      - id: decline
+        text: "Not now."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end
+  - id: joined
+    speaker: Talker
+    respondent: Target
+    text: "Thank you. I am now a member of your party."
+    choices:
+      - id: goodbye
+        text: "Welcome aboard."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end

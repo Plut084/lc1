@@ -5,7 +5,7 @@
 #include "lc1/game/game-session.hpp"
 #include "lc1/game/save.hpp"
 
-#include "lc1/input.hpp"
+#include "lc1/game/input.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
@@ -28,7 +28,7 @@ struct ApplicationConfig {
 };
 
 // Owns platform/graphics lifetime, input routing and presentation. GameSession owns the local
-// prototype's gameplay state and in-session UI.
+// prototype's world, presentation and in-session UI through separate owners.
 class Application {
   public:
     explicit Application(ApplicationConfig const &config);

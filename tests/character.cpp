@@ -2,9 +2,9 @@
 #include "lc1/game/ai-character-controller.hpp"
 #include "lc1/game/continent.hpp"
 #include "lc1/game/faction.hpp"
+#include "lc1/game/input.hpp"
 #include "lc1/game/player-controller.hpp"
 #include "lc1/game/save.hpp"
-#include "lc1/input.hpp"
 #include "lc1/model.hpp"
 
 #include <algorithm>
@@ -160,10 +160,10 @@ void companion_orders()
                                     .equipment = {},
                                     .weapon = {}};
     };
-    lc1::Character leader{world, {.transform = {.position = {0, 0, 0}}}, config(1, party)};
-    lc1::Character member{world, {.transform = {.position = {-8, 0, 0}}}, config(2, party)};
-    lc1::Character captive{world, {.transform = {.position = {-6, 0, 0}}}, config(3, party)};
-    lc1::Character stranger{world, {.transform = {.position = {-4, 0, 0}}}, config(4, other)};
+    lc1::Character leader{world, {.position = {0, 0, 0}}, config(1, party)};
+    lc1::Character member{world, {.position = {-8, 0, 0}}, config(2, party)};
+    lc1::Character captive{world, {.position = {-6, 0, 0}}, config(3, party)};
+    lc1::Character stranger{world, {.position = {-4, 0, 0}}, config(4, other)};
     party.set_leader(&leader);
     party.add_member(&member);
     party.add_captive(&captive);
@@ -201,7 +201,7 @@ void companion_orders()
         member.update(world, 0.1F);
     check(member.on_ground(), "waiting members still land");
     party.command(leader, member, lc1::CompanionOrder::Follow);
-    lc1::Character far_leader{world, {.transform = {.position = {10, 0, 0}}}, config(5, party)};
+    lc1::Character far_leader{world, {.position = {10, 0, 0}}, config(5, party)};
     party.set_leader(&far_leader);
     for (int i = 0; i < 100; ++i)
         member.update(world, 0.1F);
@@ -261,12 +261,9 @@ void recruitment_dialog()
                                     .equipment = {},
                                     .weapon = {}};
     };
-    lc1::Character player{
-        world, {.transform = {.position = world.spawn()}}, config(1, "Player", party)};
-    lc1::Character npc{
-        world, {.transform = {.position = world.spawn()}}, config(2, "Recruit", party)};
-    lc1::Character stranger{
-        world, {.transform = {.position = world.spawn()}}, config(3, "Stranger", other)};
+    lc1::Character player{world, {.position = world.spawn()}, config(1, "Player", party)};
+    lc1::Character npc{world, {.position = world.spawn()}, config(2, "Recruit", party)};
+    lc1::Character stranger{world, {.position = world.spawn()}, config(3, "Stranger", other)};
     party.set_leader(&player);
     rejects([&] { party.add_member(&player); }, "the leader cannot also be an ordinary member");
     rejects([&] { party.add_captive(&player); }, "the leader cannot also be a captive");
@@ -363,8 +360,7 @@ void recruitment_dialog()
               !party.can_recruit(npc, stranger),
           "self, foreign leaders and nonleader recruiters cannot recruit");
 
-    lc1::Character outsider{
-        world, {.transform = {.position = world.spawn()}}, config(4, "Outsider", other)};
+    lc1::Character outsider{world, {.position = world.spawn()}, config(4, "Outsider", other)};
     other.add_member(&outsider);
     rejects([&] { other.set_leader(&outsider); }, "an ordinary member cannot also be the leader");
     check(party.can_recruit(player, outsider), "another party's ordinary member is eligible");
@@ -388,15 +384,14 @@ void recruitment_dialog()
               saved_npc.party == 1 && !saved_state.patrol && near(saved_state.x, npc.position().x),
           "serialization retains recruitment, a separate leader and the stopped patrol");
 
-    lc1::Character captive{
-        world, {.transform = {.position = world.spawn()}}, config(5, "Captive", other)};
+    lc1::Character captive{world, {.position = world.spawn()}, config(5, "Captive", other)};
     other.add_captive(&captive);
     rejects([&] { party.recruit(player, captive); }, "foreign captives cannot be recruited");
     check(captive.config().party == &other && other.captives().size() == 1 &&
               party.members().size() == 2,
           "a rejected transfer leaves both parties unchanged");
     lc1::Character reordered_recruit{
-        world, {.transform = {.position = world.spawn()}}, config(6, "New recruit", other)};
+        world, {.position = world.spawn()}, config(6, "New recruit", other)};
     other.add_member(&reordered_recruit);
     // Always does not bypass the action's own eligibility check.
     auto reordered_script = script;
@@ -429,9 +424,7 @@ void recruitment_dialog()
 void jumping()
 {
     auto const world = make_world();
-    auto make_character = [&] {
-        return lc1::Character{world, {.transform = {.position = world.spawn()}}, {}};
-    };
+    auto make_character = [&] { return lc1::Character{world, {.position = world.spawn()}, {}}; };
     auto character = make_character();
     check(character.on_ground(), "spawn starts grounded");
     character.request_jump();
@@ -481,14 +474,16 @@ void jumping()
     rejects([&] { character.update(world, std::numeric_limits<float>::quiet_NaN()); },
             "nonfinite update time is rejected");
 
-    lc1::FirstPersonCharacterController first_person{world};
     auto first = make_character();
-    first_person.update(0.01F, {.jumping = true}, first);
+    auto first_command = lc1::resolve_first_person_input(first, {}, {});
+    first_command.jumping = true;
+    lc1::apply_player_command(world, first, first_command, 0.01F);
     first.update(world, 0.01F);
     check(!first.on_ground(), "first-person controller requests jump");
-    lc1::ThirdPersonCharacterController third_person{world};
     auto third = make_character();
-    third_person.update(0.01F, {.jumping = true}, {0, 0, -1}, third);
+    auto third_command = lc1::resolve_third_person_input({}, {0, 0, -1});
+    third_command.jumping = true;
+    lc1::apply_player_command(world, third, third_command, 0.01F);
     third.update(world, 0.01F);
     check(!third.on_ground(), "third-person controller requests jump");
 }
@@ -496,7 +491,7 @@ void jumping()
 void pose_and_movement()
 {
     auto const world = make_world();
-    lc1::Character character{world, {.transform = {.position = world.spawn()}}, {}};
+    lc1::Character character{world, {.position = world.spawn()}, {}};
     check(near(character.position(), world.spawn()),
           "character starts at the supplied world spawn");
     check(near(character.body_heading(), {0, 0, -1}) &&
@@ -523,7 +518,7 @@ void pose_and_movement()
     check(near(character.eye_position(), character.position() + glm::vec3{0, 1.65F, 0}),
           "eye height stays relative to the resolved feet position");
 
-    lc1::Character walker{world, {.transform = {.position = world.spawn()}}, {}};
+    lc1::Character walker{world, {.position = world.spawn()}, {}};
     walker.set_look_angles(0, 89);
     walker.walk(world, walker.look_direction(), 0.1F, false);
     check(near(walker.position(),
@@ -532,10 +527,8 @@ void pose_and_movement()
     walker.walk(world, {0, 0, -1}, 0.1F, true);
     check(near(walker.position().y, 0), "running cannot make the ground character fly");
 
-    lc1::Character configured{world,
-                              {.transform = {.position = {0, 0, 0}}},
-                              {},
-                              {.eye_height = 1.2F, .walk_speed = 2.0F}};
+    lc1::Character configured{
+        world, {.position = {0, 0, 0}}, {}, {.eye_height = 1.2F, .walk_speed = 2.0F}};
     configured.walk(world, {0, 0, -0.5F}, 0.1F, false);
     check(near(configured.position(), {0, 0, -0.1F}) && near(configured.eye_position().y, 1.2F),
           "each character has its own dimensions and movement settings");
@@ -546,10 +539,9 @@ void pose_and_movement()
     rejects([&] { character.set_look_angles(std::numeric_limits<float>::quiet_NaN(), 0); },
             "non-finite look input is rejected");
     check(near(character.position(), before), "invalid input leaves position unchanged");
-    rejects([&] { (void)character.draw_item(); }, "headless simulation cannot emit a null draw");
-    rejects([&] { lc1::Character blocked{world, {.transform = {.position = {5, 0, 0}}}, {}}; },
+    rejects([&] { lc1::Character blocked{world, {.position = {5, 0, 0}}, {}}; },
             "obstructed character spawn is rejected");
-    rejects([&] { lc1::Character scaled{world, {.transform = {.scale = {2, 2, 2}}}, {}}; },
+    rejects([&] { lc1::Character scaled{world, {.scale = {2, 2, 2}}, {}}; },
             "visual unit correction cannot silently scale a collision body");
     rejects([&] { lc1::Character invalid{world, {}, {}, {.height = 0}}; },
             "invalid body configuration is rejected");
@@ -582,15 +574,15 @@ void height_and_support()
     check(!world.support_below({8.0F, 5.0F, 0.0F}, 1.0F),
           "support query does not snap to a surface farther below than requested");
 
-    lc1::Character walker{world, {.transform = {.position = {0.0F, 0.0F, 0.0F}}}, {}};
+    lc1::Character walker{world, {.position = {0.0F, 0.0F, 0.0F}}, {}};
     check(walker.on_ground() && near(walker.position().y, 0.0F),
           "character spawns on the sampled ground height");
 
-    lc1::Character slightly_above{world, {.transform = {.position = {0.0F, 0.2F, 0.0F}}}, {}};
+    lc1::Character slightly_above{world, {.position = {0.0F, 0.2F, 0.0F}}, {}};
     check(slightly_above.on_ground() && near(slightly_above.position().y, 0.0F),
           "spawn within step range snaps down to the support surface");
 
-    lc1::Character airborne{world, {.transform = {.position = {0.0F, 5.0F, 0.0F}}}, {}};
+    lc1::Character airborne{world, {.position = {0.0F, 5.0F, 0.0F}}, {}};
     check(!airborne.on_ground() && near(airborne.position().y, 5.0F),
           "spawning in the air is allowed and does not fail construction");
     for (int frame = 0; frame < 300; ++frame)
@@ -617,7 +609,7 @@ void height_and_support()
     platform_data.blocks.push_back(
         {{0.0F, 0.0F, -5.0F}, {10.0F, 3.0F, 5.0F}, lc1::ContinentSurface::Stone, true, true});
     lc1::Continent const platform_world{std::move(platform_data)};
-    lc1::Character on_platform{platform_world, {.transform = {.position = {5.0F, 3.0F, 0.0F}}}, {}};
+    lc1::Character on_platform{platform_world, {.position = {5.0F, 3.0F, 0.0F}}, {}};
     check(on_platform.on_ground() && near(on_platform.position().y, 3.0F),
           "character can spawn on a walkable block top");
     auto const beneath = platform_world.support_below({5.0F, 3.0F, 0.0F}, 0.1F);
@@ -636,30 +628,34 @@ void height_and_support()
 void player_controllers()
 {
     auto const world = make_world();
-    lc1::FirstPersonCharacterController const first_person{world};
-    lc1::ThirdPersonCharacterController const third_person{world};
-    lc1::Character character{world, {.transform = {.position = world.spawn()}}, {}};
-    first_person.update(0.1F, {.movement = {0, 1}, .look_delta = {1800, -1200}}, character);
+    lc1::Character character{world, {.position = world.spawn()}, {}};
+    lc1::apply_player_command(
+        world, character, lc1::resolve_first_person_input(character, {0, 1}, {1800, -1200}), 0.1F);
     check(near(character.position(), world.spawn() + glm::vec3{0.45F, 0, 0}),
           "first-person movement follows mouse yaw but stays horizontal at high pitch");
     check(near(character.body_heading(), {1, 0, 0}) && near(character.look_pitch(), 60),
           "mouse right turns right and mouse up looks up");
     auto const facing = character.body_heading();
-    first_person.update(0.1F, {.movement = {0, -1}}, character);
+    lc1::apply_player_command(world, character,
+                              lc1::resolve_first_person_input(character, {0, -1}, {}), 0.1F);
     check(near(character.position(), world.spawn()) && near(character.body_heading(), facing),
           "walking backward does not turn the character around");
-    first_person.update(0.1F, {.movement = {1, 0}}, character);
+    lc1::apply_player_command(world, character,
+                              lc1::resolve_first_person_input(character, {1, 0}, {}), 0.1F);
     check(near(character.position(), world.spawn() + glm::vec3{0, 0, 0.45F}),
           "first-person strafe uses the horizontal right vector");
     auto const before = character.position();
-    third_person.update(0.1F, {.movement = {0, 1}}, {0, -2, -4}, character);
+    lc1::apply_player_command(world, character,
+                              lc1::resolve_third_person_input({0, 1}, {0, -2, -4}), 0.1F);
     check(near(character.position(), before + glm::vec3{0, 0, -0.45F}) &&
               near(character.body_heading(), {0, 0, -1}),
           "switching controllers moves the same character using the new camera basis");
     check(near(character.look_pitch(), 0), "third-person movement restores a level look target");
     auto const stopped = character.position();
-    first_person.update(0.1F, {}, character);
-    third_person.update(0.1F, {}, {0, 0, -1}, character);
+    lc1::apply_player_command(world, character, lc1::resolve_first_person_input(character, {}, {}),
+                              0.1F);
+    lc1::apply_player_command(world, character, lc1::resolve_third_person_input({}, {0, 0, -1}),
+                              0.1F);
     check(near(character.position(), stopped),
           "neutral input from the UI/focus gate does not move");
 }

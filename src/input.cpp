@@ -3,8 +3,10 @@
 namespace lc1 {
 namespace {
 
-constexpr std::size_t index_of(Key key) { return static_cast<std::size_t>(key); }
-constexpr std::size_t index_of(Action action) { return static_cast<std::size_t>(action); }
+constexpr std::size_t index_of(Key key)
+{
+    return static_cast<std::size_t>(key);
+}
 
 } // namespace
 
@@ -78,63 +80,6 @@ void InputState::release_all()
         down_[index] = false;
         released_[index] = true;
     }
-}
-
-InputRouter::InputRouter(std::span<Binding const> bindings, InputContext initial_context)
-    : bindings_(bindings.begin(), bindings.end()), stack_{initial_context}
-{
-}
-
-void InputRouter::push(InputContext context)
-{
-    stack_.push_back(context);
-}
-
-void InputRouter::pop()
-{
-    if (stack_.size() > 1)
-        stack_.pop_back();
-}
-
-bool InputRouter::flag(std::array<bool, action_count> const &flags, Action action)
-{
-    auto const index = index_of(action);
-    return index < action_count && flags[index];
-}
-
-void InputRouter::update(InputState const &input)
-{
-    held_.fill(false);
-    pressed_.fill(false);
-    released_.fill(false);
-
-    auto const context = active_context();
-    for (auto const &binding : bindings_) {
-        if (binding.context != context)
-            continue;
-
-        // Several keys may share one action -- W and Up both mean MoveForward -- so the
-        // action is whatever any of them says.
-        auto const index = index_of(binding.action);
-        if (index >= action_count)
-            continue;
-
-        held_[index] = held_[index] || input.down(binding.key);
-        pressed_[index] = pressed_[index] || input.pressed(binding.key);
-        released_[index] = released_[index] || input.released(binding.key);
-    }
-
-    // A release only counts when the action actually ended. Without this, letting go of one
-    // of two keys bound to the same action reports "released" while the other still holds
-    // it, and a consumer that starts something on pressed() and finishes it on released()
-    // stops half-way.
-    //
-    // pressed() needs no mask in the other direction. Reporting a second key's press while
-    // the action is already held is harmless, and suppressing it would mean asking whether
-    // the action was held *before* this frame -- state that would make update() depend on
-    // how many times it has been called, which is exactly what it must not do.
-    for (std::size_t index = 0; index < action_count; ++index)
-        released_[index] = released_[index] && !held_[index];
 }
 
 } // namespace lc1

@@ -100,7 +100,7 @@ SerializedParty serialize_party(Party const &party);
 // The saved world as data: one directory of YAML files, decoded once and checked for
 // duplicate ids and dangling references. The session file names the player, so no character
 // keyid is special to the game code. Save owns no runtime object, so it can be loaded
-// without a device, a continent or a window, and the world that GameSession builds from it
+// without a device, a continent or a window, and the world that GameWorld builds from it
 // borrows nothing back.
 class Save {
   public:

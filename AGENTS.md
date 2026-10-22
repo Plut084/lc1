@@ -46,10 +46,10 @@ Read the linked documents when working on their subsystem.
   from that replica and does not communicate with the server. Client commands request actions;
   the server validates them and publishes resulting state. This network architecture is a future
   direction, not implemented yet; do not add speculative routing or placeholder network classes.
-- The current `GameSession` is a local prototype that combines gameplay updates with client-side
-  presentation resources and frame data. It is neither the future authoritative `GameMode` nor a
-  networked client-state replica. Keep this interim status explicit when changing it; extract
-  server-suitable rules from rendering/window/UI dependencies when server functionality is scoped.
+- `GameSession` coordinates the local prototype through `GameWorld`, `WorldView`, `PlayerView`,
+  `GameUi` and `MusicBrowser`. `GameWorld` owns local rules/state without window, UI, audio or GPU
+  dependencies. These are neither an authoritative server `GameMode` nor a networked client-state
+  replica; keep that interim status explicit and add server functionality only when scoped.
 - Countryside, cities and combat share one traversable scale and WASD movement. Default view is
   fixed oblique perspective (Don't Starve / Red Alert style), visible cursor, vertical FOV 45°;
   wheel zoom moves the camera along its viewing direction. Loading strategy is undecided.
@@ -148,15 +148,18 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   Presentation/render may also use core but never depend on each other. Core has no Window,
   scene or game dependency. See [Vulkan layers](docs/vulkan-layers.md).
 - `main` owns process setup and exception handling. `Application` owns window/Vulkan lifetime,
-  input routing, cursor capture, titles, swapchain recreation and scheduling. `Application` also
-  owns the loaded `Save` (world data) as a peer of `GameSession`; `GameSession` consumes it once to
-  build its runtime world and keeps no reference to it. `GameSession` owns
-  world/resources/player/lighting and reads `InputRouter` actions; `PlayerView` owns view modes and
-  remembered look. Application polls Window events and updates InputRouter; the client-side
-  GameSession interprets actions, gates controls by focus/context/ImGui capture, and creates
-  PlayerInput/MapCameraInput for its controllers. It also reads Window's pointer state/dimensions
-  and builds in-game ImGui/music UI; this is an implementation detail of the local prototype, not a server
-  boundary. Keep `Application` responsible for window lifecycle, input routing and ImGui backend.
+  input routing, cursor capture, titles, swapchain recreation, scheduling and the loaded `Save`.
+  `GameSession` coordinates the local session and gates resolved input by focus/context/ImGui capture.
+  Its `GameWorld` consumes Save once and owns continent/entities/dialogs, world assembly, rules and
+  snapshots, retaining no Save borrow. `WorldView` borrows the world and owns GPU resources,
+  lighting, labels and the audio context/listener. `GameUi` builds menus/debug/HUD and returns requests;
+  `MusicBrowser` owns music browsing/playback and borrows the view's audio context.
+  `PlayerView` owns view modes/remembered look and resolves world-space player commands without
+  mutating characters. `GameWorld::update` applies those commands before physics; update the camera
+  afterward. Menus gate player controls and release cursor capture while simulation continues. Simulation uses one finite, non-negative, at-most-0.1-second delta per frame.
+  Keep cursor capture before reading mouse deltas and ImGui backend/window lifecycle in Application.
+  Within the session, world precedes view/controllers, and view precedes music; borrows must not
+  outlive these owners. The fixed roster is ordered by keyid, with followers updated after leaders.
 - `Window`/`input.hpp` include no Vulkan headers; input also includes no GLFW headers. `Surface`
   bridges GLFW and Vulkan. Device borrows a raw surface only during selection, storing no Window
   or Surface; Swapchain borrows Surface and receives an explicit extent. Window sizes use
@@ -186,12 +189,14 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   path const&) -> T`. Meshes still have a separate cache. GpuTexture uploads CPU Image data;
   it is not a file-loading Resource, and ResourceManager must not depend on Renderer.
 - Resource IDs are normalized relative to the supplied asset root; reject absolute IDs and lexical
-  escapes. Symlink aliases are not deduplicated. No individual eviction/reference counting:
-  stop using borrows and wait for GPU completion before destroying the manager.
-- Character's Object transform is its sole world pose: feet origin, upright/unit scale, body yaw
+  escapes. Symlink aliases are not deduplicated. Individual unloading invalidates that resource's
+  borrows; there is no reference counting. Stop using affected borrows and wait for their GPU uses
+  to complete before unloading a resource or destroying the manager.
+- Character's `scene::Transform` is its sole world pose: feet origin, upright/unit scale, body yaw
   about +Y with zero facing −Z, look relative to body. `move`/`walk` resolve horizontal collision
   without changing facing. Controllers consume resolved input and borrow world/character;
-  Character owns no camera/window/router. See [character and import correction](docs/character.md).
+  Character owns no camera/window/router or render resources; WorldView derives draws from its pose.
+  See [character and import correction](docs/character.md).
 
 ## Vulkan dispatch and synchronization
 
@@ -265,8 +270,9 @@ The following frame-loop invariants must survive refactoring:
 
 ## Input contracts
 
-- Window owns raw `InputState`; data-driven `Binding` rows in `src/input.cpp` map `Key` (including
-  mouse buttons) to `Action`; `InputRouter` resolves only the top context. Game code asks for actions.
+- Window owns raw `InputState`; game-owned `Binding` rows in `src/game/input.cpp` map `Key`
+  (including mouse buttons) to game-owned `Action`. Engine `BasicInputRouter` resolves only the top
+  context; game `InputRouter` is its typed alias. Game code asks for actions.
   `Ui` intentionally binds nothing and gates gameplay. Window interprets no keys; ESC is app policy.
 - `poll_events()` calls `begin_frame()` before pumping GLFW; `wait_events()` is not a frame boundary.
   Drop `GLFW_REPEAT` for game actions. Focus loss releases all held keys; capture changes, focus

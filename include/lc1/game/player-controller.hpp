@@ -1,41 +1,30 @@
 #pragma once
 
+#include <cstdint>
 #include <glm/glm.hpp>
+#include <optional>
 
 namespace lc1 {
-
 class Continent;
 class Character;
 
-// Resolved controller input. GameSession supplies zero input when UI/focus/context gates it.
-struct PlayerInput {
-    glm::vec2 movement{};   // x: right, y: forward.
-    glm::vec2 look_delta{}; // Cursor motion, supplied only while mouse look is enabled.
+// World-space control intent. No camera, window, or device dependencies.
+struct PlayerCommand {
+    glm::vec3 direction{};
+    std::optional<float> body_yaw = std::nullopt;
+    std::optional<glm::vec2> look_angles = std::nullopt;
+    // Optional horizontal aim for interactions; otherwise use the resolved body heading.
+    std::optional<glm::vec3> interaction_direction = std::nullopt;
     bool running = false;
     bool jumping = false;
-    bool interacting = false;
-    std::int32_t dialog_response_index = -1; // -1 means no response selected.
+    bool face_movement = true;
 };
 
-class FirstPersonCharacterController {
-  public:
-    explicit FirstPersonCharacterController(Continent const &continent) : continent_(&continent) {}
-
-    void update(float delta_seconds, PlayerInput const &input, Character &character) const;
-
-  private:
-    Continent const *continent_; // Borrowed; the world outlives this controller.
-};
-
-class ThirdPersonCharacterController {
-  public:
-    explicit ThirdPersonCharacterController(Continent const &continent) : continent_(&continent) {}
-
-    void update(float delta_seconds, PlayerInput const &input, glm::vec3 view_heading,
-                Character &character) const;
-
-  private:
-    Continent const *continent_; // Borrowed; the world outlives this controller.
-};
-
+PlayerCommand resolve_first_person_input(Character const &character, glm::vec2 movement,
+                                         glm::vec2 look_delta,
+                                         std::optional<glm::vec2> restored_angles = {});
+PlayerCommand resolve_third_person_input(glm::vec2 movement, glm::vec3 view_heading);
+// GameWorld applies control before advancing physics, using its capped simulation time.
+void apply_player_command(Continent const &continent, Character &character,
+                          PlayerCommand const &command, float delta_seconds);
 } // namespace lc1

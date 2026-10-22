@@ -67,16 +67,12 @@ struct World {
     lc1::Faction faction{1, "Faction"};
     lc1::Party party{1, &faction};
     lc1::Party other{2, &faction};
-    lc1::Character player{
-        continent, {.transform = {.position = continent.spawn()}}, config(1, "Player", party)};
-    lc1::Character captive{
-        continent, {.transform = {.position = continent.spawn()}}, config(2, "Captive", party)};
-    lc1::Character leader{
-        continent, {.transform = {.position = continent.spawn()}}, config(3, "Leader", other)};
-    lc1::Character worker{
-        continent, {.transform = {.position = continent.spawn()}}, config(4, "Worker", other)};
+    lc1::Character player{continent, {.position = continent.spawn()}, config(1, "Player", party)};
+    lc1::Character captive{continent, {.position = continent.spawn()}, config(2, "Captive", party)};
+    lc1::Character leader{continent, {.position = continent.spawn()}, config(3, "Leader", other)};
+    lc1::Character worker{continent, {.position = continent.spawn()}, config(4, "Worker", other)};
     lc1::Character passerby{
-        continent, {.transform = {.position = continent.spawn()}}, config(5, "Passerby", other)};
+        continent, {.position = continent.spawn()}, config(5, "Passerby", other)};
 
     World()
     {
@@ -408,8 +404,8 @@ void benchmark(std::filesystem::path const &path)
     for (std::uint32_t i = 0; i < 512; ++i) {
         characters.push_back(std::make_unique<lc1::Character>(
             continent,
-            lc1::scene::Object{.transform = {.position = {static_cast<float>(i % 32) * 10.0F, 0.0F,
-                                                          static_cast<float>(i / 32) * 10.0F}}},
+            lc1::scene::Transform{.position = {static_cast<float>(i % 32) * 10.0F, 0.0F,
+                                               static_cast<float>(i / 32) * 10.0F}},
             config(i + 1, "NPC", party)));
         roster.push_back(characters.back().get());
     }

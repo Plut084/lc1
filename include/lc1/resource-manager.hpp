@@ -33,9 +33,10 @@ concept HasLoadFromFile = requires(Device const &device, std::filesystem::path c
 };
 
 // Scene-scoped, exclusive resource ownership. Returned references/pointers remain
-// valid until destruction, even when more resources are loaded. No individual
-// eviction: stop using all borrowers and wait for the GPU before destroying this
-// manager. Device must outlive it. Use from the render thread only.
+// valid until that resource is unloaded or the manager is destroyed; loading more
+// resources does not invalidate them. Before unloading or destroying resources,
+// callers must stop using their borrows and wait for GPU uses to complete.
+// Device must outlive this manager. Use from the render thread only.
 class ResourceManager {
   public:
     ResourceManager(Device const &device, std::filesystem::path const &asset_root);

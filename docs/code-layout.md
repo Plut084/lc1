@@ -14,45 +14,73 @@
 `vk/` 内部分为 `core`、`resources`、`presentation`、`render`；呈现与渲染各自依赖底层
 资源，由应用组合。目录职责与依赖约定见 [Vulkan 代码分层](vulkan-layers.md)。
 
-`Character` 的声明位于 `lc1/game/character.hpp`，使用 `lc1::Character`。它依赖大陆的
-出生点和碰撞规则，并组合 `scene::Object` 保存唯一的世界变换与外观引用。场景层不负责角色规则。
-`Party` 位于 `lc1/game/party.hpp`，管理队伍成员、招募转移与队长命令；`Character` 保存跟随／等待命令并沿用地面碰撞移动。当前原型流程见
-[对话与招募](dialog.md)。`DialogCatalog` 拥有多份 YAML 内容和状态入口规则，
-`Dialog` 表示一场双向交流，`DialogSystem` 管理并发会话、NPC 发起与冷却；
-三者均不依赖窗口或渲染。`GameSession` 负责输入接入、控制器暂停与文字呈现。
+## 本地会话的职责
 
-## 游戏会话与窗口的接口
+`GameSession` 是本地原型的协调者，不是服务器 `GameMode`，也不是网络复制状态。
+它组合以下对象；当前仍编入 `lc1_game`，没有增加网络占位层。
 
-`GameSession` 是客户端本地游戏会话，持有大陆、角色、相机和场景资源，读取 `InputRouter`
-的动作状态，提供相机、绘制列表、灯光、曝光及 `GameLocation`。`Application` 轮询窗口事件、
-更新 `InputRouter`，并负责退出策略和光标捕获。会话根据焦点、输入上下文和 ImGui 捕获状态限制
-游戏操作，在内部生成 `PlayerInput`／`MapCameraInput` 交给控制器；不再需要 `GameInput` 中转。
+| 对象 | 职责与边界 |
+|---|---|
+| `GameWorld` | 拥有大陆、势力、装备、武器、队伍、角色和 `DialogSystem`；装配世界、推进规则、生成存档快照；不依赖 Window、ImGui、音频或 Vulkan |
+| `WorldView` | 借用只读世界，拥有地形/角色 GPU 资源、字体、展示场景、灯光与音频 context/listener；生成绘制项和世界文字 |
+| `PlayerView` | 拥有视角模式、记忆观察角和相机；生成世界空间控制意图，世界更新后再更新相机 |
+| `GameUi` | 菜单、调试面板、保存反馈及屏幕文字；返回保存请求和音量变化，由会话执行 |
+| `MusicBrowser` | 音乐目录、文件浏览 UI、播放状态与音源；借用 `WorldView` 的音频 context |
+| `GameSession` | 读取输入、按焦点/context/ImGui capture 门控、协调各阶段，并向 Application 转交保存请求和表现数据 |
 
-当前本地原型中的 `GameSession` 还借用 `Window`，读取指针状态和尺寸，并布局屏幕文字和调试面板，
-并直接构建游戏内 ImGui 菜单与音乐浏览器。ImGui Vulkan 后端、窗口生命周期和输入路由仍由
-`Application` 管理。这是当前原型的集成边界，不代表未来服务器拥有 UI/窗口依赖；客户端/服务端
-目标边界见 `AGENTS.md` 的 Project and gameplay 约定。
+`Character` 位于 `game/character.*`，内部唯一的 `scene::Transform` 保存脚底位置和身体朝向。
+它不持有网格或材质，也不生成 `DrawItem`；`Party` 同样只处理成员、招募和命令，不负责绘制。
+`WorldView::draws()` 从角色变换生成本帧绘制项，玩家是角色集合的一员，不重复追加。
+Application 通过 `GameSession::world()`、`world_view()`、`player_view()` 和 `ui()` 的只读引用
+查询各自的数据；引用有效期不超过会话。会话保留更新协调、保存请求、保存反馈和宽高比设置入口，
+不为每个子对象查询重复提供转发方法。
 
-`GameLocation` 中的字符串视图借用会话中的大陆数据或静态名称，不能超过会话的生命周期。
+角色当前共用占位网格/材质。`scene::Object` 仍可用于其他渲染场景，不再是角色世界姿态的所有者。
 
-`GameSession::draws()` 每次从地形、展示物和角色集合生成本帧的绘制列表；玩家也在角色
-集合中，不额外追加。会话不保存需要手动同步的汇总列表或绘制下标。应用将返回的
-`vector<DrawItem>` 保存在帧录制回调内，直到 `RenderGraph::execute()` 返回，保证
-各 pass 借用的 draw span 有效。
+`DialogCatalog` 拥有 YAML 内容和状态入口规则，`Dialog` 表示一场交流，`DialogSystem` 管理
+并发会话、NPC 发起和冷却。`GameWorld` 负责对话参与者注册、控制器暂停及交互动作执行；
+`WorldView` 和 `GameUi` 只读这些状态来生成世界/屏幕文字。详见[对话与招募](dialog.md)。
 
-`GameSession` 将动作转换为角色移动、相机操作和调试命令。
-每帧先调用 `GameSession::update_view_mode(router)`，由会话判断是否切换视角；再由应用设置
-光标捕获，最后调用 `GameSession::update(router, delta_seconds)` 读取鼠标增量并更新游戏。
-捕获状态变化会重置鼠标基线，提前读取增量会使第一人称视角跳动。
-窗口标题由应用根据游戏位置和灯光状态拼接并设置。
+## 每帧时序
 
-游戏层可以使用引擎的 GPU 资源；这不表示所有游戏类都需要 GPU。
-角色、大陆、控制器等规则仍可独立运行 CPU 测试。设备和 Renderer 必须比 GameSession 长寿，
-帧资源在会话之后创建、之前销毁；退出或异常时由 Application 先等待 GPU 完成。
+Application 轮询事件、更新 `InputRouter`、开始 ImGui 帧，然后：
+
+1. 调用 `GameSession::update_view_mode()`；会话判断是否切换视角。
+2. Application 应用光标捕获。捕获变化会重置鼠标基线，必须先于鼠标增量读取。
+3. `GameSession::update()` 解析输入门控、交互和表现操作。
+4. `PlayerView::resolve_input()` 直接读取游戏动作，并从只读角色和视角信息生成 `PlayerCommand`，不修改角色。
+5. `GameWorld::update()` 应用玩家命令、推进角色物理/AI，再处理交互和对话。
+6. `PlayerView::update_pointer()` 在鼠标门控允许时读取设备滚轮与逻辑光标坐标，
+   解析边缘平移；`update_camera()` 读取最终姿态；`WorldView::update()` 更新灯光、展示和监听位置。
+7. `GameUi::update()` 构建 UI 并返回开始、退出、保存及音量请求；会话接通开始操作，
+   Application 执行保存和退出。主菜单/设置屏蔽玩法输入，世界继续模拟；返回主菜单会释放光标。
+   菜单切换后的玩法门控在下一帧生效，光标捕获在本帧 UI 更新后同步。
+
+模拟时间要求有限且非负，每帧最多推进 0.1 秒；角色、对话、相机和展示使用同一份时间。
+当前没有固定步长或追赶长帧。角色名单按 keyid 排序，非跟随者先更新、跟随者后更新，
+避免依赖 `unordered_map` 遍历顺序，也让跟随者读取本帧队长的位置。
+
+## 生命周期与资源
+
+Application 仍负责窗口/Vulkan 生命周期、输入路由、光标捕获、交换链和 ImGui 后端。
+它拥有 `Save` 与 `GameSession`；`GameWorld` 构造时消费 Save，不保留借用。
+世界可以只用 Save、大陆和对话目录构造、更新、生成快照，无需创建窗口或设备。
+
+会话成员按 `GameWorld → WorldView → PlayerView → MusicBrowser → GameUi` 构造并逆序销毁。
+世界先于借用它的表现与控制器存在，音频 context 先于音源存在。`GameWorld` 在销毁角色前
+清空活动对话；当前角色名单固定，不支持运行期添加/删除，新增该能力时需同步维护名单和借用。
+`GameSession`、`GameWorld`、`WorldView` 和 `MusicBrowser` 禁止复制/移动。
+
+Application 在正常/异常退出时先等 GPU 完成。`DrawItem` 借用 WorldView 的资源；录制回调持有
+本帧 `vector<DrawItem>` 直到 `RenderGraph::execute()` 返回。设备和 Renderer 比会话长寿，
+FrameLoop 的帧资源在会话之后构造、之前销毁。`GameLocation` 的字符串视图借用世界或静态名称。
 
 ## 构建与验证
 
-游戏 CPU 测试链接 `lc1_game`，纯渲染测试链接 `lc1_engine`；PBR 集成测试使用游戏库里的展示代码，
-不再直接编译或包含 `app/` 下的文件。两个库共用公开头文件根目录，构建目标分离并不隔离头文件可见性；
-仍需避免在引擎实现中引用游戏层。
-现有 `InputRouter` 的动作枚举和默认绑定尚未通用化，此次没有扩大到输入系统重设计。
+游戏规则和表现目前仍在同一个 `lc1_game` 静态库中；这次隔离的是源码依赖与运行期构造，
+未声称已提供无图形依赖的独立构建目标。引擎不得包含游戏头文件，app/game 不包含引擎私有实现。
+
+`lc1_game_world_tests` 覆盖无窗口世界装配、交互招募、跟随、存档恢复、统一时间以及
+玩家控制 → 物理 → 相机的时序。原有大陆、角色、对话和视角 CPU 测试继续运行。
+GPU 渲染和窗口交互需要单独验证。动作枚举、context、默认绑定属于 `game/input.*`；
+引擎只保留设备状态和模板路由。`lc1_input_tests` 使用自定义动作/context 验证通用路由。

@@ -1,12 +1,12 @@
-# Native Windows x86_64 with Visual Studio 2022 (MSVC 19.4x).
-# Activate the x64 developer environment before configuring with Ninja.
+# Native Windows x86_64 project settings for MSVC.
+# Compose after a local detected profile to retain the installed compiler version.
+# Activate the matching x64 developer environment before detecting and building.
 # This is separate from profiles/mingw64, which cross-compiles from Linux.
 
 [settings]
 arch=x86_64
 os=Windows
 compiler=msvc
-compiler.version=194
 compiler.cppstd=23
 compiler.runtime=dynamic
 build_type=Debug

@@ -74,7 +74,9 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
   Do not share a CMake cache across toolchains.
 - Make supports `linux-x86_64` → `profiles/linux` (Clang 22), and `windows-x86_64` →
   `profiles/mingw64` (cross GCC). Its build profile is `default`. Additional CI profiles are
-  `profiles/linux-gcc` (GCC 16) and `profiles/windows` (MSVC 19.4x); see [CI](docs/ci.md).
+  `profiles/linux-gcc` (GCC 16) and `profiles/windows-ci` (MSVC 19.4x); see [CI](docs/ci.md).
+  Local native Windows builds compose a detected MSVC profile with `profiles/windows`;
+  the installed compiler version is not pinned by the project settings.
 - Manual native Debug build:
   `conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug`,
   then `cmake --preset linux-x86_64-debug` and `cmake --build --preset linux-x86_64-debug`.

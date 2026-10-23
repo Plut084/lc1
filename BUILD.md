@@ -23,9 +23,11 @@ builds on Windows. Run commands from the repository root unless stated otherwise
 | Default Linux build | `profiles/linux` | Clang 22 with libstdc++ |
 | Linux GCC build | `profiles/linux-gcc` | GCC 16 |
 | Linux → Windows | `profiles/mingw64` | MinGW-w64 GCC 16 with `x86_64-w64-mingw32-*` tools |
-| Native Windows build | `profiles/windows` | Visual Studio 2022, MSVC 19.4x, x64 developer environment |
+| Native Windows build | Local detected profile + `profiles/windows` | Installed MSVC with C++23 support, x64 developer environment |
 
-The installed toolchain must match the version declared in its profile. The Clang
+The installed toolchain must match the version declared in its profile. Native
+Windows builds detect the local compiler version; CI pins MSVC 19.4x separately
+in `profiles/windows-ci`. The Clang
 profile uses the system libstdc++, so its development files must also provide the
 required C++23 support. Building dependencies from source may require system
 development packages, Autoconf, Automake, Libtool, and pkg-config. See the
@@ -180,13 +182,20 @@ LC1_NO_VALIDATION=1 make run PLATFORM=windows-x86_64
 
 ### Native Windows with MSVC
 
-Run these commands in a Visual Studio 2022 x64 developer command prompt with
-Python, Conan, CMake, Ninja, and Windows Slang on `PATH`. Supply assets separately;
-the empty directory below only satisfies the build step.
+Run these commands in the x64 developer command prompt for your installed Visual
+Studio or Build Tools, with Python, Conan, CMake, Ninja, and Windows Slang on `PATH`.
+Reuse your existing `default` Conan profile. If it does not exist, run
+`conan profile detect` in this developer prompt first. Review it with
+`conan profile show -pr:a default`.
+The detected compiler must be MSVC and provide the C++23 features used by the project;
+other versions have not been validated by the Windows CI configuration. If you change
+toolchains, update your profile to match the active toolchain and move the old
+build tree aside before reinstalling dependencies.
+Supply assets separately; the empty directory below only satisfies the build step.
 
 ```bat
 if not exist runtime\assets mkdir runtime\assets
-conan install . -pr:h profiles/windows -pr:b profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
+conan install . -pr:a default -pr:a ./profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
 cmake --preset windows-x86_64-debug
 cmake --build --preset windows-x86_64-debug
 cd build\windows-x86_64\Debug

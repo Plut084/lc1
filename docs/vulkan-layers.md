@@ -52,8 +52,8 @@ flowchart TD
 曝光和输出编码策略单独放在 `render/output-settings.hpp`。
 
 应用的帧录制回调创建当帧 `RenderGraph`。`Renderer::add_passes()` 接收 `RayQueryShadows`
-注册的四个阴影节点，再注册 HDR 光照和色调映射，应用最后追加 ImGui overlay。
-离屏调用可用 `Renderer::record()` 创建并执行六个场景节点。图验证逻辑资源依赖并同步执行
+注册的四个阴影节点，再注册 HDR 光照、色调映射和 UI text，应用最后追加 ImGui overlay。
+离屏调用可用 `Renderer::record()` 创建并执行七个场景节点（包括 UI text）。图验证逻辑资源依赖并同步执行
 录制回调；图不拥有图片，也不接管 pass 内的 Vulkan 屏障或呈现层的 acquire／submit／present。
 回调随本次录制结束销毁，不在 Renderer 成员中保存帧槽、相机或目标的借用。
 资源版本、历史和验证约定见 [RenderGraph](render-graph.md)。

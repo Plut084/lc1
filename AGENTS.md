@@ -26,63 +26,29 @@ Read the linked documents when working on their subsystem.
 
 ## Project and gameplay
 
-- C++23, raw Vulkan 1.4 through `vulkan-hpp`/`vk::raii`, VMA via VMA-Hpp, GLFW and Slang.
-  No third-party rendering abstraction (bgfx, SDL_GPU, Diligent, wgpu, The-Forge), no volk.
-  Target desktop Linux first and Windows; macOS/consoles require revisiting the stack.
-- The renderer supports textured meshes, per-frame/per-draw descriptors, PBR/HDR, ray-query shadows
-  and resize handling. The walking prototype has tiled terrain, full-scale cities and collision.
-  Progression, combat, NPC pathfinding and persistent city simulation remain unimplemented.
-- Default world: `Continent::make_present()`, a 6144 × 4096 metre outline with the starter city,
-  village and south bay. `make_prototype()` remains the all-biome, six-location test fixture.
-- Genre: RPG / strategy sandbox / RTS, with an immersive story-driven main line. Core loop:
-  collect resources → build army → attack cities → upgrade army → attack stronger cities.
-- Progression, combat and map systems each span 局内/局外 gameplay states. City building is one
-  shared system for economic production and combat defenses/deployment. Each soldier owns their
-  equipment. These distinctions do not imply separate maps, scales or cameras.
-- Long-term architecture separates an authoritative server from the client. Server `GameMode`
-  owns and advances authoritative gameplay rules/state; `GameClient` owns server communication;
-  client `ClientGameState` is a local replica containing only data needed for presentation and
-  permitted prediction. `GameModeView` (or equivalent presentation code) derives UI/render data
-  from that replica and does not communicate with the server. Client commands request actions;
-  the server validates them and publishes resulting state. This network architecture is a future
-  direction, not implemented yet; do not add speculative routing or placeholder network classes.
-- `GameSession` coordinates the local prototype through `GameWorld`, `WorldView`, `PlayerView`,
-  `GameUi` and `MusicBrowser`. `GameWorld` owns local rules/state without window, UI, audio or GPU
-  dependencies. These are neither an authoritative server `GameMode` nor a networked client-state
-  replica; keep that interim status explicit and add server functionality only when scoped.
-- Countryside, cities and combat share one traversable scale and WASD movement. Default view is
-  fixed oblique perspective (Don't Starve / Red Alert style), visible cursor, vertical FOV 45°;
-  wheel zoom moves the camera along its viewing direction. Loading strategy is undecided.
-- `PlayerView`: M switches oblique/first-person using the same player and collision. First-person
-  captures the cursor; returning releases it and recenters, preserving zoom and Y follow lock.
-  Y toggles follow; unlocked edge pan moves independently. Space recenters; holding temporarily
-  follows without changing the lock. Both views use the single `Gameplay` input context.
+- C++23, raw Vulkan 1.4 through vulkan-hpp/vk::raii, VMA-Hpp, GLFW and Slang.
+  No third-party rendering abstraction or volk. Target desktop Linux first and Windows.
+- Gameplay constraints and goals: [core systems](docs/content.md). Keep one traversable scale
+  across countryside, cities and combat; city building is shared by economy and defense, and
+  each soldier owns equipment. 局内/局外 are gameplay states, not separate maps or cameras.
+- Current local ownership and update order: [code boundaries](docs/code-layout.md).
+  GameWorld has no window, UI, audio or GPU dependency. Do not add speculative networking classes;
+  the authoritative server/client split remains a future direction.
+- Map and camera behavior: [continent](docs/continent.md), [world map](docs/world-map.md).
+  Preserve shared player/collision between views and the single Gameplay input context.
 
 ## Build and dependencies
 
-```sh
-make                                      # Linux Clang Debug: install, configure, build
-make run                                  # Build and run with the correct environment/cwd
-make run-gdb                              # Linux debugger
-make build PLATFORM=windows-x86_64 BUILD_TYPE=Release
-make deps PLATFORM=windows-x86_64          # Conan install only
-ctest --test-dir build/linux-x86_64/Debug --output-on-failure
-```
+Use [BUILD.md](BUILD.md) for commands and prerequisites, [CI](docs/ci.md) for remote jobs,
+and [environment notes](docs/development-environment.md) for local troubleshooting.
+Start with `make`, `make run`, and `ctest --test-dir build/linux-x86_64/Debug --output-on-failure`.
 
 - Build trees are `build/<target-platform>/<build_type>/`, each with its own generators, shaders
   and dependencies. `conanfile.py::layout()` pins this for single- and multi-config generators.
   Do not share a CMake cache across toolchains.
-- Make supports `linux-x86_64` → `profiles/linux` (Clang 22), and `windows-x86_64` →
-  `profiles/mingw64` (cross GCC). Its build profile is `default`. Additional CI profiles are
-  `profiles/linux-gcc` (GCC 16) and `profiles/windows-ci` (MSVC 19.4x); see [CI](docs/ci.md).
-  Local native Windows builds compose a detected MSVC profile with `profiles/windows`;
-  the installed compiler version is not pinned by the project settings.
-- Manual native Debug build:
-  `conan install . -pr:h profiles/linux -pr:b default --build=missing -s build_type=Debug`,
-  then `cmake --preset linux-x86_64-debug` and `cmake --build --preset linux-x86_64-debug`.
-  Specify build type explicitly. Presets include platform and build type, never `conan-debug`.
-  Preserve `presets_prefix` and `build_folder_vars`; after changing preset generation, reinstall
-  every build type included by `CMakeUserPresets.json` to prevent duplicate/stale names.
+- Specify Conan build type explicitly. Preserve `presets_prefix` and `build_folder_vars`;
+  after changing preset generation, reinstall every build type in CMakeUserPresets.json to avoid
+  duplicate/stale names. Toolchain profiles and manual build commands are documented in BUILD.md.
 - `JOBS` defaults to 8 in Make to protect this 15 GB desktop during dependency builds. It limits
   both Conan and CMake; override when appropriate. CI uses tool defaults, not this local cap.
 - Use `make run`: it sources `generators/conanrun.sh` (including `VK_LAYER_PATH`) and runs from
@@ -149,22 +115,15 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 - `include/lc1/vk/` mirrors `src/vk/`: `core` ← `resources` ← `presentation` and `render`.
   Presentation/render may also use core but never depend on each other. Core has no Window,
   scene or game dependency. See [Vulkan layers](docs/vulkan-layers.md).
-- `main` owns process setup and exception handling. `Application` owns window/Vulkan lifetime,
-  input routing, cursor capture, titles, swapchain recreation, scheduling and the loaded `Save`.
-  `GameSession` coordinates the local session and gates resolved input by focus/context/ImGui capture.
-  Its `GameWorld` consumes Save once and owns continent/entities/dialogs, world assembly, rules and
-  snapshots, retaining no Save borrow. `WorldView` borrows the world and owns GPU resources,
-  lighting, labels and the audio context/listener. `GameUi` builds menus/debug/HUD and returns requests;
-  `MusicBrowser` owns music browsing/playback and borrows the view's audio context.
-  `PlayerView` owns view modes/remembered look and resolves world-space player commands without
-  mutating characters. `GameWorld::update` applies those commands before physics; update the camera
-  afterward. Menus gate player controls and release cursor capture while simulation continues. Simulation uses one finite, non-negative, at-most-0.1-second delta per frame.
-  Keep cursor capture before reading mouse deltas and ImGui backend/window lifecycle in Application.
-  Within the session, world precedes view/controllers, and view precedes music; borrows must not
-  outlive these owners. The fixed roster is ordered by keyid, with followers updated after leaders.
+- Keep session responsibilities and lifetime order in [code boundaries](docs/code-layout.md).
+  Apply player commands before physics and update the camera afterward. Use one finite,
+  non-negative simulation delta capped at 0.1 seconds. Update the fixed roster in keyid order,
+  followers after leaders. Menus gate controls while simulation continues.
+  Keep cursor capture before reading mouse deltas and ImGui backend lifetime in Application.
 - `Window`/`input.hpp` include no Vulkan headers; input also includes no GLFW headers. `Surface`
-  bridges GLFW and Vulkan. Device borrows a raw surface only during selection, storing no Window
-  or Surface; Swapchain borrows Surface and receives an explicit extent. Window sizes use
+  bridges GLFW and Vulkan. Application selects the physical device and checks surface support;
+  Device receives the selected device, queue family and requirements, and retains no surface.
+  Swapchain borrows Surface and receives an explicit extent. Window sizes use
   `FrameExtent`, converted to Vulkan types by Application.
 - Preserve construction order and reverse destruction order:
   `VulkanLoader → Window → Instance → Surface → Device → Renderer → GameSession → FrameLoop`;
@@ -211,7 +170,8 @@ ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 - Include `common.hpp` before VMA so it sees `VK_NO_PROTOTYPES`. With
   `vma::raii::Allocator{instance, device, info}`, leave `info.instance`, `info.device` and
   `info.pVulkanFunctions` null; the wrapper fills them from raii dispatchers.
-- Device selection uses the explicit feature chain in `src/vk/core/device.cpp`, including BDA,
+- Application performs device selection using the explicit requirements and feature checks from
+  `src/vk/core/device.cpp`, including BDA,
   maintenance5 and ray-query/acceleration-structure/deferred-host-operations extensions. Check
   required names/features and graphics+compute+present support; exclude CPU devices. Keep VMA
   feature flags consistent. No generic capability-negotiation framework. `LC1_DEVICE=<substring>`
@@ -246,13 +206,13 @@ The following frame-loop invariants must survive refactoring:
   backend is the sole allowed exception and retains its internally managed descriptor pool/sets.
   Per-frame heaps isolate descriptor updates from in-flight frames. Cache immutable buffer lookups;
   update explicitly owned image slots only after the owning frame fence.
-- Normal lighting uses metallic-roughness GGX/Smith/Schlick, no ambient term or IBL yet. Material
+- Normal lighting uses metallic-roughness GGX/Smith/Schlick with hemisphere ambient fill, but
+  no IBL. Current lighting behavior is documented in [lighting](docs/lighting.md). Material
   factors are linear; base/emissive maps are sRGB, MR/normal are linear (MR G=roughness, B=metal).
   Initialize every texture descriptor. AO textures remain unsupported and must be rejected.
 - Resolve MSAA in linear RGBA16F HDR before exposure/Reinhard tone mapping. Cap at 4× and check
   actual HDR/depth format support. sRGB attachments encode automatically; UNORM display outputs
-  request `OutputEncoding::Srgb`; default output is linear. See [lighting](docs/lighting.md) and
-  [PBR plan/layouts](docs/pbr.md).
+  request `OutputEncoding::Srgb`; default output is linear. See [lighting](docs/lighting.md).
 - Normal maps use UV0 MikkTSpace tangents and +Y bitangents. Generate valid tangents before upload;
   maps baked to an existing basis need matching tangents before nonuniform import correction.
   Preserve inverse-transpose normals, reflected winding/handedness and mirrored UV seams.
@@ -297,32 +257,14 @@ The following frame-loop invariants must survive refactoring:
   on ERROR; preserve line-buffered stdout so startup logs survive abort. Require clean validation
   output for rendering checks. Never combine GPU_ASSISTED with SYNCHRONIZATION_VALIDATION.
   `LC1_NO_VALIDATION=1` is an explicit diagnostic/performance opt-out, not validation evidence.
-- Keep the intentionally empty `shaders/slangdconfig.json`: nvim-lspconfig uses it to root the Slang
-  workspace at `shaders/`, including modules. Slang 2026.18 recursively traverses ignored/build
-  directories and follows symlinks without cycle tracking; a repository root can enter
-  `build/wine-prefix/dosdevices/z: -> /` and recursive `/proc`, exhausting CPU/RAM/swap even after
-  editor exit. This is a Neovim root marker, not a compiler setting or upstream traversal fix.
-- Fedora's incomplete `shader-slang` package lacks downstream `spirv-opt`/`slang-glslang` shims:
-  Debug `-O0` may work while Release fails. Use a complete Slang distribution, e.g.
-  `make SLANGC=~/.local/share/nvim/mason/packages/slang/bin/slangc BUILD_TYPE=Release`.
-  This sets cached `SLANGC_EXECUTABLE` per build tree; it is not a MinGW-specific issue.
-- Keep the Linux profile's `XLOCALEDIR=/usr/share/X11/locale` run environment for Conan XKB's
-  compose/dead-key data. `driverVersion` belongs to physical-device properties and is vendor-encoded;
-  print it as hex. Investigate loader stderr separately from application validation output.
-- Hyprland may tile new windows off-screen despite reporting them visible; inspect placement when
-  screenshots miss a window. It has no minimize operation, so zero-extent recreation needs another
-  environment to exercise. Loader complaints about `/usr/libvulkan_dzn.so` returning -9 have been
-  observed independently of application rendering.
+- Read [environment notes](docs/development-environment.md) before changing Slang setup,
+  the empty slangdconfig.json root marker, XKB run environment or compositor workarounds.
 
-## Topic references
+## Documentation maintenance
 
-- Game design: [core systems](docs/content.md), [world/lore](docs/mind.md),
-  [continent and cameras](docs/continent.md), [regions/roads](docs/world-map.md).
-- Map data/export: [outline conventions](docs/continent-outline.md), [map tools](docs/map/README.md).
-- Save data: [save files and load order](docs/save-data.md).
-- Text and fonts: [text rendering](docs/text-rendering.md).
-- Rendering investigations: [performance](docs/render-performance.md),
-  [Vulkan primer](docs/vulkan-minimal.md), [dated semantics review](docs/engine-semantics-review.md).
-  Historical findings/plans are context; check current implementation before treating them as status.
-- External defects (Slang, GPU driver, toolchain — not project bugs):
-  [records, minimal repros and retest recipes](docs/external-defects.md).
+- Start at [the documentation index](docs/README.md); read the relevant subsystem before editing.
+- Keep one primary document per contract; link to it instead of copying implementation summaries.
+- Put dated investigations and superseded plans in [history](docs/history/README.md).
+  Keep active external workarounds in [external defects](docs/external-defects.md).
+- Update current behavior with code changes; distinguish implemented behavior, future plans and
+  historical observations. Do not remove durable constraints merely because code disagrees.

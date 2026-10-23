@@ -9,6 +9,4 @@ character collision, two camera modes, and local saves.
 See the [build guide](BUILD.md) for prerequisites, dependency installation,
 Linux / Windows builds, running the game, and testing.
 
-Design and architecture documentation is available in Chinese:
-[core systems](docs/content.md), [code boundaries](docs/code-layout.md),
-and [continuous integration](docs/ci.md).
+Chinese design and architecture documentation starts at the [documentation index](docs/README.md).

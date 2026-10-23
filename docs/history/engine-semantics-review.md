@@ -1,5 +1,8 @@
 # 引擎语义审查（2026-10-01）
 
+> 历史记录：正文保留当时的设计、结论与后续批注，不作为当前实现规范。
+> 当前文档入口见[文档导航](../README.md)，归档范围见[历史索引](README.md)。
+
 这次审查关注名称、职责、所有权与接口实际行为是否一致。基于当前工作区，包括正在搭建的
 Scene、资源管理和角色代码；区分已经可以复现的问题与尚未接入的设计风险。
 除 Character 相关实现外，本报告中的建议没有批量应用到代码。
@@ -13,7 +16,7 @@ Scene、资源管理和角色代码；区分已经可以复现的问题与尚未
 引用在对应资源卸载或管理器销毁时失效；调用者负责先停止借用并等待相关 GPU 使用完成。
 以下为原审查发现及当时建议。
 
-位置：[resource-manager.hpp](../include/lc1/resource-manager.hpp)，`load<T>`、`unload<T>`。
+位置：[resource-manager.hpp](../../include/lc1/resource-manager.hpp)，`load<T>`、`unload<T>`。
 
 类注释承诺引用一直有效到管理器销毁，并明确说没有单独卸载。但 `unload<T>` 对拥有
 `unique_ptr<Resource>` 的 map 调用 `extract`，又不保留返回的 node handle。临时 node handle
@@ -28,7 +31,7 @@ Scene、资源管理和角色代码；区分已经可以复现的问题与尚未
 
 ## 2. 优先处理：InputRouter 的 context 与 action 可能属于不同快照
 
-位置：[input.cpp](../src/input.cpp)，`push/pop/update`；[input.hpp](../include/lc1/input.hpp)。
+位置：[input.cpp](../../src/input.cpp)，`push/pop/update`；[input.hpp](../../include/lc1/input.hpp)。
 
 `push/pop` 立即修改 `active_context()`，但 action 数组只在 `update()` 中重算。已用现有
 代码复现：
@@ -58,7 +61,7 @@ released(MoveForward)：false
 
 ## 3. Scene 接入前处理：活动相机的身份与 vector 元素地址不同
 
-位置：[scene.hpp](../include/lc1/scene/scene.hpp)，`cameras_` 和 `active_camera_`。
+位置：[scene.hpp](../../include/lc1/scene/scene.hpp)，`cameras_` 和 `active_camera_`。
 
 `cameras_` 是按值保存的 `vector<FpsCamera>`，活动相机使用元素指针。等添加接口接入后，
 vector 扩容会让这个指针失效。预留容量只能延后问题，不能定义稳定身份。
@@ -78,7 +81,7 @@ vector 扩容会让这个指针失效。预留容量只能延后问题，不能�
 
 ## 4. 名称与职责：FpsCamera 实际承担了通用相机和控制约束
 
-位置：[camera.hpp](../include/lc1/scene/camera.hpp)、[map-camera-controller.cpp](../src/game/map-camera-controller.cpp)。
+位置：[camera.hpp](../../include/lc1/scene/camera.hpp)、[map-camera-controller.cpp](../../src/game/map-camera-controller.cpp)。
 
 当前斜视角也使用 `FpsCamera`，说明“第一人称”不是这台相机的固有身份。它同时包含位置与
 方向、透视参数、鼠标式 yaw/pitch 操作、水平移动方式和 ±89° 的俯仰限制。
@@ -94,8 +97,8 @@ vector 扩容会让这个指针失效。预留容量只能延后问题，不能�
 
 ## 5. 数据边界：scene::Light 实际是 GPU 上传结构
 
-位置：[scene/lights/light.hpp](../include/lc1/scene/lights/light.hpp)、
-[vk/render/render-data.hpp](../include/lc1/vk/render/render-data.hpp)。
+位置：[scene/lights/light.hpp](../../include/lc1/scene/lights/light.hpp)、
+[vk/render/render-data.hpp](../../include/lc1/vk/render/render-data.hpp)。
 
 `scene::Light` 包含对齐、padding、整数类型编号和 shader 布局断言，实际是 GPU 数据格式；
 真正的场景灯光是 `PointLight/SpotLight/SphereLight/DirectionalLight`。现在 `Scene::lights()`
@@ -108,7 +111,7 @@ vector 扩容会让这个指针失效。预留容量只能延后问题，不能�
 
 ## 6. Model 当前是静态网格数据，Object 当前是一个可绘制实例
 
-位置：[model.hpp](../include/lc1/model.hpp)、[object.hpp](../include/lc1/scene/object.hpp)。
+位置：[model.hpp](../../include/lc1/model.hpp)、[object.hpp](../../include/lc1/scene/object.hpp)。
 
 `Model` 目前把 OBJ 的 shape 合并进一个顶点/索引集合；虽然读取 material 数组，却没有保留
 每个面的材质对应关系。因此，它还不是能完整表示多材质、多节点、骨骼和动画的模型资源。
@@ -141,7 +144,7 @@ InputRouter 模板化。
 
 ## 8. 一个小而确定的行为问题：Stopwatch::restart 没有重置全部统计状态
 
-位置：[game-clock.cpp](../src/game-clock.cpp)，`Stopwatch::restart`。
+位置：[game-clock.cpp](../../src/game-clock.cpp)，`Stopwatch::restart`。
 
 它清空时间、累计窗口和总帧数，却保留 `fps_frames_`、`fps_`。重启后第一次刷新 FPS 可能
 把重启前的帧数算到新的时间窗口里，立即读取 `fps()` 也会得到上一次的数据。

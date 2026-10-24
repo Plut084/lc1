@@ -1,7 +1,7 @@
-#include "lc1/game/player-view.hpp"
+#include "lc1/game/player/player-view.hpp"
 
-#include "lc1/game/character.hpp"
-#include "lc1/game/continent.hpp"
+#include "lc1/game/character/character.hpp"
+#include "lc1/game/continent/continent.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -51,14 +51,14 @@ void update_view(lc1::PlayerView &view, lc1::Continent const &world, lc1::Charac
     lc1::InputState devices;
     for (auto key : keys)
         devices.on_key(key, true);
-    auto bindings = lc1::default_bindings();
+    auto bindings = lc1::default_game_bindings();
     // Isolate camera recenter from the default Space binding that also requests a jump.
-    bindings.push_back({lc1::InputContext::Gameplay, lc1::Action::RecenterCamera, lc1::Key::Home});
-    lc1::InputRouter input{bindings, lc1::InputContext::Gameplay};
+    bindings.push_back(
+        {lc1::GameInputContext::Gameplay, lc1::GameAction::RecenterCamera, lc1::Key::Home});
+    lc1::GameInputRouter input{bindings, lc1::GameInputContext::Gameplay};
     input.update(devices);
-    auto const command = view.resolve_input(player, input, look_delta, true, true);
-    lc1::apply_player_command(world, player, command, delta_seconds);
-    player.update(world, delta_seconds, false);
+    auto const intent = view.resolve_input(player, input, look_delta, true, true);
+    player.update(world, delta_seconds, intent);
     view.update_camera(player, delta_seconds);
 }
 
@@ -161,11 +161,10 @@ void disabled_input_preserves_pose()
         for (auto key :
              {lc1::Key::W, lc1::Key::D, lc1::Key::LeftShift, lc1::Key::Y, lc1::Key::Space})
             devices.on_key(key, true);
-        lc1::InputRouter input{lc1::default_bindings(), lc1::InputContext::Gameplay};
+        lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
         input.update(devices);
-        auto const command = view.resolve_input(player, input, {500, 500}, false, false);
-        lc1::apply_player_command(world, player, command, 0.1F);
-        player.update(world, 0.1F, false);
+        auto const intent = view.resolve_input(player, input, {500, 500}, false, false);
+        player.update(world, 0.1F, intent);
         view.update_camera(player, 0.1F);
         check(near(player.position(), position) && near(player.look_direction(), direction),
               "UI/focus gating prevents player movement and mouse look in either view");
@@ -187,15 +186,16 @@ void independent_capture_gates()
     devices.on_key(lc1::Key::W, true);
     devices.on_key(lc1::Key::Space, true);
     devices.on_key(lc1::Key::LeftShift, true);
-    lc1::InputRouter input{lc1::default_bindings(), lc1::InputContext::Gameplay};
+    devices.on_key(lc1::Key::F, true);
+    lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
     input.update(devices);
     auto const mouse_only = view.resolve_input(player, input, {200, -100}, false, true);
-    check(mouse_only.direction == glm::vec3{} && !mouse_only.running && !mouse_only.jumping &&
+    check(mouse_only.move == glm::vec2{} && !mouse_only.sprint && !mouse_only.jump &&
               mouse_only.body_yaw && near(*mouse_only.body_yaw, -10),
           "keyboard capture blocks actions while allowing mouse look");
     auto const keyboard_only = view.resolve_input(player, input, {200, -100}, true, false);
-    check(keyboard_only.direction != glm::vec3{} && keyboard_only.running &&
-              keyboard_only.jumping && keyboard_only.body_yaw && near(*keyboard_only.body_yaw, 0),
+    check(keyboard_only.move != glm::vec2{} && keyboard_only.sprint && keyboard_only.jump &&
+              keyboard_only.body_yaw && near(*keyboard_only.body_yaw, 0),
           "mouse capture blocks look while allowing keyboard actions");
 }
 

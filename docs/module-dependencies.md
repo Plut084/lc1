@@ -29,7 +29,11 @@ flowchart TD
     session --> music[MusicBrowser]
     view --> world
     ui --> world
-    player --> character[Character]
+    player --> controller["PlayerController · 输入解释"]
+    controller --> intent["CharacterIntent · 一帧期望"]
+    ai["AiCharacterController · 巡逻/伴随"] --> intent
+    intent --> character[Character]
+    world --> ai
     world --> character
     world --> continent[Continent]
     world --> dialog[DialogSystem]
@@ -37,9 +41,17 @@ flowchart TD
     music --> audio["AudioContext · 由 WorldView 拥有"]
 ```
 
-游戏实现位于 `include/lc1/game/` 与 `src/game/`。输入解析、更新顺序以及对象间借用见
-[代码边界](code-layout.md)；角色、对话、存档分别由[角色](character.md)、[对话](dialog.md)、
-[存档](save-data.md)文档说明。网络架构是未来方向，图中均为本地原型对象。
+玩家和 AI 都只产生 `CharacterIntent`；`Character::update(delta, intent)` 决定能否执行、速度和
+最终位置。`CompanionOrder` 是 `AiCharacterController` 的模式状态，由 `Party::command` 安装，
+并由存档恢复；`Character` 只通过控制器查询它，不再自己实现跟随。世界不依赖
+`PlayerController`，会话负责把玩家 intent 与输入门控一起交给世界。
+
+游戏实现位于 `include/lc1/game/` 与 `src/game/`，按 `character/`、`player/`、`world/`、
+`continent/`、`party/`、`dialog/`、`session/`、`ui/`、`camera/` 功能域组织。
+`game/actions.*` 是游戏动作层，`lc1/input.hpp` 是设备/模板路由层。
+输入解析、更新顺序以及对象间借用见[代码边界](code-layout.md)；角色、对话、存档分别由
+[角色](character.md)、[对话](dialog.md)、[存档](save-data.md)文档说明。网络架构是未来方向，
+图中均为本地原型对象。
 
 ## 渲染与呈现
 

@@ -210,8 +210,15 @@ Application::Application(ApplicationConfig const &config)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+    // The game owns the keyboard; ImGui takes it only while one of its widgets is active
+    // (WantCaptureKeyboard). Keyboard navigation is off for two reasons: it consumes the
+    // arrows and Space the character uses, and a merely focused window -- the always-open
+    // debug panel included -- then reports WantCaptureKeyboard on every frame, which the
+    // session reads as "the game gets no keys". Gamepad navigation cannot capture the
+    // keyboard and stays available; ConfigNavCaptureKeyboard stays false so re-enabling
+    // keyboard navigation later cannot mute gameplay again by focus alone.
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigNavCaptureKeyboard = false;
     if (!ImGui_ImplGlfw_InitForVulkan(window_.handle(), true)) {
         ImGui::DestroyContext();
         fail("the imgui GLFW backend could not initialize");
@@ -388,7 +395,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     while (!window_.should_close() && !stop_requested()) {
         window_.poll_events();
         // Resolve this frame's events before any action is read, including skipped frames.
-        router_.update(window_.input());
+        input_router_.update(window_.input());
         if (window_.should_close() || stop_requested())
             break;
 
@@ -406,10 +413,10 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
             break;
 
         auto const delta_seconds = stopwatch.tick();
-        game_.update_view_mode(router_);
+        game_.update_view_mode(input_router_);
         // Capture changes reset the baseline; GameSession reads mouse deltas afterwards.
         window_.set_cursor_captured(game_.captures_cursor());
-        game_.update(router_, delta_seconds);
+        game_.update(input_router_, delta_seconds);
         window_.set_cursor_captured(game_.captures_cursor());
         if (game_.take_save_request()) {
             try {

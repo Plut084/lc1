@@ -2,10 +2,10 @@
 
 #include "lc1/vk/render/renderer.hpp"
 
-#include "lc1/game/game-session.hpp"
-#include "lc1/game/save.hpp"
+#include "lc1/game/session/game-session.hpp"
+#include "lc1/game/session/save.hpp"
 
-#include "lc1/game/input.hpp"
+#include "lc1/game/actions.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
@@ -64,7 +64,7 @@ class Application {
     // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
-    InputRouter router_{default_bindings(), InputContext::Gameplay};
+    GameInputRouter input_router_{default_game_bindings(), GameInputContext::Gameplay};
     std::string current_title_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;

@@ -1,7 +1,8 @@
-#include "lc1/game/game-world.hpp"
+#include "lc1/game/world/game-world.hpp"
 
 #include "lc1/error.hpp"
-#include "lc1/game/player-view.hpp"
+#include "lc1/game/party/party.hpp"
+#include "lc1/game/player/player-view.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -104,7 +105,7 @@ void world_and_checkpoint()
     check(find(world, 100025).config().equipment.size() == 1,
           "equipment links survive world assembly");
 
-    world.update(0, {.interacting = true});
+    world.update(0, {.player_intent = {.interact = true}});
     check(world.interaction_target() == &find(world, 100025), "facing selects the nearby NPC");
     check(world.dialogs().dialog_id(world.player()) == "recruit", "world starts recruitment");
     world.update(0, {.response_index = 0});
@@ -121,7 +122,7 @@ void world_and_checkpoint()
           "dialog action transfers both sides of membership");
     check(find(world, 100025).companion_order() == lc1::CompanionOrder::Follow,
           "recruited character follows the leader");
-    world.update(0, {.interacting = true});
+    world.update(0, {.player_intent = {.interact = true}});
     check(!world.dialogs().find(world.player()), "player can interrupt a conversation");
     world.player().move(world.continent(), {10, 0, 0});
     auto const before = find(world, 100025).position();
@@ -161,10 +162,10 @@ void world_applies_control()
     Checkpoint checkpoint;
     lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
     auto const before = world.player().position();
-    world.update(10, {.player = {.direction = {1, 0, 0},
-                                 .body_yaw = 45,
-                                 .look_angles = glm::vec2{0, 10},
-                                 .face_movement = false}});
+    world.update(
+        10,
+        {.player_intent = {
+             .move = {1, 0}, .body_yaw = 45, .look = glm::vec2{0, 10}, .face_movement = false}});
     check(std::abs(world.player().position().x - before.x -
                    world.player().body().walk_speed * 0.1F) < 0.001F,
           "world applies movement with the same capped delta as physics");
@@ -173,8 +174,9 @@ void world_applies_control()
     auto const pose = world.player().position();
     bool rejected = false;
     try {
-        world.update(0.1F, {.player = {.direction = {0, 0, 1},
-                                       .body_yaw = std::numeric_limits<float>::quiet_NaN()}});
+        world.update(0.1F,
+                     {.player_intent = {.move = {0, 1},
+                                        .body_yaw = std::numeric_limits<float>::quiet_NaN()}});
     }
     catch (lc1::Error const &) {
         rejected = true;
@@ -197,12 +199,12 @@ void control_physics_camera_order()
     auto const before_control = world.player().position();
     lc1::InputState devices;
     devices.on_key(lc1::Key::Space, true);
-    lc1::InputRouter input{lc1::default_bindings(), lc1::InputContext::Gameplay};
+    lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
     input.update(devices);
     auto const command = view.resolve_input(world.player(), input, {}, true, true);
     check(world.player().position() == before_control && world.player().on_ground(),
           "resolving view input does not mutate world state");
-    world.update(0.1F, {.player = command});
+    world.update(0.1F, {.player_intent = command});
     view.update_camera(world.player(), 0.1F);
     check(!world.player().on_ground() && world.player().position().y > 0,
           "jump input reaches physics in the same frame");
@@ -214,7 +216,7 @@ void control_physics_camera_order()
     devices.on_key(lc1::Key::D, true);
     input.update(devices);
     auto const disabled = view.resolve_input(world.player(), input, {500, 500}, false, false);
-    world.update(0, {.player = disabled});
+    world.update(0, {.player_intent = disabled});
     check(world.player().position() == before && world.player().body_yaw() == 0,
           "disabled controls cannot move or turn the player");
 }

@@ -119,9 +119,9 @@ cmake --build --preset linux-x86_64-debug -j 8
 ctest --test-dir build/linux-x86_64/Debug --output-on-failure
 ```
 
-样例布局在 `src/game/continent-prototype.cpp`，类型和查询接口在
-`include/lc1/game/continent.hpp`，地图校验与移动在 `src/game/continent.cpp`，
-显示在 `src/game/continent-view.cpp`。新增地点时分配 ID、设置范围与入口、
+样例布局在 `src/game/continent/prototype.cpp`，类型和查询接口在
+`include/lc1/game/continent/continent.hpp`，地图校验与移动在 `src/game/continent/continent.cpp`，
+显示在 `src/game/continent/view.cpp`。新增地点时分配 ID、设置范围与入口、
 放置几何，再按入口连接道路；场景与碰撞会共同验证路线。
 
 当前默认大陆已有基础高度场起伏和可攀爬缓坡，但仍是体块原型，未实现地点交互、

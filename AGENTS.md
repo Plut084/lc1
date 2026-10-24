@@ -110,13 +110,16 @@ Start with `make`, `make run`, and `ctest --test-dir build/linux-x86_64/Debug --
 ## Architecture and ownership
 
 - Targets: `lc1` (`app/`) → `lc1_game` (`include/lc1/game/`, `src/game/`) → `lc1_engine`.
+  Game code is grouped by gameplay feature (`character/`, `player/`, `world/`, `continent/`,
+  `party/`, `dialog/`, `session/`, `ui/`, `camera/`), not by controller/view/model layer.
   Engine never depends on game. Public APIs use `include/lc1/` and `"lc1/..."`; app/game must not
   include engine implementation files. See [code boundaries](docs/code-layout.md).
 - `include/lc1/vk/` mirrors `src/vk/`: `core` ← `resources` ← `presentation` and `render`.
   Presentation/render may also use core but never depend on each other. Core has no Window,
   scene or game dependency. See [Vulkan layers](docs/vulkan-layers.md).
 - Keep session responsibilities and lifetime order in [code boundaries](docs/code-layout.md).
-  Apply player commands before physics and update the camera afterward. Use one finite,
+  Controllers return `CharacterIntent`; apply it with one `Character::update(delta, intent)` before
+  physics and update the camera afterward. Use one finite,
   non-negative simulation delta capped at 0.1 seconds. Update the fixed roster in keyid order,
   followers after leaders. Menus gate controls while simulation continues.
   Keep cursor capture before reading mouse deltas and ImGui backend lifetime in Application.
@@ -155,7 +158,10 @@ Start with `make`, `make run`, and `ctest --test-dir build/linux-x86_64/Debug --
   to complete before unloading a resource or destroying the manager.
 - Character's `scene::Transform` is its sole world pose: feet origin, upright/unit scale, body yaw
   about +Y with zero facing −Z, look relative to body. `move`/`walk` resolve horizontal collision
-  without changing facing. Controllers consume resolved input and borrow world/character;
+  without changing facing. Controllers produce `CharacterIntent` and borrow the character read-only;
+  `Character::update(delta, intent)` owns speed, collision, facing and whether a jump is legal.
+  Companion orders are an `AiCharacterController` mode installed by `Party::command`, not a
+  second movement path on `Character`.
   Character owns no camera/window/router or render resources; WorldView derives draws from its pose.
   See [character and import correction](docs/character.md).
 
@@ -232,10 +238,12 @@ The following frame-loop invariants must survive refactoring:
 
 ## Input contracts
 
-- Window owns raw `InputState`; game-owned `Binding` rows in `src/game/input.cpp` map `Key`
-  (including mouse buttons) to game-owned `Action`. Engine `BasicInputRouter` resolves only the top
-  context; game `InputRouter` is its typed alias. Game code asks for actions.
-  `Ui` intentionally binds nothing and gates gameplay. Window interprets no keys; ESC is app policy.
+- Window owns raw `InputState`; game-owned `GameBinding` rows in `src/game/actions.cpp` map `Key`
+  (including mouse buttons) to game-owned `GameAction`. Engine `BasicInputRouter` resolves only the
+  top context; game `GameInputRouter` is its typed alias and `game/actions.hpp` is the game action
+  layer (`lc1/input.hpp` stays device state and the generic template). Game code asks for actions.
+  `GameInputContext::Ui` intentionally binds nothing and gates gameplay. Window interprets no keys;
+  ESC is app policy.
 - `poll_events()` calls `begin_frame()` before pumping GLFW; `wait_events()` is not a frame boundary.
   Drop `GLFW_REPEAT` for game actions. Focus loss releases all held keys; capture changes, focus
   regain and pointer re-entry reset the mouse-delta baseline.

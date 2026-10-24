@@ -3,8 +3,8 @@
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/vk/render/renderer.hpp"
 
-#include "lc1/game/continent-view.hpp"
-#include "lc1/game/map-camera-controller.hpp"
+#include "lc1/game/camera/map-camera-controller.hpp"
+#include "lc1/game/continent/view.hpp"
 
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"

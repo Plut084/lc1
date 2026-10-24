@@ -2,7 +2,7 @@
 
 #include "lc1/scene/lights/light.hpp"
 
-#include "lc1/game/continent.hpp"
+#include "lc1/game/continent/continent.hpp"
 #include "lc1/vk/render/draw-item.hpp"
 #include "lc1/vk/render/material.hpp"
 #include "lc1/vk/render/text-pass.hpp"

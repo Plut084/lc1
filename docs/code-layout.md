@@ -7,9 +7,30 @@
 | 位置 | CMake 目标 | 职责 |
 |---|---|---|
 | `app/main.cpp`、`app/application.*` | `lc1` | 进程入口、窗口和 Vulkan 生命周期、输入接入、光标捕获、窗口标题、交换链和每帧调度 |
-| `include/lc1/game/`、`src/game/` | `lc1_game` | 大陆、角色、控制器、游戏会话、相机玩法、世界的可绘制资源 |
+| `include/lc1/game/`、`src/game/` | `lc1_game` | 按玩法功能域划分的规则、状态、控制与表现适配代码 |
 | `game/debug/pbr-showcase.*`，分别位于上述头文件和源码目录 | `lc1_game` | 当前嵌入游戏世界的 PBR 展示，供游戏和 GPU 测试共同使用 |
 | 其余引擎模块，包括 `scene/`、`vk/`、窗口及资源模块 | `lc1_engine` | 场景表达、渲染和平台能力 |
+
+`include/lc1/game/` 与 `src/game/` 使用相同的功能域子目录，便于按“要改哪个玩法”而不是
+按“controller/view/model”定位文件：
+
+| 目录 | 职责 |
+|---|---|
+| `character/` | `Character`、`CharacterIntent`、`CharacterController`、AI 巡逻/伴随模式、装备、武器、重力常量 |
+| `player/` | 玩家动作到 intent 的解析、第一人称/斜视角状态与玩家相机跟随 |
+| `camera/` | 可复用的地图/斜视角相机算法，不读取输入、不拥有角色 |
+| `continent/` | 大陆数据、碰撞与查询、布局/原型/生成数据、地形绘制 |
+| `party/` | 队伍、阵营和队员命令 |
+| `dialog/` | 对话脚本、单场会话、入口规则与冷却 |
+| `world/` | `GameWorld` 装配与更新、`WorldView`、可交互对象 |
+| `session/` | `GameSession` 协调以及 `Save`/序列化 |
+| `ui/` | 会话内 ImGui 界面与音乐浏览器 |
+| `debug/` | 嵌入世界的 PBR 展示，游戏与 GPU 测试共用 |
+| `actions.hpp/.cpp` | 游戏自己的动作、context 和默认绑定；设备层是 `lc1/input.hpp` |
+
+`actions.hpp` 没有单独建目录：它只有一组小接口，但必须和引擎的 `lc1/input.hpp` 明确区分。
+引擎头文件只有 `InputState`、`Key` 和模板 `BasicInputRouter`；游戏的 `GameAction`、
+`GameInputContext`、`GameInputRouter` 和 `default_game_bindings()` 都在 `game/actions.*`。
 
 `vk/` 内部分为 `core`、`resources`、`presentation`、`render`；呈现与渲染各自依赖底层
 资源，由应用组合。目录职责与依赖约定见 [Vulkan 代码分层](vulkan-layers.md)。
@@ -28,7 +49,7 @@
 | `MusicBrowser` | 音乐目录、文件浏览 UI、播放状态与音源；借用 `WorldView` 的音频 context |
 | `GameSession` | 读取输入、按焦点/context/ImGui capture 门控、协调各阶段，并向 Application 转交保存请求和表现数据 |
 
-`Character` 位于 `game/character.*`，内部唯一的 `scene::Transform` 保存脚底位置和身体朝向。
+`Character` 位于 `game/character/character.*`，内部唯一的 `scene::Transform` 保存脚底位置和身体朝向。
 它不持有网格或材质，也不生成 `DrawItem`；`Party` 同样只处理成员、招募和命令，不负责绘制。
 `WorldView::draws()` 从角色变换生成本帧绘制项，玩家是角色集合的一员，不重复追加。
 Application 通过 `GameSession::world()`、`world_view()`、`player_view()` 和 `ui()` 的只读引用
@@ -43,18 +64,25 @@ Application 通过 `GameSession::world()`、`world_view()`、`player_view()` 和
 
 ## 每帧时序
 
-Application 轮询事件、更新 `InputRouter`、开始 ImGui 帧，然后：
+Application 轮询事件、更新 `GameInputRouter`、开始 ImGui 帧，然后：
 
 1. 调用 `GameSession::update_view_mode()`；会话判断是否切换视角。
 2. Application 应用光标捕获。捕获变化会重置鼠标基线，必须先于鼠标增量读取。
 3. `GameSession::update()` 解析输入门控、交互和表现操作。
-4. `PlayerView::resolve_input()` 直接读取游戏动作，并从只读角色和视角信息生成 `PlayerCommand`，不修改角色。
-5. `GameWorld::update()` 应用玩家命令、推进角色物理/AI，再处理交互和对话。
+4. `PlayerView::resolve_input()` 把鼠标和 `GameAction` 交给 `PlayerController`；它只生成 `CharacterIntent`，不修改角色。
+5. `GameWorld::update()` 先取得 intent：玩家来自 `PlayerController`，NPC 来自
+   `CharacterController::update()`；随后统一调用 `Character::update(elapsed, intent)`，最后处理交互和对话。
+   对话暂停控制器时传入空 intent，物理仍继续。
 6. `PlayerView::update_pointer()` 在鼠标门控允许时读取设备滚轮与逻辑光标坐标，
    解析边缘平移；`update_camera()` 读取最终姿态；`WorldView::update()` 更新灯光、展示和监听位置。
 7. `GameUi::update()` 构建 UI 并返回开始、退出、保存及音量请求；会话接通开始操作，
    Application 执行保存和退出。主菜单/设置屏蔽玩法输入，世界继续模拟；返回主菜单会释放光标。
    菜单切换后的玩法门控在下一帧生效，光标捕获在本帧 UI 更新后同步。
+
+菜单之外的 ImGui 占用同样需要区分：会话读取的 capture 只表示“某个控件正在使用键盘或存在模态窗口”。
+Application 不启用 ImGui 键盘导航，并显式保留 `io.ConfigNavCaptureKeyboard = false`。导航会和角色
+争用方向键与空格；默认设置下，仅被聚焦的窗口（常驻调试面板就是一例）也会让 `WantCaptureKeyboard`
+每帧为真，使所有 `GameAction` 都解析为未按下。菜单与面板都由鼠标操作。
 
 模拟时间要求有限且非负，每帧最多推进 0.1 秒；角色、对话、相机和展示使用同一份时间。
 当前没有固定步长或追赶长帧。角色名单按 keyid 排序，非跟随者先更新、跟随者后更新，
@@ -82,14 +110,20 @@ FrameLoop 的帧资源在会话之后构造、之前销毁。`GameLocation` 的�
 
 `lc1_game_world_tests` 覆盖无窗口世界装配、交互招募、跟随、存档恢复、统一时间以及
 玩家控制 → 物理 → 相机的时序。原有大陆、角色、对话和视角 CPU 测试继续运行。
-GPU 渲染和窗口交互需要单独验证。动作枚举、context、默认绑定属于 `game/input.*`；
-引擎只保留设备状态和模板路由。`lc1_input_tests` 使用自定义动作/context 验证通用路由。
+GPU 渲染和窗口交互需要单独验证。动作枚举、context、默认绑定属于 `game/actions.*`；
+引擎 `lc1/input.hpp` 只保留设备状态和模板路由。`lc1_input_tests` 使用自定义动作/context 验证通用路由。
 
 ## 修改功能时从哪里开始
 
 - 新增规则或世界状态：在 `GameWorld` 及相应领域对象中实现；需要存档时同步修改记录、校验和往返测试。
 - 新增表现：让 `WorldView` 或 `GameUi` 从世界读取所需数据。资源所有权留在表现层，角色不持有 GPU 对象。
-- 新增玩家操作：补游戏动作和绑定，由 `PlayerView` 解析控制意图，再由世界应用；保留捕获、输入、物理和相机的顺序。
+- 新增玩家操作：补 `game/actions.*` 的 `GameAction` 和绑定，由 `PlayerController` 解释为
+  `CharacterIntent`，再由 `Character::update(delta, intent)` 决定能否执行；保留捕获、输入、物理和相机的顺序。
+- 新增角色规则（耐力、眩晕、攻击互斥等）：放在 `character/` 的 `Character` 或对应 gameplay
+  subsystem 中，不要写进玩家或 AI 控制器；控制器只填 intent。
+- 新增 AI 行为：实现 `CharacterController::update()` 并返回 `CharacterIntent`，不要直接调用
+  `move`/`walk` 或修改角色状态。伴随/等待是 `AiCharacterController` 的模式，由队伍命令安装、
+  由存档中的 `companion_order` 恢复。
 - 新增渲染能力：先检查 [Vulkan 分层](vulkan-layers.md)与 [RenderGraph](render-graph.md)，不要让帧循环识别游戏对象或具体 pass。
 
 上述分工让规则可以在没有窗口和设备的情况下测试，也让表现资源的生命周期集中管理。

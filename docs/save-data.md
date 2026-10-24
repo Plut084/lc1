@@ -148,8 +148,8 @@ example: 2
 | `x`、`y`、`z` | 脚底世界坐标，米 |
 | `body_yaw` | 身体朝向，度 |
 | `look_yaw`、`look_pitch` | 相对身体的观察角，度 |
-| `patrol` | 是否继续示例 NPC 巡逻；只有 `session.example` 可启用 |
-| `companion_order` | `None` 保持原型控制行为，`Follow` 跟随队长，`Wait` 原地等待 |
+| `patrol` | 是否恢复示例 NPC 的巡逻控制器；只有 `session.example` 可启用，伴随控制器不算巡逻 |
+| `companion_order` | `None` 保持原型控制行为，`Follow`/`Wait` 恢复为对应模式的 `AiCharacterController` |
 
 读取检查坐标与角度有限、观察角在角色允许范围内；运行期构建角色时再检查大陆边界和碰撞。
 招募会停止示例巡逻并设为 `Follow`；跟随／等待与巡逻分别保存，重启后恢复同一命令。

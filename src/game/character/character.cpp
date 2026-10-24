@@ -136,7 +136,7 @@ void Character::update(Continent const &continent, float delta_seconds,
         return;
 
     if (jump_requested_ && on_ground_) {
-        constexpr float jump_height = 1.0F;
+        constexpr float jump_height = 0.5F;
         velocity_.y = std::sqrt(2.0F * gravityf * jump_height);
         on_ground_ = false;
     }

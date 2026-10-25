@@ -2,7 +2,7 @@
 
 本文解释当前调用链，适合先了解代码再阅读具体 pass。项目使用 dynamic rendering、shader object
 和原生 descriptor heap；官方 ImGui Vulkan backend 保留自己的 pipeline 与 descriptor set。
-模块边界见 [Vulkan 分层](vulkan-layers.md)，资源与同步约束见 [AGENTS.md](../AGENTS.md)。
+模块边界见 [Vulkan 分层](vulkan-layers.md)，资源借用见[资源管理](resources.md)，同步约束见下文。
 
 ## 先找到一帧的入口
 
@@ -41,7 +41,20 @@ fence 让 CPU 确认槽位可重用；acquire 和 present 使用的二元信号�
 
 只在确定提交的路径上 reset fence；取得 SUBOPTIMAL 图像仍需渲染与呈现，再请求重建。
 异常退出后由 Application 等待设备完成，之后才能销毁 GPU 正在使用的对象。
-完整的五条帧循环不变量见 [AGENTS.md](../AGENTS.md#vulkan-dispatch-and-synchronization)。
+帧循环修改必须保持以下不变量：
+
+1. 仅在必定提交的路径上 reset 当前槽 fence，否则下一次等待可能永久阻塞。
+2. 先检查 acquire 结果再读取图像索引。SUCCESS/SUBOPTIMAL 都得到图像；SUBOPTIMAL 也会 signal
+   semaphore，必须渲染、呈现后再重建，不能按 OUT_OF_DATE 丢弃（`VUID-vkAcquireNextImageKHR-semaphore-01286`）。
+3. 只 reset 当前帧 command buffer，不 reset 含其他 pending 帧的 pool（`VUID-vkResetCommandPool-commandPool-00040`）。
+4. acquire → render barrier 的 source stage 为 `COLOR_ATTACHMENT_OUTPUT`，与 semaphore wait stage 一致；
+   `NONE` 会使布局转换失去同步（`SYNC-HAZARD-WRITE-AFTER-READ`）。
+5. 每张实际交换链图像拥有自己的 present semaphore；不按请求的最小图像数建立独立数组。
+
+保留 `VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS`，OUT_OF_DATE 属于帧循环控制流。
+先捕获 `vk::SurfaceLostKHRError` 再捕获 `vk::SystemError`，返回 `FrameResult::SurfaceLost`。
+交换链只在 extent 可用时懒创建；重建先检查零 extent，不能提前销毁旧资源；显式清空图像后才销毁旧 handle。
+`SwapchainImage::image` 是借用，不能包装成拥有所有权的 `vk::raii::Image`。
 
 ## 附件与布局：开始绘制之前要约定什么
 

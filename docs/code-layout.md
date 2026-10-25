@@ -64,11 +64,11 @@ Application 通过 `GameSession::world()`、`world_view()`、`player_view()` 和
 
 ## 每帧时序
 
-Application 轮询事件、更新 `GameInputRouter`、开始 ImGui 帧，然后：
+Application 轮询事件、开始 ImGui 帧，然后调用一次 `GameSession::update()`：
 
-1. 调用 `GameSession::update_view_mode()`；会话判断是否切换视角。
-2. Application 应用光标捕获。捕获变化会重置鼠标基线，必须先于鼠标增量读取。
-3. `GameSession::update()` 解析输入门控、交互和表现操作。
+1. 会话用原始 `InputState` 更新自己拥有的 `GameInputRouter`，每次会话更新只解析一次动作。
+2. 根据菜单、窗口焦点、context 和 ImGui capture 计算输入门控，再处理视角切换。
+3. `PlayerView` 在切换帧丢弃旧光标模式下累计的鼠标位移，避免切入第一人称时镜头跳动。
 4. `PlayerView::resolve_input()` 把鼠标和 `GameAction` 交给 `PlayerController`；它只生成 `CharacterIntent`，不修改角色。
 5. `GameWorld::update()` 先取得 intent：玩家来自 `PlayerController`，NPC 来自
    `CharacterController::update()`；随后统一调用 `Character::update(elapsed, intent)`，最后处理交互和对话。
@@ -77,9 +77,13 @@ Application 轮询事件、更新 `GameInputRouter`、开始 ImGui 帧，然后�
    解析边缘平移；`update_camera()` 读取最终姿态；`WorldView::update()` 更新灯光、展示和监听位置。
 7. `GameUi::update()` 构建 UI 并返回开始、退出、保存及音量请求；会话接通开始操作，
    Application 执行保存和退出。主菜单/设置屏蔽玩法输入，世界继续模拟；返回主菜单会释放光标。
-   菜单切换后的玩法门控在下一帧生效，光标捕获在本帧 UI 更新后同步。
+   菜单切换后的玩法门控在下一帧生效。
+8. 会话更新返回后，Application 统一应用 `captures_cursor()`。捕获变化重置设备鼠标基线；
+   本帧视角切换已丢弃旧位移，下一次光标位置事件建立新基线。边缘推屏仅在斜视角且窗口光标已释放时允许。
 
 菜单之外的 ImGui 占用同样需要区分：会话读取的 capture 只表示“某个控件正在使用键盘或存在模态窗口”。
+Esc 在 `game/actions.*` 中映射为 `QuitGame`；窗口有焦点且 ImGui 未占用键盘时，
+会话将其转为 `quit_requested`，主菜单中也可退出。Application 统一消费退出请求。
 Application 不启用 ImGui 键盘导航，并显式保留 `io.ConfigNavCaptureKeyboard = false`。导航会和角色
 争用方向键与空格；默认设置下，仅被聚焦的窗口（常驻调试面板就是一例）也会让 `WantCaptureKeyboard`
 每帧为真，使所有 `GameAction` 都解析为未按下。菜单与面板都由鼠标操作。
@@ -90,7 +94,8 @@ Application 不启用 ImGui 键盘导航，并显式保留 `io.ConfigNavCaptureK
 
 ## 生命周期与资源
 
-Application 仍负责窗口/Vulkan 生命周期、输入路由、光标捕获、交换链和 ImGui 后端。
+Application 负责窗口/Vulkan 生命周期、原始输入接入、光标捕获、交换链和 ImGui 后端；
+`GameSession` 拥有游戏动作路由器并在更新入口统一解析。
 它拥有 `Save` 与 `GameSession`；`GameWorld` 构造时消费 Save，不保留借用。
 世界可以只用 Save、大陆和对话目录构造、更新、生成快照，无需创建窗口或设备。
 

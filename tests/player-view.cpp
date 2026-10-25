@@ -72,7 +72,9 @@ void shared_position_and_remembered_look()
           "oblique camera is above the player");
 
     view.toggle(player);
-    update_view(view, world, player, {}, 0);
+    update_view(view, world, player, {}, 0, {800, -200});
+    check(near(player.body_yaw(), 0.0F) && near(player.look_pitch(), 0.0F),
+          "entering first person discards motion collected with the visible cursor");
     check(!view.oblique() && near(view.camera().position(), player.eye_position()),
           "first person uses the same character's eye position");
     update_view(view, world, player, {lc1::Key::W}, 0.1F, {800, -200});
@@ -95,7 +97,7 @@ void shared_position_and_remembered_look()
     check(!near(player.body_yaw(), first_person_yaw), "oblique walking turns the body");
 
     view.toggle(player);
-    update_view(view, world, player, {}, 0);
+    update_view(view, world, player, {}, 0, {-1200, 600});
     check(near(player.position(), oblique_position),
           "returning to first person preserves world position");
     check(near(player.body_yaw(), first_person_yaw) &&

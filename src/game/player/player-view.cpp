@@ -76,9 +76,11 @@ CharacterIntent PlayerView::resolve_input(Character const &player, GameInputRout
         map_camera_.apply(camera_);
         view_heading = camera_.heading();
     }
-    auto intent =
-        PlayerController::update(player, input, look_delta, keyboard_enabled, mouse_enabled,
-                                 oblique_, view_changed_, first_person_angles_, view_heading);
+    // Motion collected in the previous cursor mode is not camera input in the new view.
+    // Application applies capture after the session update and resets the device baseline.
+    auto intent = PlayerController::update(player, input, view_changed_ ? glm::vec2{} : look_delta,
+                                           keyboard_enabled, mouse_enabled, oblique_, view_changed_,
+                                           first_person_angles_, view_heading);
     view_changed_ = false;
     return intent;
 }

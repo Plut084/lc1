@@ -57,14 +57,10 @@ class Application {
     vk::SurfaceFormatKHR const surface_format_;
     std::optional<Swapchain> swapchain_;
     Renderer renderer_;
-    // The saved world and the session are peers: the session builds its runtime world from
-    // the save data and keeps no reference to it afterwards.
-    Save save_;
     // The frame factory sizes GPU resources from the session's current draw count.
     // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
-    GameInputRouter input_router_{default_game_bindings(), GameInputContext::Gameplay};
     std::string current_title_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;

@@ -266,3 +266,19 @@ See the [CI documentation](docs/ci.md) (Chinese) for platform coverage, dependen
 installation policies, and validation scope; consult the
 [workflow](.github/workflows/ci.yml) for the actual commands. CI builds and CPU tests
 do not include launching the game or validating GPU rendering.
+
+## Dependency maintenance constraints
+
+- Keep `conanfile.py::layout()` platform/build-type isolation, `presets_prefix` and
+  `build_folder_vars`. Regenerate every included build type after preset changes.
+- Dependency defaults belong in `conanfile.py::default_options`; profiles describe
+  toolchains and environment. Do not inherit unrelated default host options or use
+  `*:shared=False`: Wayland and XKB must remain shared because GLFW dlopens them.
+- Linux is Wayland-only by default: GLFW `with_wayland=True`, GLFW/XKB `with_x11=False`,
+  validation layers `with_wsi_xcb/xlib=False`. X11 requires enabling all four X11 options
+  and installing system development packages.
+- VMA-Hpp bundles `vk_mem_alloc.h`; do not add a second Conan VMA dependency.
+- Preserve MinGW's prefixed C/C++/`rc` tools and CMake link fixes: `stdc++exp` for
+  `<print>`, executable `-static`, and KTX 4.4.2's missing `astcenc-avx2-static`
+  companion archive from the same package. Link flags belong in CMake; profile
+  `*_FLAGS_INIT` changes do not update an existing cache. TinyGLTF filenames use UTF-8.

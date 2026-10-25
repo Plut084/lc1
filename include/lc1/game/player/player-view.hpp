@@ -14,6 +14,7 @@ class PlayerView {
     PlayerView(Continent const &continent, glm::vec3 player_position);
     void toggle(Character const &player);
     // Resolves the action-to-intent mapping without mutating the character; GameWorld applies it.
+    // Discards look motion on a view switch, before Application changes cursor capture.
     CharacterIntent resolve_input(Character const &player, GameInputRouter const &input,
                                   glm::vec2 look_delta, bool keyboard_enabled, bool mouse_enabled);
     // Call only while mouse input is enabled; pointer_active additionally gates edge pan.

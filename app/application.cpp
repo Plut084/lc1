@@ -194,13 +194,12 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      save_{config.save_root},
-      game_{device_, config.asset_root, save_, output_settings(surface_format_.format), &window_},
+      game_{device_, config.asset_root, Save{config.save_root},
+            output_settings(surface_format_.format), &window_},
       frame_loop_{device_, [this] {
                       return renderer_.make_frame_resources(game_.world_view().object_capacity());
                   }}
 {
-    window_.set_cursor_captured(game_.captures_cursor());
     spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
                  "recenter, M: first-person/oblique view, Esc: quit");
     spdlog::info("[showcase] material exhibits beside the spawn road; F4: lighting, "
@@ -394,8 +393,6 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
 
     while (!window_.should_close() && !stop_requested()) {
         window_.poll_events();
-        // Resolve this frame's events before any action is read, including skipped frames.
-        input_router_.update(window_.input());
         if (window_.should_close() || stop_requested())
             break;
 
@@ -407,34 +404,12 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        auto const &input = window_.input();
-        // Exit is application policy; while ImGui owns the keyboard, Escape belongs to the UI.
-        if (!ImGui::GetIO().WantCaptureKeyboard && input.pressed(Key::Escape))
-            break;
-
         auto const delta_seconds = stopwatch.tick();
-        game_.update_view_mode(input_router_);
-        // Capture changes reset the baseline; GameSession reads mouse deltas afterwards.
-        window_.set_cursor_captured(game_.captures_cursor());
-        game_.update(input_router_, delta_seconds);
-        window_.set_cursor_captured(game_.captures_cursor());
-        if (game_.take_save_request()) {
-            try {
-                Save::write(save_.directory(), game_.world().snapshot());
-                game_.set_save_status("Game saved. F6: Save again");
-            }
-            catch (Error const &error) {
-                spdlog::error("[save] {}", error.diagnostic());
-                game_.set_save_status("Save failed. Please try again.");
-            }
-            catch (std::exception const &error) {
-                spdlog::error("[save] {}", error.what());
-                game_.set_save_status("Save failed. Please try again.");
-            }
-        }
+        game_.update(window_.input(), delta_seconds);
         update_title();
 
         ImGui::Render();
+
         if (game_.quit_requested())
             break;
 

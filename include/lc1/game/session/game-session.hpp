@@ -28,20 +28,21 @@ class GameSession {
 
     void set_aspect_ratio(float aspect_ratio) { player_view_.set_aspect_ratio(aspect_ratio); }
 
-    bool take_save_request();
-
     bool quit_requested() const { return quit_requested_; }
 
     // Read-only borrows; valid for this session's lifetime. Mutations use session operations.
     GameWorld const &world() const { return world_; }
 
-    WorldView const &world_view() const { return view_; }
+    WorldView const &world_view() const { return world_view_; }
 
     PlayerView const &player_view() const { return player_view_; }
 
     GameUi const &ui() const { return ui_; }
 
   private:
+    void save();
+    void update_title();
+
     bool should_captures_cursor() const
     {
         return ui_.gameplay_enabled() && !player_view_.oblique();
@@ -51,13 +52,12 @@ class GameSession {
     GameInputRouter input_router_;
     // Owners precede borrowers: view/player view borrow world, music borrows view's audio context.
     GameWorld world_;
-    WorldView view_;
+    WorldView world_view_;
     PlayerView player_view_;
     MusicBrowser music_;
     GameUi ui_;
 
     std::filesystem::path save_directory_;
-    bool save_requested_ = false;
 
     bool quit_requested_ = false;
 };

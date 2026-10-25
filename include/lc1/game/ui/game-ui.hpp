@@ -8,6 +8,7 @@
 
 namespace lc1 {
 class MusicBrowser;
+struct GameLocation;
 
 struct GameUiInfo {
     FrameExtent extent;
@@ -35,7 +36,7 @@ class GameUi {
     void set_save_status(std::string status) { save_status_ = std::move(status); }
 
     std::vector<ScreenTextItem> screen_labels(GameWorld const &world, GpuFont const &font,
-                                              FrameExtent extent) const;
+                                              FrameExtent extent, GameLocation location) const;
 
   private:
     enum class State { MainMenu, InSettings, InGame };

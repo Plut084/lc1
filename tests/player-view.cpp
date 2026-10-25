@@ -57,6 +57,7 @@ void update_view(lc1::PlayerView &view, lc1::Continent const &world, lc1::Charac
         {lc1::GameInputContext::Gameplay, lc1::GameAction::RecenterCamera, lc1::Key::Home});
     lc1::GameInputRouter input{bindings, lc1::GameInputContext::Gameplay};
     input.update(devices);
+    view.update_view_mode(input, true, player);
     auto const intent = view.resolve_input(player, input, look_delta, true, true);
     player.update(world, delta_seconds, intent);
     view.update_camera(player, delta_seconds);
@@ -71,8 +72,7 @@ void shared_position_and_remembered_look()
     check(view.camera().position().y > player.eye_position().y,
           "oblique camera is above the player");
 
-    view.toggle(player);
-    update_view(view, world, player, {}, 0, {800, -200});
+    update_view(view, world, player, {lc1::Key::M}, 0, {800, -200});
     check(near(player.body_yaw(), 0.0F) && near(player.look_pitch(), 0.0F),
           "entering first person discards motion collected with the visible cursor");
     check(!view.oblique() && near(view.camera().position(), player.eye_position()),
@@ -156,18 +156,21 @@ void disabled_input_preserves_pose()
     lc1::Character player{world, {.position = world.spawn()}, {}};
     lc1::PlayerView view{world, player.position()};
     for (int mode = 0; mode < 2; ++mode) {
+        bool const oblique = view.oblique();
         auto const position = player.position();
         auto const direction = player.look_direction();
         auto const camera = view.camera().position();
         lc1::InputState devices;
-        for (auto key :
-             {lc1::Key::W, lc1::Key::D, lc1::Key::LeftShift, lc1::Key::Y, lc1::Key::Space})
+        for (auto key : {lc1::Key::W, lc1::Key::D, lc1::Key::LeftShift, lc1::Key::Y,
+                         lc1::Key::Space, lc1::Key::M})
             devices.on_key(key, true);
         lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
         input.update(devices);
+        view.update_view_mode(input, false, player);
         auto const intent = view.resolve_input(player, input, {500, 500}, false, false);
         player.update(world, 0.1F, intent);
         view.update_camera(player, 0.1F);
+        check(view.oblique() == oblique, "disabled keyboard cannot switch views");
         check(near(player.position(), position) && near(player.look_direction(), direction),
               "UI/focus gating prevents player movement and mouse look in either view");
         check(near(view.camera().position(), camera),
@@ -191,10 +194,12 @@ void independent_capture_gates()
     devices.on_key(lc1::Key::F, true);
     lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
     input.update(devices);
+    view.update_view_mode(input, false, player);
     auto const mouse_only = view.resolve_input(player, input, {200, -100}, false, true);
     check(mouse_only.move == glm::vec2{} && !mouse_only.sprint && !mouse_only.jump &&
               mouse_only.body_yaw && near(*mouse_only.body_yaw, -10),
           "keyboard capture blocks actions while allowing mouse look");
+    view.update_view_mode(input, true, player);
     auto const keyboard_only = view.resolve_input(player, input, {200, -100}, true, false);
     check(keyboard_only.move != glm::vec2{} && keyboard_only.sprint && keyboard_only.jump &&
               keyboard_only.body_yaw && near(*keyboard_only.body_yaw, 0),

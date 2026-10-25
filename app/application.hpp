@@ -17,7 +17,6 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <string>
 
 namespace lc1::app {
 
@@ -44,7 +43,6 @@ class Application {
   private:
     bool prepare_swapchain();
     void init_imgui_vulkan(std::uint32_t min_image_count);
-    void update_title();
     void run_loop(std::function<bool()> const &stop_requested);
 
     // Declaration order is the lifetime contract: the loader dies last, Window
@@ -61,7 +59,6 @@ class Application {
     // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
-    std::string current_title_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;
 };

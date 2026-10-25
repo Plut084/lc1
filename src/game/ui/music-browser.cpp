@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui.h>
 #include <spdlog/spdlog.h>
+#include <utility>
 
 namespace lc1 {
 namespace {
@@ -45,8 +46,8 @@ MusicBrowser::MusicBrowser(audio::AudioContext const &context)
 void MusicBrowser::controls()
 {
     ImGui::SeparatorText("Music");
-    ImGui::Text("Now playing: %s",
-                current_music_name_.empty() ? "(none)" : current_music_name_.c_str());
+    auto const music_name = current_music_path_.filename().string();
+    ImGui::Text("Now playing: %s", music_name.empty() ? "(none)" : music_name.c_str());
     if (!current_music_path_.empty() && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", current_music_path_.string().c_str());
     if (ImGui::Button("Choose music..."))
@@ -80,18 +81,14 @@ void MusicBrowser::update()
                             music_browser_path_.parent_path() != music_browser_path_;
     if (!has_parent)
         ImGui::BeginDisabled();
-    if (ImGui::Button("Up")) {
-        music_browser_path_ = music_browser_path_.parent_path();
-        refresh_music_browser();
-    }
+    if (ImGui::Button("Up"))
+        navigate(music_browser_path_.parent_path());
     if (!has_parent)
         ImGui::EndDisabled();
 
     ImGui::SameLine();
-    if (ImGui::Button("Home")) {
-        music_browser_path_ = default_music_directory();
-        refresh_music_browser();
-    }
+    if (ImGui::Button("Home"))
+        navigate(default_music_directory());
     ImGui::SameLine();
     if (ImGui::Button("Refresh"))
         refresh_music_browser();
@@ -118,8 +115,7 @@ void MusicBrowser::update()
             ImGui::PushID(static_cast<int>(index));
             if (ImGui::Selectable(label.c_str())) {
                 if (entry.is_directory) {
-                    music_browser_path_ = entry.path;
-                    refresh_music_browser();
+                    navigate(entry.path);
                     navigated = true;
                 }
                 else {
@@ -134,6 +130,12 @@ void MusicBrowser::update()
     ImGui::EndChild();
 
     ImGui::End();
+}
+
+void MusicBrowser::navigate(std::filesystem::path path)
+{
+    music_browser_path_ = std::move(path);
+    refresh_music_browser();
 }
 
 void MusicBrowser::refresh_music_browser()
@@ -191,7 +193,6 @@ void MusicBrowser::play_music(std::filesystem::path const &path)
         audio_source_.play(music);
         audio_music_ = std::move(music);
         current_music_path_ = path;
-        current_music_name_ = path.filename().string();
         music_error_.clear();
         spdlog::info("[music] playing {}", path.string());
     }

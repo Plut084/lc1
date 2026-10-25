@@ -1,12 +1,15 @@
 #include "lc1/game/ui/game-ui.hpp"
+
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/ui/music-browser.hpp"
+#include "lc1/game/world/world-view.hpp"
 #include "lc1/text/text-layout.hpp"
 #include <format>
 #include <imgui.h>
 #include <ranges>
 
 namespace lc1 {
+
 GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
 {
     GameUiActions actions;
@@ -60,10 +63,16 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
 }
 
 std::vector<ScreenTextItem> GameUi::screen_labels(GameWorld const &world, GpuFont const &font,
-                                                  FrameExtent extent) const
+                                                  FrameExtent extent, GameLocation location) const
 {
 
     std::vector<ScreenTextItem> labels;
+    labels.push_back(ScreenTextItem{
+        .text = std::format("{} | {} / {}", world.player().config().name, location.region,
+                            location.place),
+        .position = {24.0F, 46.0F},
+        .line_height = 22.0F,
+    });
 
     labels.push_back(ScreenTextItem{
         .text =

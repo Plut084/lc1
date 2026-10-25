@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <array>
-#include <format>
 
 namespace lc1::app {
 namespace {
@@ -204,7 +203,6 @@ Application::Application(ApplicationConfig const &config)
                  "recenter, M: first-person/oblique view, Esc: quit");
     spdlog::info("[showcase] material exhibits beside the spawn road; F4: lighting, "
                  "F5: pause motion, PageUp/PageDown: exposure");
-    update_title();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -317,20 +315,6 @@ bool Application::prepare_swapchain()
     return true;
 }
 
-void Application::update_title()
-{
-    auto const &view = game_.world_view();
-    auto const location = view.location();
-    auto const title =
-        std::format("lc1 | {} | {} | Lighting: {} | Exposure: {:.2f}", location.region,
-                    location.place, view.lighting_name(), view.output().exposure);
-    if (title != current_title_) {
-        window_.set_title(title);
-        spdlog::info("[world] {}", title);
-        current_title_ = title;
-    }
-}
-
 void Application::run_loop(std::function<bool()> const &stop_requested)
 {
     Stopwatch stopwatch;
@@ -338,28 +322,19 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
-        auto const &world = game_.world();
         auto const &view = game_.world_view();
         auto const &camera = game_.player_view().camera();
         // The graph borrows this frame's computed draws until execute() returns.
-        auto const draws = view.draws();
-        // Same contract for the HUD: the string and its single item outlive
-        // graph.execute(), and screen text is measured in pixels from the
-        // top-left corner of the frame.
-        auto const location = view.location();
-        std::string const hud = std::format("{} | {} / {}", world.player().config().name,
-                                            location.region, location.place);
-        std::vector<ScreenTextItem> screen_texts;
-        // HUD
-        screen_texts.push_back(
-            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .line_height = 22.0F});
-        screen_texts.append_range(
-            game_.ui().screen_labels(world, view.font(), window_.framebuffer_extent()));
+        // Text items own their strings and remain alive until graph.execute() returns.
         TextFrameInput const text{
-            .font = &view.font(), .world = view.world_labels(camera), .screen = screen_texts};
+            .font = &view.font(),
+            .world = view.world_labels(camera),
+            .screen = game_.ui().screen_labels(game_.world(), view.font(),
+                                               window_.framebuffer_extent(), view.location()),
+        };
         RenderGraph graph;
-        renderer_.add_passes(graph, resources, target, camera, view.lights(), draws, view.output(),
-                             text);
+        renderer_.add_passes(graph, resources, target, camera, view.lights(), view.draws(),
+                             view.output(), text);
         graph.add_pass(
             "ImGui overlay", {"output.ui_text"}, {"output.ui"}, [target](CommandBuffer &commands) {
                 // Make the UI text's writes visible to this attachment load and blending.
@@ -406,12 +381,10 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
 
         auto const delta_seconds = stopwatch.tick();
         game_.update(window_.input(), delta_seconds);
-        update_title();
-
-        ImGui::Render();
-
         if (game_.quit_requested())
             break;
+
+        ImGui::Render();
 
         switch (frame_loop_.draw_frame(*swapchain_, record)) {
         case FrameResult::Ok:

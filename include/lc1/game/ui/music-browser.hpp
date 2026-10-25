@@ -18,6 +18,7 @@ class MusicBrowser {
     void update();
 
   private:
+    void navigate(std::filesystem::path path);
     void refresh_music_browser();
     void play_music(std::filesystem::path const &path);
 
@@ -32,7 +33,6 @@ class MusicBrowser {
     std::filesystem::path music_browser_path_;
     std::vector<MusicBrowserEntry> music_browser_entries_;
     std::string music_error_;
-    std::string current_music_name_;
     std::filesystem::path current_music_path_;
     bool music_browser_open_ = false;
     bool music_browser_loaded_ = false;

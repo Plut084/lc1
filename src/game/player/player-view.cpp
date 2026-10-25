@@ -60,24 +60,29 @@ void PlayerView::toggle(Character const &player)
                  oblique_ ? "update_player2: oblique" : "update_player: first-person");
 }
 
-CharacterIntent PlayerView::resolve_input(Character const &player, GameInputRouter const &input,
-                                          glm::vec2 look_delta, bool keyboard_enabled,
-                                          bool mouse_enabled)
+void PlayerView::update_view_mode(GameInputRouter const &input, bool keyboard_enabled,
+                                  Character const &player)
 {
+    if (keyboard_enabled && input.pressed(GameAction::ToggleCameraView))
+        toggle(player);
+
     recenter_ = oblique_ && keyboard_enabled && input.held(GameAction::RecenterCamera);
     if (oblique_ && keyboard_enabled && input.pressed(GameAction::ToggleCameraLock)) {
         map_camera_.toggle_lock();
         spdlog::info("[camera] {}", map_camera_.locked() ? "locked to player" : "free camera");
     }
-    // Camera lock and recenter change the camera, not the character. Once the basis is
-    // current, PlayerController owns the action-to-intent mapping for either view.
-    glm::vec3 view_heading{};
-    if (oblique_ && (keyboard_enabled || mouse_enabled)) {
+    if (oblique_)
         map_camera_.apply(camera_);
-        view_heading = camera_.heading();
-    }
+}
+
+CharacterIntent PlayerView::resolve_input(Character const &player, GameInputRouter const &input,
+                                          glm::vec2 look_delta, bool keyboard_enabled,
+                                          bool mouse_enabled)
+{
+    glm::vec3 const view_heading =
+        oblique_ && (keyboard_enabled || mouse_enabled) ? camera_.heading() : glm::vec3{};
     // Motion collected in the previous cursor mode is not camera input in the new view.
-    // Application applies capture after the session update and resets the device baseline.
+    // GameSession applies capture after resolving input and resets the device baseline.
     auto intent = PlayerController::update(player, input, view_changed_ ? glm::vec2{} : look_delta,
                                            keyboard_enabled, mouse_enabled, oblique_, view_changed_,
                                            first_person_angles_, view_heading);

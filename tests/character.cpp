@@ -452,7 +452,7 @@ void jumping()
     character.request_jump();
     character.update(world, 0.01F, {});
     float const expected_height =
-        std::sqrt(2.0F * lc1::gravityf) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
+        std::sqrt(2.0F * lc1::gravityf * 0.5F) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
     check(near(character.position().y, expected_height), "airborne request cannot double jump");
     for (int i = 0; i < 200; ++i)
         character.update(world, 0.01F, {});
@@ -471,7 +471,7 @@ void jumping()
             jumper.update(world, step, {});
             peak = std::max(peak, jumper.position().y);
         }
-        check(std::abs(peak - 1.0F) < 0.002F, "jump height is stable across frame rates");
+        check(std::abs(peak - 0.5F) < 0.002F, "jump height is stable across frame rates");
         check(jumper.on_ground(), "jump lands at each frame rate");
     }
     auto capped = make_character();

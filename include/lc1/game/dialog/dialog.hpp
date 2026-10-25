@@ -151,6 +151,8 @@ class DialogSystem {
     bool interrupt(Character const &character);
     // Release all participant borrows before their world is destroyed.
     void clear() noexcept;
+    // Clear runtime state and restart the ambient-conversation delay after loading a world.
+    void reset() noexcept;
     // Non-null, unique registered participants. Player can be null for an NPC-only world.
     // Player requests can be deferred while moving, using UI, or otherwise occupied.
     void update(std::span<Character *const> characters, Character const *player,

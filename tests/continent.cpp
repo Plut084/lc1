@@ -254,7 +254,33 @@ void showcase_platform_jump()
         if (character.position().z > 17.0F)
             character.walk(world, {0.0F, 0.0F, -1.0F}, 1.0F / 60.0F, false);
     }
-    check(reached_plinth, "jumping onto a showcase plinth lands on its walkable top");
+    check(!reached_plinth && character.on_ground() && std::abs(character.position().y) < 0.01F &&
+              character.position().z > 18.0F,
+          "a half-meter jump cannot climb a 0.8-meter showcase plinth");
+
+    // A 0.4-meter ledge exceeds step height but remains within jump reach.
+    auto low_blocks = blocks;
+    for (auto &block : low_blocks) {
+        if (block.min.x == 6.0F && block.min.z == -18.0F && block.max.y == 0.8F)
+            block.max.y = 0.4F;
+    }
+    lc1::Continent const low_world = lc1::Continent::make_present(low_blocks);
+    lc1::Character low_jumper{low_world, {.position = {13.5F, 0.0F, 18.8F}}, {}};
+    low_jumper.request_jump();
+    bool reached_low_plinth = false;
+    for (int frame = 0; frame < 180; ++frame) {
+        low_jumper.update(low_world, 1.0F / 60.0F, {});
+        if (low_jumper.on_ground() && std::abs(low_jumper.position().y - 0.4F) < 0.01F) {
+            reached_low_plinth = true;
+            break;
+        }
+        if (low_jumper.position().z > 17.0F)
+            low_jumper.walk(low_world, {0.0F, 0.0F, -1.0F}, 1.0F / 60.0F, true);
+    }
+    check(reached_low_plinth, "a half-meter jump lands on a reachable walkable ledge");
+
+    // Start on top to verify walking and jumping down independently of jump reach.
+    character = lc1::Character{world, {.position = {13.5F, 0.8F, 16.0F}}, {}};
     check(character.position().x > 6.0F && character.position().x < 21.0F &&
               character.position().z > 14.0F && character.position().z < 18.0F,
           "showcase plinth landing stays within the platform footprint");

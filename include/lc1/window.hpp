@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -43,7 +44,8 @@ class Window {
     GLFWwindow *handle() const { return handle_; }
 
     bool should_close() const;
-    void set_title(std::string_view title);
+    // Returns true when the title changed and GLFW was called.
+    bool set_title(std::string_view title);
 
     // Device state, valid for the frame poll_events() most recently opened. Always wired:
     // the callbacks are registered in the constructor, so there is no state where this
@@ -58,6 +60,7 @@ class Window {
     // Re-enabling the cursor does not move it back: where it reappears is the platform's
     // choice, which is why the delta baseline is reset either way.
     void set_cursor_captured(bool captured);
+
     bool cursor_captured() const { return cursor_captured_; }
 
     // Reads and clears the flag the resize callback sets. The caller must
@@ -116,6 +119,7 @@ class Window {
 
     // Owning: GLFW has no raii form, so ~Window is the single destroy site.
     GLFWwindow *handle_ = nullptr;
+    std::string title_;
     bool framebuffer_resized_ = false;
 
     // Window owns the device state because it owns the callbacks that fill it. It does not

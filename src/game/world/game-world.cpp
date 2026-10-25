@@ -1,6 +1,8 @@
 #include "lc1/game/world/game-world.hpp"
+
 #include "lc1/error.hpp"
 #include "lc1/game/character/ai-character-controller.hpp"
+#include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/world/interactable.hpp"
 
@@ -20,10 +22,28 @@ void insert_unique(Map &map, std::uint32_t keyid, Value value, std::string_view 
 
 } // namespace
 
-GameWorld::GameWorld(Save const &save, Continent continent,
-                     std::filesystem::path const &dialog_catalog)
-    : continent_(std::move(continent)), dialogs_(dialog_catalog)
+GameWorld::GameWorld(Save const &save, std::filesystem::path const &dialog_catalog)
+    : continent_(Continent::make_present(demo::PbrShowcase::spawn_blocks())),
+      dialogs_(dialog_catalog)
 {
+    load(save);
+}
+
+void GameWorld::load(Save const &save)
+{
+    // Release participant and roster borrows before destroying their owners.
+    dialogs_.reset();
+    interaction_target_ = nullptr;
+    player_ = nullptr;
+    example_ = nullptr;
+    dialog_participants_.clear();
+    visible_characters_.clear();
+    characters_.clear();
+    parties_.clear();
+    weapons_.clear();
+    equipments_.clear();
+    factions_.clear();
+
     build_world(save);
     player_ = character_by_id(save.player(), "player");
     if (save.has_example()) {

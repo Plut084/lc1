@@ -522,6 +522,12 @@ void DialogSystem::clear() noexcept
     by_x_.clear();
 }
 
+void DialogSystem::reset() noexcept
+{
+    clear();
+    initial_delay_ = catalog_.settings().initial_delay;
+}
+
 void DialogSystem::update(std::span<Character *const> characters, Character const *player,
                           float delta_seconds, bool allow_player_requests)
 {

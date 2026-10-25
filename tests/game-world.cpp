@@ -157,6 +157,42 @@ void world_and_checkpoint()
     }
 }
 
+void reload_world()
+{
+    Checkpoint checkpoint;
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    auto const initial_position = world.player().position();
+    lc1::CharacterIntent interact;
+    interact.interact = true;
+    world.update(0, {.player_intent = interact});
+    check(world.dialogs().find(world.player()), "reload begins with an active conversation");
+    world.player().move(world.continent(), {10, 0, 0});
+    world.player().set_look_angles(20, 10);
+
+    for (int i = 0; i < 2; ++i) {
+        world.load(lc1::Save{checkpoint.directory()});
+        check(world.characters().size() == 7, "reload replaces rather than appends the roster");
+        check(world.player().position() == initial_position && world.player().look_yaw() == 0,
+              "reload discards the old character state");
+        check(!world.interaction_target() && !world.dialogs().find(world.player()),
+              "reload clears interactions and active conversations");
+        check(world.player().config().party->leader() == &world.player(),
+              "reload relinks party membership");
+        world.update(0, {.player_intent = interact});
+        check(world.dialogs().dialog_id(world.player()) == "recruit",
+              "reloaded interactions borrow the live dialog system");
+    }
+
+    auto data = lc1::Save{checkpoint.directory()}.data();
+    data.session.player = 100025;
+    data.session.example = 0;
+    lc1::Save::write(checkpoint.directory(), data);
+    world.load(lc1::Save{checkpoint.directory()});
+    check(world.player().config().keyid == 100025, "reload changes player identity");
+    check(world.snapshot().session.example == 0, "reload clears the previous example identity");
+    world.update(0.1F, {});
+}
+
 void world_applies_control()
 {
     Checkpoint checkpoint;
@@ -201,6 +237,7 @@ void control_physics_camera_order()
     devices.on_key(lc1::Key::Space, true);
     lc1::GameInputRouter input{lc1::default_game_bindings(), lc1::GameInputContext::Gameplay};
     input.update(devices);
+    view.update_view_mode(input, true, world.player());
     auto const command = view.resolve_input(world.player(), input, {}, true, true);
     check(world.player().position() == before_control && world.player().on_ground(),
           "resolving view input does not mutate world state");
@@ -215,6 +252,7 @@ void control_physics_camera_order()
     devices.on_key(lc1::Key::W, true);
     devices.on_key(lc1::Key::D, true);
     input.update(devices);
+    view.update_view_mode(input, false, world.player());
     auto const disabled = view.resolve_input(world.player(), input, {500, 500}, false, false);
     world.update(0, {.player_intent = disabled});
     check(world.player().position() == before && world.player().body_yaw() == 0,
@@ -226,6 +264,7 @@ int main()
 {
     try {
         world_and_checkpoint();
+        reload_world();
         control_physics_camera_order();
         world_applies_control();
         std::cout << "Game world tests passed\n";

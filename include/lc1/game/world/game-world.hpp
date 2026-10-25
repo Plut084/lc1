@@ -24,17 +24,16 @@ struct WorldInteraction {
 };
 
 // Owns the local simulation. No window, renderer, audio or input-device dependencies.
-// Not an authoritative server or a network replica. The roster is fixed after construction.
+// Not an authoritative server or a network replica. The roster is fixed between loads.
 class GameWorld {
   public:
-    GameWorld(Save const &save, Continent continent,
+    GameWorld(Save const &save,
               std::filesystem::path const &dialog_catalog = "runtime/dialogs/catalog.yaml");
     GameWorld(GameWorld const &) = delete;
     GameWorld &operator=(GameWorld const &) = delete;
     GameWorld(GameWorld &&) = delete;
     GameWorld &operator=(GameWorld &&) = delete;
-
-    ~GameWorld() { dialogs_.clear(); }
+    ~GameWorld() = default;
 
     Continent const &continent() const { return continent_; }
 
@@ -42,8 +41,8 @@ class GameWorld {
 
     Character const &player() const { return *player_; }
 
-    // Stable, keyid-ordered borrows; all characters live for the lifetime of this world.
-    std::span<Character const *const> characters() const { return visible_characters_; }
+    // Stable, keyid-ordered borrows; character borrows remain valid until load() or destruction.
+    std::vector<Character const *> const &characters() const { return visible_characters_; }
 
     DialogSystem const &dialogs() const { return dialogs_; }
 
@@ -52,6 +51,11 @@ class GameWorld {
     // Applies player controls, then physics and interactions; update presentation afterward.
     // Both physics and conversations advance by the same capped simulation time.
     void update(float delta_seconds, WorldInteraction const &interaction);
+
+    // Discards runtime state and rebuilds from save, **keeping the continent and dialog catalog**.
+    // Invalidates all character/dialog borrows. If rebuilding throws, retry load() before use.
+    void load(Save const &save);
+
     SerializedWorld snapshot() const;
 
   private:
@@ -60,7 +64,7 @@ class GameWorld {
     Character *character_by_id(std::uint32_t keyid, std::string_view what) const;
     Character *find_interaction_target(glm::vec3 forward) const;
 
-    Continent const continent_;
+    Continent continent_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Faction>> factions_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Equipment>> equipments_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Weapon>> weapons_;

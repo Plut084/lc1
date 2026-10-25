@@ -13,6 +13,7 @@
 - GameSession 在更新入口解析一次动作，先处理视角切换，再解析玩家 intent；切换帧丢弃观察位移。
   Application 在会话更新返回后应用光标捕获并重置基线。控制模式、焦点和 context 分别参与玩法门控，
   不能用是否捕获光标来反推输入是否启用。
+- F6 打开命名保存，F9 打开存档选择；窗口打开时禁用玩法输入并释放第一人称光标，取消后恢复。
 - GLFW 光标位置是逻辑屏幕坐标；拾取在 framebuffer 边界转换为像素坐标。
 
 通用路由由 `lc1_input_tests` 验证，会话与视角时序由 `lc1_game_world_tests`、`lc1_player_view_tests` 验证。

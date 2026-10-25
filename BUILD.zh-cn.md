@@ -70,7 +70,7 @@ Make 默认的 8 个并行任务用于控制本地内存占用，可按机器资
 2. `make configure` 先安装依赖，再执行 `cmake --preset <platform>-<build_type>`。
 3. `make build`（也是 `make` 的默认目标）完成前两步，再调用 CMake build preset。
    CMake 编译 `lc1_engine`、`lc1_game` 和可执行程序 `lc1`，并调用 Slang 生成 SPIR-V。
-4. 构建同时复制资源和对话文件，补齐缺失的种子存档；已有运行存档不会被覆盖。
+4. 构建同时复制资源和对话文件，覆盖更新种子存档文件；运行时的 `checkpoint.yaml` 进度文件保留。
 
 主要依赖由 [conanfile.py](conanfile.py) 管理，包括 Vulkan-Headers、GLFW、GLM、ImGui、
 模型/纹理加载、字体、音频和 YAML 支持。VMA-Hpp 由 CMake FetchContent 按固定 URL 和

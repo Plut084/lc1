@@ -7,6 +7,7 @@ settings:
   initial_delay: 8.0
   max_duration: 90.0
 scripts:
+  - {id: blacksmith, file: blacksmith.yaml}
   - {id: recruit, file: recruit.yaml}
   - {id: greeting, file: greeting.yaml}
   - {id: companion, file: companion.yaml}
@@ -14,6 +15,7 @@ scripts:
   - {id: small_talk, file: small-talk.yaml}
 # Rules are tested in order. Zero participant IDs match any character.
 rules:
+  - {trigger: Interaction, talker: 0, target: 4, conditions: [Always], dialog: blacksmith}
   - {trigger: Interaction, talker: 0, target: 0, conditions: [CanRecruit], dialog: recruit}
   - {trigger: Interaction, talker: 0, target: 0, conditions: [SameParty], dialog: companion}
   - {trigger: Interaction, talker: 0, target: 0, conditions: [Always], dialog: greeting}

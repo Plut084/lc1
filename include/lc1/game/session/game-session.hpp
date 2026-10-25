@@ -6,6 +6,7 @@
 #include "lc1/game/ui/music-browser.hpp"
 #include "lc1/game/world/game-world.hpp"
 #include "lc1/game/world/world-view.hpp"
+#include <utility>
 
 namespace lc1 {
 
@@ -28,6 +29,15 @@ class GameSession {
 
     void set_aspect_ratio(float aspect_ratio) { player_view_.set_aspect_ratio(aspect_ratio); }
 
+    std::optional<std::filesystem::path> take_load_request()
+    {
+        return std::exchange(load_request_, std::nullopt);
+    }
+
+    void resume_loaded() { ui_.start_game(); }
+
+    void load_failed(std::string message) { ui_.set_save_status(std::move(message)); }
+
     bool quit_requested() const { return quit_requested_; }
 
     // Read-only borrows; valid for this session's lifetime. Mutations use session operations.
@@ -40,7 +50,8 @@ class GameSession {
     GameUi const &ui() const { return ui_; }
 
   private:
-    void save();
+    void save(std::string_view name);
+    void refresh_saves();
     void update_title();
 
     bool should_captures_cursor() const
@@ -58,6 +69,9 @@ class GameSession {
     GameUi ui_;
 
     std::filesystem::path save_directory_;
+    std::filesystem::path saves_root_;
+    std::vector<std::string> saves_;
+    std::optional<std::filesystem::path> load_request_;
 
     bool quit_requested_ = false;
 };

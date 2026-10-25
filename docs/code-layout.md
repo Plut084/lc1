@@ -45,9 +45,9 @@
 | `GameWorld` | 按存档标识和内容版本加载并拥有大陆、势力、装备、武器、队伍、角色和 `DialogSystem`；装配世界、推进规则、生成存档快照；不依赖 Window、ImGui、音频或 Vulkan |
 | `WorldView` | 借用只读世界，拥有地形/角色 GPU 资源、字体、展示场景、灯光与音频 context/listener；生成绘制项和世界文字 |
 | `PlayerView` | 拥有视角模式、记忆观察角和相机；生成世界空间控制意图，世界更新后再更新相机 |
-| `GameUi` | 菜单、调试面板、保存反馈及屏幕文字；返回保存请求和音量变化，由会话执行 |
+| `GameUi` | 菜单、调试面板、保存反馈及屏幕文字；返回命名保存、读档请求和音量变化，由会话执行 |
 | `MusicBrowser` | 音乐目录、文件浏览 UI、播放状态与音源；借用 `WorldView` 的音频 context |
-| `GameSession` | 读取输入、按焦点/context/ImGui capture 门控、协调各阶段、执行保存、生成窗口标题，并向 Application 提供退出状态和表现数据 |
+| `GameSession` | 读取输入、按焦点/context/ImGui capture 门控、协调各阶段、执行命名保存、向 Application 提交读档请求、生成窗口标题，并向 Application 提供退出状态和表现数据 |
 
 `Character` 位于 `game/character/character.*`，内部唯一的 `scene::Transform` 保存脚底位置和身体朝向。
 它不持有网格或材质，也不生成 `DrawItem`；`Party` 同样只处理成员、招募和命令，不负责绘制。
@@ -79,7 +79,7 @@ Application 轮询事件、开始 ImGui 帧，然后调用一次 `GameSession::u
 6. `PlayerView::update_pointer()` 在鼠标门控允许时读取设备滚轮与逻辑光标坐标，
    解析边缘平移；`update_camera()` 读取最终姿态；`WorldView::update()` 更新灯光、展示和监听位置。
 7. `GameUi::update()` 构建 UI 并返回开始、退出、保存及音量请求；会话接通开始操作，
-   会话合并本帧快捷键与 UI 保存请求，通过私有 `save()` 执行一次保存并反馈结果；Application 执行退出。主菜单/设置屏蔽玩法输入，世界继续模拟；返回主菜单会释放光标。
+   会话把 F6/F9 转为打开保存/读档窗口，通过私有 `save(name)` 执行确认后的保存并反馈结果；Application 在下一帧开始处理读档并执行退出。主菜单/设置屏蔽玩法输入，世界继续模拟；返回主菜单会释放光标。
    菜单切换后的玩法门控在下一帧生效。
 8. 会话更新返回后，Application 统一应用 `captures_cursor()`。捕获变化重置设备鼠标基线；
    本帧视角切换已丢弃旧位移，下一次光标位置事件建立新基线。边缘推屏仅在斜视角且窗口光标已释放时允许。
@@ -99,13 +99,14 @@ Application 不启用 ImGui 键盘导航，并显式保留 `io.ConfigNavCaptureK
 
 Application 负责窗口/Vulkan 生命周期、原始输入接入、光标捕获、交换链和 ImGui 后端；
 `GameSession` 拥有游戏动作路由器并在更新入口统一解析。
-Application 拥有 `GameSession`，通过临时 `Save` 提供初始数据；`GameWorld` 构造和 `load()` 时消费 Save，不保留借用。
+Application 通过 `unique_ptr` 拥有 `GameSession`，通过临时 `Save` 提供初始数据；`GameWorld` 构造和 `load()` 时消费 Save，不保留借用。
 世界可以只用 Save、大陆和对话目录构造、更新、生成快照，无需创建窗口或设备。
 
 会话成员按 `GameWorld → WorldView → PlayerView → MusicBrowser → GameUi` 构造并逆序销毁。
 世界先于借用它的表现与控制器存在，音频 context 先于音源存在。角色名单在两次 `load()` 之间固定，
 不支持逐个添加/删除；`load()` 在销毁角色前清空活动对话并重建名单，旧对象借用全部失效。
-重新加载的失败语义及表现层协调要求见[存档与装配](save-data.md)。
+游戏内读档在 GPU 空闲后构造候选会话和帧资源，成功才替换，失败保留旧会话。
+世界层重新加载的失败语义及表现层协调要求见[存档与装配](save-data.md)。
 `GameSession`、`GameWorld`、`WorldView` 和 `MusicBrowser` 禁止复制/移动。
 
 Application 在正常/异常退出时先等 GPU 完成。`DrawItem` 借用 WorldView 的资源；渲染 pass 持有注册时复制的

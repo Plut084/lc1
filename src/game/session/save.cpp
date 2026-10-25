@@ -9,6 +9,7 @@
 #include <rfl/yaml.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -146,6 +147,47 @@ template <typename Map> auto sorted_records(Map const &map)
 }
 
 } // namespace
+
+std::filesystem::path Save::slot_directory(std::filesystem::path const &root, std::string_view name)
+{
+    if (name.empty() || name == "." || name == ".." || name.size() > 128 || name.front() == ' ' ||
+        name.back() == ' ' || name.back() == '.' ||
+        name.find_first_of("/\\:<>\"|?*") != std::string_view::npos ||
+        std::ranges::any_of(name, [](unsigned char c) { return c < 32 || c == 127; }))
+        fail("invalid save name: use 1-128 bytes without path separators or reserved characters");
+    return root / std::filesystem::path{std::u8string{name.begin(), name.end()}};
+}
+
+std::vector<std::string> Save::slots(std::filesystem::path const &root)
+{
+    std::vector<std::string> result;
+    if (!std::filesystem::exists(root))
+        return result;
+    for (auto const &entry : std::filesystem::directory_iterator(root)) {
+        if (!entry.is_directory())
+            continue;
+        auto const &path = entry.path();
+        bool const seed = std::ranges::all_of(
+            std::array{"factions", "equipments", "weapons", "parties", "characters", "session",
+                       "continent"},
+            [&](char const *name) {
+                return std::filesystem::is_regular_file(path / (std::string{name} + ".yaml"));
+            });
+        if (std::filesystem::is_regular_file(path / "checkpoint.yaml") || seed) {
+            auto const utf8 = path.filename().u8string();
+            std::string name(utf8.begin(), utf8.end());
+            // Exclude directories that cannot be selected through the naming interface.
+            try {
+                slot_directory(root, name);
+                result.push_back(std::move(name));
+            }
+            catch (Error const &) {
+            }
+        }
+    }
+    std::ranges::sort(result);
+    return result;
+}
 
 Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, session_{}
 {

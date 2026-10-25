@@ -216,6 +216,44 @@ template <typename Function> void rejects_write(Function &&function, std::string
     check(message.contains(expected), std::format("expected '{}', got '{}'", expected, message));
 }
 
+void named_save_slots()
+{
+    ScratchSave scratch{"named-slots"};
+    auto const root = scratch.directory() / "collection";
+    check(lc1::Save::slots(root).empty(), "a missing collection has no slots");
+    auto const data = checkpoint_data();
+    auto const alpha = lc1::Save::slot_directory(root, "Alpha");
+    auto const beta = lc1::Save::slot_directory(root, "Beta");
+    auto const unicode = lc1::Save::slot_directory(root, "旅途");
+    lc1::Save::write(beta, data);
+    lc1::Save::write(alpha, data);
+    lc1::Save::write(unicode, data);
+    std::filesystem::create_directories(root / "incomplete");
+    std::filesystem::copy(seed_directory(), root / "Seed");
+    check(lc1::Save::slots(root) == std::vector<std::string>{"Alpha", "Beta", "Seed", "旅途"},
+          "slots include named checkpoints and complete seeds in stable name order");
+    check(lc1::Save{unicode}.player() == data.session.player, "Unicode named saves reload");
+    auto changed = data;
+    changed.states.front().x = 8.0F;
+    lc1::Save::write(alpha, changed);
+    check(lc1::Save{alpha}.states().at(changed.states.front().keyid).x == 8.0F,
+          "reusing a name replaces its checkpoint");
+    check(lc1::Save{beta}.states().at(data.states.front().keyid).x == 1.0F,
+          "saving one slot leaves another unchanged");
+    for (auto const name : {"", ".", "..", "../escape", "nested/name", "nested\\name", "bad:name",
+                            " bad", "bad ", "bad.", "bad\nname"})
+        rejects_write([&] { lc1::Save::slot_directory(root, name); }, "invalid save name");
+    rejects_write([&] { lc1::Save::slot_directory(root, std::string(129, 'x')); },
+                  "invalid save name");
+    auto const broken = lc1::Save::slot_directory(root, "Broken");
+    std::filesystem::create_directories(broken);
+    std::ofstream{broken / "checkpoint.yaml"} << "invalid";
+    auto const slots = lc1::Save::slots(root);
+    check(std::ranges::find(slots, "Broken") != slots.end(),
+          "broken checkpoints remain visible so loading can report their error");
+    rejects_write([&] { lc1::Save invalid{broken}; }, "cannot read save file");
+}
+
 void checkpoint_round_trip()
 {
     ScratchSave scratch{"checkpoint"};
@@ -446,6 +484,7 @@ int main(int argc, char **argv)
         invalid_sessions_are_rejected();
         dangling_world_references_are_rejected();
         inconsistent_world_records_are_rejected();
+        named_save_slots();
         checkpoint_round_trip();
         legacy_checkpoints_are_upgraded();
         std::cout << "save data checks passed\n";

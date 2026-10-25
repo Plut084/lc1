@@ -33,7 +33,8 @@ glm::vec3 horizontal_direction(float degrees)
 
 Character::Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
                      CharacterBody body)
-    : config_(std::move(config)), body_(body), on_ground_{}, velocity_{}, transform_(transform)
+    : config_(std::move(config)), body_(body), bag_{.stacks = {}, .max_num_stacks = 4},
+      on_ground_{}, velocity_{}, transform_(transform)
 {
     if (!std::isfinite(body_.half_width) || body_.half_width <= 0.0F ||
         !std::isfinite(body_.height) || body_.height <= 0.0F || !std::isfinite(body_.eye_height) ||
@@ -66,8 +67,8 @@ Character::Character(Continent const &continent, scene::Transform transform, Cha
     }
 }
 
-Character::Character(Character &&) = default;
-Character &Character::operator=(Character &&) = default;
+Character::Character(Character &&) noexcept = default;
+Character &Character::operator=(Character &&) noexcept = default;
 Character::~Character() = default;
 
 void Character::set_interactable(std::unique_ptr<Interactable> interactable)

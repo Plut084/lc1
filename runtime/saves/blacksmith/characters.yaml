@@ -1,0 +1,4 @@
+- {"keyid":1,"name":"lc","sex":false,"age":18,"party":1,"level":1,"equipment":[["Head",1]],"weapon":[]}
+- {"keyid":2,"name":"yyx","sex":true,"age":18,"party":1,"level":1,"equipment":[["Head",1]],"weapon":[["MeleeWeapon",1001]]}
+- {"keyid":3,"name":"啥句冲个","sex":true,"age":18,"party":1,"level":1,"equipment":[["Head",1]],"weapon":[["MeleeWeapon",1001]]}
+- {"keyid":4,"name":"Blacksmith","sex":false,"age":45,"party":2,"level":1,"equipment":[],"weapon":[]}

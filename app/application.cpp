@@ -198,11 +198,12 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      game_{device_, config.asset_root, Save{config.save_root},
-            output_settings(surface_format_.format), &window_},
-      frame_loop_{device_, [this] {
-                      return renderer_.make_frame_resources(game_.world_view().object_capacity());
-                  }}
+      asset_root_(config.asset_root),
+      game_(std::make_unique<GameSession>(device_, asset_root_, Save{config.save_root},
+                                          output_settings(surface_format_.format), &window_)),
+      frame_loop_(std::make_unique<FrameLoop<FrameResources>>(device_, [this] {
+          return renderer_.make_frame_resources(game_->world_view().object_capacity());
+      }))
 {
     spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
                  "recenter, M: first-person/oblique view, Esc: quit");
@@ -316,8 +317,41 @@ bool Application::prepare_swapchain()
     else
         ImGui_ImplVulkan_SetMinImageCount(config.min_image_count);
     recreate_requested_ = false;
-    game_.set_aspect_ratio(static_cast<float>(extent.width) / static_cast<float>(extent.height));
+    game_->set_aspect_ratio(static_cast<float>(extent.width) / static_cast<float>(extent.height));
     return true;
+}
+
+void Application::load_game(std::filesystem::path const &directory)
+{
+    // Drain all slots before creating uploads or releasing any resources borrowed by a frame.
+    device_.wait_idle();
+    try {
+        auto next = std::make_unique<GameSession>(device_, asset_root_, Save{directory},
+                                                  game_->world_view().output(), &window_);
+        auto frames = std::make_unique<FrameLoop<FrameResources>>(device_, [&] {
+            return renderer_.make_frame_resources(next->world_view().object_capacity());
+        });
+        auto const extent = window_.framebuffer_extent();
+        if (extent.height != 0)
+            next->set_aspect_ratio(static_cast<float>(extent.width) /
+                                   static_cast<float>(extent.height));
+        next->resume_loaded();
+        // Old per-frame snapshots must die before the session resources they borrow.
+        frame_loop_.reset();
+        game_ = std::move(next);
+        frame_loop_ = std::move(frames);
+    }
+    catch (Error const &error) {
+        spdlog::error("[load] {}", error.diagnostic());
+        game_->load_failed(std::format("Load failed: {}", error.what()));
+    }
+    catch (vk::SystemError const &) {
+        throw;
+    }
+    catch (std::exception const &error) {
+        spdlog::error("[load] {}", error.what());
+        game_->load_failed(std::format("Load failed: {}", error.what()));
+    }
 }
 
 void Application::run_loop(std::function<bool()> const &stop_requested)
@@ -327,14 +361,14 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
-        auto const &view = game_.world_view();
-        auto const &camera = game_.player_view().camera();
+        auto const &view = game_->world_view();
+        auto const &camera = game_->player_view().camera();
         // Text items own their strings and remain alive until graph.execute() returns.
         TextFrameInput const text{
             .font = &view.font(),
             .world = view.world_labels(camera),
-            .screen = game_.ui().screen_labels(game_.world(), view.font(),
-                                               window_.framebuffer_extent(), view.location()),
+            .screen = game_->ui().screen_labels(game_->world(), view.font(),
+                                                window_.framebuffer_extent(), view.location()),
         };
         RenderGraph graph;
         renderer_.add_passes(graph, resources, target, camera, view.lights(), view.draws(),
@@ -375,6 +409,11 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         if (window_.should_close() || stop_requested())
             break;
 
+        if (auto directory = game_->take_load_request()) {
+            load_game(*directory);
+            stopwatch.tick(); // Loading time does not advance the new world's simulation.
+        }
+
         // Recreate only at the top of a frame, before acquiring an image.
         if (!prepare_swapchain())
             continue;
@@ -384,13 +423,13 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui::NewFrame();
 
         auto const delta_seconds = stopwatch.tick();
-        game_.update(window_.input(), delta_seconds);
-        if (game_.quit_requested())
+        game_->update(window_.input(), delta_seconds);
+        if (game_->quit_requested())
             break;
 
         ImGui::Render();
 
-        switch (frame_loop_.draw_frame(*swapchain_, record)) {
+        switch (frame_loop_->draw_frame(*swapchain_, record)) {
         case FrameResult::Ok:
             break;
         case FrameResult::RecreateRequested:

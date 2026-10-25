@@ -274,13 +274,13 @@ add_custom_target(copy_assets
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime/assets" "${CMAKE_CURRENT_BINARY_DIR}/runtime/assets"
     VERBATIM
 )
-# Dialogue scripts are authored content and refresh on each build, unlike saves.
+# Dialogue scripts are authored content and refresh on each build.
 add_custom_target(copy_dialogs
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/runtime/dialogs" "${CMAKE_CURRENT_BINARY_DIR}/runtime/dialogs"
     VERBATIM
 )
-# Install missing seed files without overwriting a player's existing save data.
+# Refresh authored seed files on each build; checkpoints remain runtime-owned.
 add_custom_target(copy_saves
     COMMAND ${CMAKE_COMMAND}
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/runtime/saves"
@@ -306,7 +306,7 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/tests/test_heap_struct_generator.py"
                 --slangc "${SLANGC_EXECUTABLE}")
-    add_test(NAME seed_save_preservation
+    add_test(NAME seed_save_refresh
         COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/test_seed_saves.py"
                 --cmake "${CMAKE_COMMAND}"
                 --script "${PROJECT_SOURCE_DIR}/scripts/seed-saves.cmake")

@@ -6,6 +6,10 @@
 #include "lc1/game/party/faction.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/player/player-controller.hpp"
+#include "lc1/game/resources/iron-helmet.hpp"
+#include "lc1/game/resources/moneta.hpp"
+#include "lc1/game/resources/pig-iron.hpp"
+#include "lc1/game/resources/wood.hpp"
 #include "lc1/game/session/save.hpp"
 #include "lc1/model.hpp"
 
@@ -69,6 +73,62 @@ lc1::ContinentData make_world_data()
 lc1::Continent make_world()
 {
     return lc1::Continent{make_world_data()};
+}
+
+void blacksmith_forging()
+{
+    using namespace lc1::game;
+    auto continent = make_world();
+    lc1::Character player{
+        continent, {.position = continent.spawn()}, {.keyid = 101, .name = "Customer"}};
+    lc1::Character smith{
+        continent, {.position = continent.spawn()}, {.keyid = 4, .name = "Blacksmith"}};
+    Moneta moneta;
+    Wood wood;
+    PigIron iron;
+    IronHelmet helmet;
+    auto &bag = player.bag();
+    bag.stacks.emplace(ResourceType::Moneta, ResourceStack{&moneta, 20});
+    bag.stacks.emplace(ResourceType::Wood, ResourceStack{&wood, 2});
+    bag.stacks.emplace(ResourceType::PigIron, ResourceStack{&iron, 5});
+    smith.bag().stacks.emplace(ResourceType::IronHelmet, ResourceStack{&helmet, 0});
+    lc1::DialogCatalog catalog{"runtime/dialogs/catalog.yaml"};
+    check(catalog.select(player, smith, lc1::DialogTrigger::Interaction) == "blacksmith",
+          "authored smith rule takes precedence over generic interactions");
+    auto const script = lc1::DialogScript::load("runtime/dialogs/blacksmith.yaml");
+    lc1::Dialog dialog{script};
+    dialog.start(player, smith);
+    dialog.respond(player, 0);
+    dialog.update(1.5F, &player, 1.5F);
+    check(dialog.response_id(0) == "forge", "exact ingredients allow forging");
+    bag.stacks.at(ResourceType::Moneta).quantity = 19;
+    dialog.respond(player, 0);
+    check(!dialog.displaying_response() && bag.quantity(ResourceType::PigIron) == 5 &&
+              bag.quantity(ResourceType::Wood) == 2 && bag.quantity(ResourceType::IronHelmet) == 0,
+          "stale unaffordable choice consumes nothing");
+    check(dialog.candidate_responses().size() == 1 && dialog.response_id(0) == "cancel",
+          "unaffordable crafting still allows exiting");
+    bag.stacks.at(ResourceType::Moneta).quantity = 20;
+    bag.max_num_stacks = 3;
+    check(!bag.forge_iron_helmet(helmet) && bag.quantity(ResourceType::Moneta) == 20,
+          "full bag refuses the result without charging");
+    bag.max_num_stacks = 4;
+    dialog.clear();
+    dialog.start(player, smith);
+    dialog.respond(player, 0);
+    dialog.update(1.5F, &player, 1.5F);
+    dialog.respond(player, 0);
+    dialog.respond(player, 0);
+    check(bag.quantity(ResourceType::IronHelmet) == 1 && bag.quantity(ResourceType::Moneta) == 0 &&
+              bag.quantity(ResourceType::Wood) == 0 && bag.quantity(ResourceType::PigIron) == 0,
+          "forging consumes exactly one recipe and repeated input cannot duplicate the result");
+    check(!bag.forge_iron_helmet(helmet), "missing materials cannot forge a second helmet");
+    bag.stacks.at(ResourceType::Moneta).quantity = 40;
+    bag.stacks.at(ResourceType::Wood).quantity = 4;
+    bag.stacks.at(ResourceType::PigIron).quantity = 10;
+    bag.stacks.at(ResourceType::IronHelmet).quantity = std::numeric_limits<std::uint32_t>::max();
+    check(!bag.forge_iron_helmet(helmet) && bag.quantity(ResourceType::Moneta) == 40,
+          "result overflow preserves the ingredients and fee");
 }
 
 void dialog_script_validation()
@@ -790,6 +850,7 @@ void model_correction()
 int main()
 {
     try {
+        blacksmith_forging();
         dialog_script_validation();
         recruitment_dialog();
         companion_orders();

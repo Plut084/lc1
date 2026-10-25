@@ -65,6 +65,8 @@ class GameWorld {
     Character *character_by_id(std::uint32_t keyid, std::string_view what) const;
     Character *find_interaction_target(glm::vec3 forward) const;
 
+    std::unordered_map<game::ResourceType, std::unique_ptr<game::Resource>> resources_;
+
     Continent continent_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Faction>> factions_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Equipment>> equipments_;

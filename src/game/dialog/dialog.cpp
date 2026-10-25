@@ -142,7 +142,8 @@ void DialogScript::validate() const
             if (!valid_condition(choice.condition))
                 fail("unknown dialog condition in node '{}'", node.id);
             if (choice.action != DialogAction::None && choice.action != DialogAction::Recruit &&
-                choice.action != DialogAction::Follow && choice.action != DialogAction::Wait)
+                choice.action != DialogAction::Follow && choice.action != DialogAction::Wait &&
+                choice.action != DialogAction::ForgeIronHelmet)
                 fail("unknown dialog action in node '{}'", node.id);
             if (!valid_role(choice.recruiter))
                 fail("unknown recruiter role in node '{}'", node.id);
@@ -262,6 +263,15 @@ bool Dialog::available(DialogChoice const &choice) const
 {
     if (!matches(choice.condition, *talker_, *target_))
         return false;
+    if (choice.action == DialogAction::ForgeIronHelmet) {
+        auto const *customer = participant(choice.recruiter);
+        auto const *smith = participant(
+            choice.recruiter == DialogRole::Talker ? DialogRole::Target : DialogRole::Talker);
+        auto const found = smith->bag().stacks.find(game::ResourceType::IronHelmet);
+        return customer->bag().can_forge_iron_helmet() && found != smith->bag().stacks.end() &&
+               found->second.resource &&
+               found->second.resource->type() == game::ResourceType::IronHelmet;
+    }
     if (choice.action == DialogAction::Recruit) {
         auto const *recruiter = participant(choice.recruiter);
         auto const *candidate = participant(
@@ -304,6 +314,16 @@ void Dialog::respond(Character &character, int response_index)
         commander->config().party->command(
             *commander, *member,
             choice.action == DialogAction::Follow ? CompanionOrder::Follow : CompanionOrder::Wait);
+    }
+    if (choice.action == DialogAction::ForgeIronHelmet) {
+        auto *customer = participant(choice.recruiter);
+        auto *smith = participant(choice.recruiter == DialogRole::Talker ? DialogRole::Target
+                                                                         : DialogRole::Talker);
+        if (!customer->bag().forge_iron_helmet(
+                *smith->bag().stacks.at(game::ResourceType::IronHelmet).resource)) {
+            refresh();
+            return;
+        }
     }
     pending_choice_ = choice_index;
     current_speech_text_ = std::move(response);

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace lc1::app {
@@ -42,6 +43,7 @@ class Application {
 
   private:
     bool prepare_swapchain();
+    void load_game(std::filesystem::path const &directory);
     void init_imgui_vulkan(std::uint32_t min_image_count);
     void run_loop(std::function<bool()> const &stop_requested);
 
@@ -57,8 +59,9 @@ class Application {
     Renderer renderer_;
     // The frame factory sizes GPU resources from the session's current draw count.
     // Keep the session alive until all frame resources have been destroyed.
-    GameSession game_;
-    FrameLoop<FrameResources> frame_loop_;
+    std::filesystem::path asset_root_;
+    std::unique_ptr<GameSession> game_;
+    std::unique_ptr<FrameLoop<FrameResources>> frame_loop_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;
 };

@@ -1,0 +1,23 @@
+version: 2
+entry: greeting
+nodes:
+  - id: greeting
+    speaker: Target
+    respondent: Talker
+    text: "Need some smithing? I can forge an Iron Helmet."
+    choices:
+      - {id: ask, text: "Can you forge an Iron Helmet for me?", condition: Always, action: None, recruiter: Talker, npc_priority: 0, next: offer}
+      - {id: goodbye, text: "Goodbye.", condition: Always, action: None, recruiter: Talker, npc_priority: 1, next: end}
+  - id: offer
+    speaker: Target
+    respondent: Talker
+    text: "One Iron Helmet costs 5 PigIron, 2 Wood and 20 moneta. I need all three, and room in your bag, before I can begin."
+    choices:
+      - {id: forge, text: "Here are the materials and fee. Forge it.", condition: Always, action: ForgeIronHelmet, recruiter: Talker, npc_priority: 0, next: forged}
+      - {id: cancel, text: "Not now.", condition: Always, action: None, recruiter: Talker, npc_priority: 1, next: end}
+  - id: forged
+    speaker: Target
+    respondent: Talker
+    text: "Your Iron Helmet is ready. It is in your bag."
+    choices:
+      - {id: thanks, text: "Thank you.", condition: Always, action: None, recruiter: Talker, npc_priority: 0, next: end}

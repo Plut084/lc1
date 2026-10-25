@@ -108,6 +108,11 @@ class Save {
   public:
     explicit Save(std::filesystem::path directory);
 
+    // Names identify one child directory under the save collection.
+    static std::filesystem::path slot_directory(std::filesystem::path const &root,
+                                                std::string_view name);
+    static std::vector<std::string> slots(std::filesystem::path const &root);
+
     // Validate before writing; commit a complete checkpoint by renaming a closed staging file.
     static void write(std::filesystem::path const &directory, SerializedWorld const &world);
     SerializedWorld data() const;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lc1/game/character/bag.hpp"
 #include "lc1/game/character/character-controller.hpp"
 #include "lc1/game/character/character-intent.hpp"
 #include "lc1/game/character/equipment.hpp"
@@ -66,8 +67,11 @@ class Character {
   public:
     Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
               CharacterBody body = {});
-    Character(Character &&);
-    Character &operator=(Character &&);
+
+    Character(Character const &) = delete;
+    Character &operator=(Character const &) = delete;
+    Character(Character &&) noexcept;
+    Character &operator=(Character &&) noexcept;
     ~Character();
 
     CharacterConfig &config() { return config_; }
@@ -141,6 +145,10 @@ class Character {
 
     Faction const *faction() const;
 
+    game::Bag const &bag() const { return bag_; }
+
+    game::Bag &bag() { return bag_; }
+
   private:
     // Resolves the requested actions before physics. Called only by update().
     void apply_intent(Continent const &continent, CharacterIntent const &intent,
@@ -151,6 +159,7 @@ class Character {
 
     CharacterConfig config_;
     CharacterBody body_;
+    game::Bag bag_;
 
     float look_yaw_ = 0.0F;
     float look_pitch_ = 0.0F;

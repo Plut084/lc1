@@ -11,16 +11,27 @@
 #include <spdlog/spdlog.h>
 
 namespace lc1 {
+namespace {
+std::string slot_name(std::filesystem::path const &directory)
+{
+    auto const utf8 = directory.filename().u8string();
+    return {utf8.begin(), utf8.end()};
+}
+} // namespace
+
 GameSession::GameSession(Device const &device, std::filesystem::path const &asset_root,
                          Save const &save, OutputSettings output, Window *window)
     : window_(window), input_router_(default_game_bindings(), GameInputContext::Gameplay),
       world_(save), world_view_(device, asset_root, world_, output),
       player_view_(world_.continent(), world_.player().position()),
-      music_(world_view_.audio_context()), save_directory_(save.directory())
+      music_(world_view_.audio_context()),
+      save_directory_(std::filesystem::weakly_canonical(save.directory())),
+      saves_root_(save_directory_.parent_path())
 {
     if (!window_)
         fail("game session requires a window");
 
+    refresh_saves();
     window_->set_cursor_captured(should_captures_cursor());
     update_title();
 
@@ -93,8 +104,18 @@ void GameSession::update(InputState const &input_state, float delta_seconds)
         player_view_.camera(), elapsed);
 
     auto const *target = world_.interaction_target();
+    if (keyboard_save_requested) {
+        refresh_saves();
+        ui_.open_save(slot_name(save_directory_));
+    }
+    if (keyboard_enabled && input_router_.pressed(GameAction::LoadGame)) {
+        refresh_saves();
+        ui_.open_load();
+    }
     auto const ui_actions = ui_.update(
         {
+            .saves = saves_,
+            .current_save = slot_name(save_directory_),
             .extent = window_->framebuffer_extent(),
             .lighting_name = world_view_.lighting_name(),
             .exposure = world_view_.output().exposure,
@@ -111,8 +132,19 @@ void GameSession::update(InputState const &input_state, float delta_seconds)
 
     window_->set_cursor_captured(should_captures_cursor());
 
-    if (keyboard_save_requested || ui_actions.save)
-        save();
+    if (ui_actions.refresh_saves)
+        refresh_saves();
+    if (ui_actions.save)
+        save(*ui_actions.save);
+    if (ui_actions.load) {
+        try {
+            load_request_ = Save::slot_directory(saves_root_, *ui_actions.load);
+        }
+        catch (Error const &error) {
+            spdlog::error("[load] {}", error.diagnostic());
+            ui_.set_save_status(error.what());
+        }
+    }
 
     update_title();
 }
@@ -127,19 +159,34 @@ void GameSession::update_title()
         spdlog::info("[world] {}", title);
 }
 
-void GameSession::save()
+void GameSession::refresh_saves()
 {
     try {
-        Save::write(save_directory_, world_.snapshot());
-        ui_.set_save_status("Game saved. F6: Save again");
+        saves_ = Save::slots(saves_root_);
+    }
+    catch (std::exception const &error) {
+        spdlog::error("[save] cannot list saves: {}", error.what());
+        ui_.set_save_status("Cannot list saves. Please try Refresh.");
+    }
+}
+
+void GameSession::save(std::string_view name)
+{
+    try {
+        auto directory = Save::slot_directory(saves_root_, name);
+        Save::write(directory, world_.snapshot());
+        save_directory_ = std::move(directory);
+        ui_.set_save_status(std::format("Saved: {}", name));
+        ui_.saved();
+        refresh_saves();
     }
     catch (Error const &error) {
         spdlog::error("[save] {}", error.diagnostic());
-        ui_.set_save_status("Save failed. Please try again.");
+        ui_.set_save_status(std::format("Save failed: {}", error.what()));
     }
     catch (std::exception const &error) {
         spdlog::error("[save] {}", error.what());
-        ui_.set_save_status("Save failed. Please try again.");
+        ui_.set_save_status(std::format("Save failed: {}", error.what()));
     }
 }
 

@@ -1,4 +1,4 @@
-"""Check that repeated seed installation preserves player progress and edits."""
+"""Check that seed installation refreshes authored files and preserves checkpoints."""
 
 import argparse
 from pathlib import Path
@@ -39,9 +39,9 @@ def main():
         (source / "01" / "characters.yaml").write_text("new seed", encoding="utf-8")
         (source / "01" / "session.yaml").write_text("missing file", encoding="utf-8")
         install()
-        assert installed.read_text(encoding="utf-8") == "player edits"
+        assert installed.read_text(encoding="utf-8") == "new seed"
         assert checkpoint.read_text(encoding="utf-8") == "player progress"
-        assert continent.read_text(encoding="utf-8") == "id: prototype\nversion: 1\n"
+        assert continent.read_text(encoding="utf-8") == "id: present\nversion: 1\n"
         assert (destination / "01" / "session.yaml").read_text(encoding="utf-8") == "missing file"
 
 

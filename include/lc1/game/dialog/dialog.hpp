@@ -17,7 +17,7 @@ class Character;
 
 enum class DialogRole { Talker, Target };
 enum class DialogCondition { Always, CanRecruit, CanBeRecruited, SameParty, CanCommand };
-enum class DialogAction { None, Recruit, Follow, Wait };
+enum class DialogAction { None, Recruit, Follow, Wait, ForgeIronHelmet };
 enum class DialogTrigger { Interaction, Nearby };
 
 struct DialogChoice {

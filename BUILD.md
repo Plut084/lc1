@@ -83,8 +83,8 @@ suit your machine.
 3. `make build`, also the default `make` target, completes those steps and invokes
    the CMake build preset. CMake compiles `lc1_engine`, `lc1_game`, and the `lc1`
    executable, and invokes Slang to generate SPIR-V.
-4. The build also copies assets and dialogue files and installs missing seed save
-   files. Existing runtime saves are preserved.
+4. The build also copies assets and dialogue files and refreshes seed save
+   files, overwriting existing copies. Runtime checkpoints are preserved.
 
 [conanfile.py](conanfile.py) manages the main dependencies, including Vulkan-Headers,
 GLFW, GLM, ImGui, model/texture loading, fonts, audio, and YAML support. CMake

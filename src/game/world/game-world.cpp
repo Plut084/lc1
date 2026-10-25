@@ -5,10 +5,15 @@
 #include "lc1/game/continent/patrol-house.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/party/party.hpp"
+#include "lc1/game/resources/iron-helmet.hpp"
+#include "lc1/game/resources/moneta.hpp"
+#include "lc1/game/resources/pig-iron.hpp"
+#include "lc1/game/resources/wood.hpp"
 #include "lc1/game/world/interactable.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <random>
 #include <utility>
 
@@ -42,6 +47,7 @@ void GameWorld::load(Save const &save)
     dialog_participants_.clear();
     visible_characters_.clear();
     characters_.clear();
+    resources_.clear();
     parties_.clear();
     weapons_.clear();
     equipments_.clear();
@@ -99,6 +105,11 @@ void GameWorld::load(Save const &save)
 
 void GameWorld::build_world(Save const &save)
 {
+    resources_.insert({game::ResourceType::IronHelmet, std::make_unique<game::IronHelmet>()});
+    resources_.insert({game::ResourceType::Moneta, std::make_unique<game::Moneta>()});
+    resources_.insert({game::ResourceType::Wood, std::make_unique<game::Wood>()});
+    resources_.insert({game::ResourceType::PigIron, std::make_unique<game::PigIron>()});
+
     // Save already proved every reference resolves, so the lookups below cannot miss: a
     // dangling keyid fails the load before this runs.
     for (auto const &entry : save.factions()) {
@@ -170,6 +181,10 @@ void GameWorld::build_world(Save const &save)
             actual.rotation.y = pose.body_yaw;
         }
         auto character = std::make_unique<Character>(continent_, actual, std::move(config));
+        // Resource definitions are owned by the world and outlive every character bag.
+        character->bag().stacks.emplace(
+            game::ResourceType::IronHelmet,
+            game::ResourceStack{resources_.at(game::ResourceType::IronHelmet).get(), 0});
         if (state != save.states().end())
             character->set_look_angles(state->second.look_yaw, state->second.look_pitch);
         insert_unique(characters_, record.keyid, std::move(character), "character");
@@ -297,6 +312,15 @@ void GameWorld::update(float delta_seconds, WorldInteraction const &interaction)
     if (!std::isfinite(delta_seconds) || delta_seconds < 0.0F)
         fail("invalid world update time");
     float const elapsed = std::min(delta_seconds, 0.1F);
+
+    for (auto const [type, increment] :
+         {std::pair{game::ResourceType::Moneta, 1U}, std::pair{game::ResourceType::Wood, 5U},
+          std::pair{game::ResourceType::PigIron, 10U}}) {
+        auto [entry, inserted] = player_->bag().stacks.try_emplace(
+            type, game::ResourceStack{resources_.at(type).get(), 0});
+        auto &quantity = entry->second.quantity;
+        quantity += std::min(increment, std::numeric_limits<std::uint32_t>::max() - quantity);
+    }
 
     auto update_character = [&](Character &character) {
         CharacterIntent intent;

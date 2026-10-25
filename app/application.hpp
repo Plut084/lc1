@@ -2,10 +2,10 @@
 
 #include "lc1/vk/render/renderer.hpp"
 
-#include "lc1/game/game-session.hpp"
-#include "lc1/game/save.hpp"
+#include "lc1/game/session/game-session.hpp"
+#include "lc1/game/session/save.hpp"
 
-#include "lc1/game/input.hpp"
+#include "lc1/game/actions.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/core/instance.hpp"
 #include "lc1/vk/core/loader.hpp"
@@ -17,7 +17,6 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <string>
 
 namespace lc1::app {
 
@@ -44,7 +43,6 @@ class Application {
   private:
     bool prepare_swapchain();
     void init_imgui_vulkan(std::uint32_t min_image_count);
-    void update_title();
     void run_loop(std::function<bool()> const &stop_requested);
 
     // Declaration order is the lifetime contract: the loader dies last, Window
@@ -57,15 +55,10 @@ class Application {
     vk::SurfaceFormatKHR const surface_format_;
     std::optional<Swapchain> swapchain_;
     Renderer renderer_;
-    // The saved world and the session are peers: the session builds its runtime world from
-    // the save data and keeps no reference to it afterwards.
-    Save save_;
     // The frame factory sizes GPU resources from the session's current draw count.
     // Keep the session alive until all frame resources have been destroyed.
     GameSession game_;
     FrameLoop<FrameResources> frame_loop_;
-    InputRouter router_{default_bindings(), InputContext::Gameplay};
-    std::string current_title_;
     bool recreate_requested_ = false;
     std::uint32_t imgui_image_count_ = 0;
 };

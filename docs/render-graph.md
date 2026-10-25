@@ -8,8 +8,8 @@
 
 ## 当前通道
 
-`frame.inputs` 表示本次调用借用的相机、灯光和 draw 数据；`output.target` 表示调用者
-提供的输出目标。两者以逻辑资源导入，调用者仍负责实际对象及其生命周期。
+`frame.inputs` 表示注册时复制的相机、灯光和 draw 记录；`output.target` 表示调用者
+提供的输出目标。两者以逻辑资源导入；输出目标以及 draw 引用的 GPU 资源仍由调用者持有。
 
 | pass | 输入 | 输出 |
 |---|---|---|
@@ -61,6 +61,13 @@ Renderer 接收和返回的目标布局均为 `COLOR_ATTACHMENT_OPTIMAL`；UI pa
 渲染帧只执行一次。回调借用的对象必须存活且输入保持不变，直到同步执行返回；
 回调不得修改正在执行的图。
 
+Renderer 在 `add_passes()` 注册时将相机、灯光和 draw 记录复制到一份不可变的
+`FrameScene` 快照，由阴影和光照回调共同持有；各 pass 不重复复制列表。
+调用方可以直接传入 `WorldView::draws()` 的临时列表，或在注册返回后修改原输入。
+快照复制 draw 记录中的变换和标记，但不复制 mesh/material 指向的 GPU 资源；
+这些资源及 Renderer、FrameResources、输出目标仍必须满足原有生命周期要求。
+文字输入按值捕获，字体资源仍为借用。
+
 ## 验证
 
 `lc1_render_graph_tests` 加入 CPU CTest，验证乱序注册、分支汇合、导入和版本、
@@ -72,17 +79,4 @@ Renderer 接收和返回的目标布局均为 `COLOR_ATTACHMENT_OPTIMAL`；UI pa
 检查材质、HDR 和输出设置；`lc1_temporal_shadow_tests` 检查历史累积和空间滤波。
 运行命令与 Conan 环境见 [ray-query 阴影](ray-query-shadows.md)。
 
-## 2026-10-09 验证记录
-
-Linux Clang Debug，RTX 4060 Laptop GPU，NVIDIA 610.57.04：
-
-- 应用、CPU 测试和三个 GPU 测试目标构建成功，无编译警告；clang-format 检查通过。
-- CPU／shader CTest 共 8 项全部通过，包括新增 `render_graph`。
-- `lc1_shadow_path_tests`、`lc1_pbr_tests`、`lc1_temporal_shadow_tests` 全部通过，
-  Vulkan validation 和 synchronization validation 无警告或错误。
-- 主程序成功启动，交换链从 1280×720 经 1249×1497 变为 1536×1024，期间无 Vulkan 诊断。
-  进程随后以退出码 0 提前结束，因此窗口脚本计划中的后两次 resize 未执行，整段定时
-  smoke 脚本不计为通过。GPU 测试中的 resize／恢复尺寸检查已通过。
-
-日志位于 `build/linux-x86_64/Debug/artifacts/render-graph-{build,ctest,shadow-paths,pbr,temporal-shadows,game-smoke}.log`。
-本次未验证 Windows、Release 或其他 GPU／驱动。
+历史实机结果见 [2026-10-09 验证记录](history/render-graph-validation-2026-10-09.md)。

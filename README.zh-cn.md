@@ -8,5 +8,4 @@
 构建环境、依赖安装、Linux / Windows 构建、运行和测试命令见
 [构建指南（BUILD.zh-cn.md）](BUILD.zh-cn.md)。
 
-游戏系统设计见[核心系统](docs/content.md)，代码组织见[代码边界](docs/code-layout.md)，
-持续集成说明见 [CI 文档](docs/ci.md)。
+架构、子系统、玩法设计与历史调查的入口见[文档导航](docs/README.md)。

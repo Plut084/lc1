@@ -1,7 +1,7 @@
-#include "lc1/game/continent.hpp"
-#include "lc1/game/character.hpp"
+#include "lc1/game/continent/continent.hpp"
+#include "lc1/game/camera/map-camera-controller.hpp"
+#include "lc1/game/character/character.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
-#include "lc1/game/map-camera-controller.hpp"
 #include "lc1/scene/camera.hpp"
 
 #include <cmath>
@@ -201,7 +201,7 @@ void present_relief()
     lc1::Character walker{world, {.position = {70.0F, *approach, 32.0F}}, {}};
     for (int frame = 0; frame < 500; ++frame) {
         walker.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, false);
-        walker.update(world, 1.0F / 60.0F);
+        walker.update(world, 1.0F / 60.0F, {});
     }
     check(walker.on_ground() && walker.position().y > 2.0F,
           "character climbs the present scene relief instead of staying at Y=0");
@@ -212,7 +212,7 @@ void present_relief()
     float const takeoff_height = walker.position().y;
     walker.request_jump();
     for (int frame = 0; frame < 300; ++frame)
-        walker.update(world, 1.0F / 60.0F);
+        walker.update(world, 1.0F / 60.0F, {});
     check(walker.on_ground() && walker.position().y > takeoff_height - 1.0F,
           "jumping on a terrain slope lands back on the hill instead of falling through");
 
@@ -224,10 +224,10 @@ void present_relief()
         lc1::Character slope_jumper{world, {.position = {78.0F, *start, 32.0F}}, {}};
         slope_jumper.request_jump();
         for (int frame = 0; frame < 600; ++frame) {
-            slope_jumper.update(world, 1.0F / 60.0F);
+            slope_jumper.update(world, 1.0F / 60.0F, {});
             slope_jumper.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, running);
         }
-        slope_jumper.update(world, 1.0F / 60.0F);
+        slope_jumper.update(world, 1.0F / 60.0F, {});
         auto const landed_ground =
             world.ground_height({slope_jumper.position().x, slope_jumper.position().z});
         check(landed_ground && slope_jumper.on_ground() &&
@@ -246,7 +246,7 @@ void showcase_platform_jump()
     character.request_jump();
     bool reached_plinth = false;
     for (int frame = 0; frame < 180; ++frame) {
-        character.update(world, 1.0F / 60.0F);
+        character.update(world, 1.0F / 60.0F, {});
         if (character.on_ground() && character.position().y > 0.7F) {
             reached_plinth = true;
             break;
@@ -254,14 +254,40 @@ void showcase_platform_jump()
         if (character.position().z > 17.0F)
             character.walk(world, {0.0F, 0.0F, -1.0F}, 1.0F / 60.0F, false);
     }
-    check(reached_plinth, "jumping onto a showcase plinth lands on its walkable top");
+    check(!reached_plinth && character.on_ground() && std::abs(character.position().y) < 0.01F &&
+              character.position().z > 18.0F,
+          "a half-meter jump cannot climb a 0.8-meter showcase plinth");
+
+    // A 0.4-meter ledge exceeds step height but remains within jump reach.
+    auto low_blocks = blocks;
+    for (auto &block : low_blocks) {
+        if (block.min.x == 6.0F && block.min.z == -18.0F && block.max.y == 0.8F)
+            block.max.y = 0.4F;
+    }
+    lc1::Continent const low_world = lc1::Continent::make_present(low_blocks);
+    lc1::Character low_jumper{low_world, {.position = {13.5F, 0.0F, 18.8F}}, {}};
+    low_jumper.request_jump();
+    bool reached_low_plinth = false;
+    for (int frame = 0; frame < 180; ++frame) {
+        low_jumper.update(low_world, 1.0F / 60.0F, {});
+        if (low_jumper.on_ground() && std::abs(low_jumper.position().y - 0.4F) < 0.01F) {
+            reached_low_plinth = true;
+            break;
+        }
+        if (low_jumper.position().z > 17.0F)
+            low_jumper.walk(low_world, {0.0F, 0.0F, -1.0F}, 1.0F / 60.0F, true);
+    }
+    check(reached_low_plinth, "a half-meter jump lands on a reachable walkable ledge");
+
+    // Start on top to verify walking and jumping down independently of jump reach.
+    character = lc1::Character{world, {.position = {13.5F, 0.8F, 16.0F}}, {}};
     check(character.position().x > 6.0F && character.position().x < 21.0F &&
               character.position().z > 14.0F && character.position().z < 18.0F,
           "showcase plinth landing stays within the platform footprint");
 
     // Moving on the plinth must not treat the solid block underneath as an invalid start.
     character.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, false);
-    character.update(world, 1.0F / 60.0F);
+    character.update(world, 1.0F / 60.0F, {});
     check(character.on_ground() && character.position().y > 0.7F,
           "walking on a showcase plinth remains valid");
 
@@ -271,7 +297,7 @@ void showcase_platform_jump()
     character.request_jump();
     bool reached_ground = false;
     for (int frame = 0; frame < 300; ++frame) {
-        character.update(world, 1.0F / 60.0F);
+        character.update(world, 1.0F / 60.0F, {});
         character.walk(world, {1.0F, 0.0F, 0.0F}, 1.0F / 60.0F, true);
         if (character.on_ground() && character.position().y < 0.1F) {
             reached_ground = true;
@@ -307,7 +333,7 @@ void switchback_stairs()
     lc1::Character character{world, {.position = {29.0F, 0.0F, 65.2F}}, {}};
     auto step_towards = [&](glm::vec3 direction, auto stop) {
         for (int frame = 0; frame < 1600; ++frame) {
-            character.update(world, 1.0F / 60.0F);
+            character.update(world, 1.0F / 60.0F, {});
             character.walk(world, direction, 1.0F / 60.0F, false);
             if (stop(character.position()))
                 break;
@@ -388,6 +414,24 @@ void perspective_camera_zoom()
           "default framing covers 48 metres at the target depth");
 
     controller.zoom(1.0F);
+    controller.apply(camera);
+    check(near(glm::distance(camera.position(), center), initial_distance),
+          "wheel input changes the target without snapping the camera");
+    controller.update(camera, player, 0.0F);
+    check(near(glm::distance(camera.position(), center), initial_distance),
+          "zero elapsed time does not advance zoom smoothing");
+    controller.update(camera, player, 1.0F / 60.0F);
+    float const partial_distance = glm::distance(camera.position(), center);
+    float const target_distance = initial_distance * std::exp(-0.12F);
+    check(partial_distance < initial_distance && partial_distance > target_distance,
+          "zoom moves partway toward its target like recenter smoothing");
+    controller.update(camera, player, 1.0F / 60.0F);
+    check(glm::distance(camera.position(), center) < partial_distance,
+          "zoom keeps settling after wheel input ends");
+    controller.zoom(1.0F);
+    check(near(controller.view_height(), 48.0F * std::exp(-0.24F)),
+          "successive wheel events accumulate on the target framing");
+    controller.zoom(-1.0F);
     controller.update(camera, player, 0.1F);
     check(glm::distance(camera.position(), center) < initial_distance &&
               project(sample).x > initial_size,

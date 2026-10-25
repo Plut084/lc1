@@ -52,8 +52,8 @@ flowchart TD
 曝光和输出编码策略单独放在 `render/output-settings.hpp`。
 
 应用的帧录制回调创建当帧 `RenderGraph`。`Renderer::add_passes()` 接收 `RayQueryShadows`
-注册的四个阴影节点，再注册 HDR 光照和色调映射，应用最后追加 ImGui overlay。
-离屏调用可用 `Renderer::record()` 创建并执行六个场景节点。图验证逻辑资源依赖并同步执行
+注册的四个阴影节点，再注册 HDR 光照、色调映射和 UI text，应用最后追加 ImGui overlay。
+离屏调用可用 `Renderer::record()` 创建并执行七个场景节点（包括 UI text）。图验证逻辑资源依赖并同步执行
 录制回调；图不拥有图片，也不接管 pass 内的 Vulkan 屏障或呈现层的 acquire／submit／present。
 回调随本次录制结束销毁，不在 Renderer 成员中保存帧槽、相机或目标的借用。
 资源版本、历史和验证约定见 [RenderGraph](render-graph.md)。
@@ -72,3 +72,30 @@ CPU `Vertex` 位于 `lc1/vertex.hpp`，不包含 Vulkan；与 shader location、
 
 设备的固定扩展名与 feature 配置位于 `src/vk/core/device.cpp`；通用能力协商框架已移除。
 绘制校验和顶点输入布局位于 `src/vk/render/`。应用只包含 `include/lc1/` 下的公开接口。
+
+## Dispatch、设备与生命周期约束
+
+- 系统 loader 只有一个：`VulkanLoader` 长期持有 `vk::raii::Context`，在 GLFW 初始化前将其
+  `vkGetInstanceProcAddr` 交给 `glfwInitVulkanLoader`。不引入 Conan vulkan-loader、volk、
+  裸 `vk*` 调用或第二套/default dispatcher。
+- 保留 `VK_NO_PROTOTYPES`，`VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL` 使用默认值 1。
+  通过 raii CommandBuffer/Queue 录制与提交；原始参数和 hpp 句柄数组使用解引用后的 `*handle`。
+  不对 null/default raii 对象调用操作，其 dispatcher 可能为空。
+- `vk::` 结构体按声明顺序使用 designated initializer；保留 `VULKAN_HPP_NO_STRUCT_CONSTRUCTORS`，
+  不定义 `VULKAN_HPP_NO_SETTERS`，数组/count 配对继续使用 setter。
+- VMA 前包含 `common.hpp`。使用 `vma::raii::Allocator{instance, device, info}` 时，
+  `info.instance`、`info.device`、`info.pVulkanFunctions` 留空，由包装层从 raii dispatcher 填充。
+- Application 按 `src/vk/core/device.cpp` 的显式要求筛选设备，包括 BDA、maintenance5、
+  ray-query/acceleration-structure/deferred-host-operations 扩展及所需 feature，检查 graphics、compute、
+  present 支持并排除 CPU 设备；VMA feature flags 与之保持一致。`LC1_DEVICE=<substring>` 选择 GPU，
+  启动日志输出名称、类型与驱动。不增加通用能力协商框架。
+- 构造顺序为 `VulkanLoader → Window → Instance → Surface → Device → Renderer → GameSession → FrameLoop`，
+  逆序销毁；Application/GameSession 不可移动。Window 的首成员 `glfw_lifetime_` 保证构造失败时也终止 GLFW，
+  Window 自己拥有并只销毁一次 GLFW C 句柄。
+- Device 的 allocator 先于逻辑设备销毁，Instance 的 messenger 先于 instance 销毁。
+  Surface 比 Swapchain 长寿；交换链 view/semaphore 先于 handle 销毁。
+- `FrameLoop<T>` 用应用提供的 factory 创建帧槽资源，等 fence 后才把资源传给同步录制回调，不解释其内容。
+  Renderer 接收资源、相机与绘制项，不接收帧索引；draw i 使用当前槽对应的 object/material/frame UBO。
+  资源借用与上传约束见[资源管理](resources.md)。
+- Vulkan 使用负 viewport height 且 `y = height`；保持背面剔除，模型行列式为负时 front face 为 clockwise，
+  否则为 counter-clockwise。

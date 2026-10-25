@@ -48,7 +48,7 @@
 WASD、Shift、滚轮、Y、空格和 M 的操作保持原有行为。
 
 原来的五类地形、六类地点小样例仍由 `make_prototype()` 提供给回归测试。
-两张地图通过 `src/game/continent-layout.cpp` 共用城池和村庄的建筑布局。
+两张地图通过 `src/game/continent/layout.cpp` 共用城池和村庄的建筑布局。
 当前游戏的地点为城池、村庄和海岸，旧样例的港口、要塞等尚未迁移到新大陆。
 
 ## 生成与检查
@@ -60,7 +60,7 @@ python3 docs/map/export_continent.py --preview build/linux-x86_64/Debug/artifact
 ```
 
 导出器仅依赖 Python 标准库，输出为已提交的
-`src/game/continent-land.generated.hpp`，包含源 SVG 的 SHA256。
+`src/game/continent/land.generated.hpp`，包含源 SVG 的 SHA256。
 普通构建和运行直接使用该数据，不需要 Python、SVG 解析库或原图文件。
 修改 SVG 轮廓后应重新导出，`--check` 可以发现源图或导出结果过期。
 预览图用白线叠加原始海岸，用黄色标记出生点，便于核对方向和地点尺度。

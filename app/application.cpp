@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <array>
-#include <format>
 
 namespace lc1::app {
 namespace {
@@ -194,24 +193,29 @@ Application::Application(ApplicationConfig const &config)
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
-      save_{config.save_root},
-      game_{device_, config.asset_root, save_, output_settings(surface_format_.format), &window_},
+      game_{device_, config.asset_root, Save{config.save_root},
+            output_settings(surface_format_.format), &window_},
       frame_loop_{device_, [this] {
                       return renderer_.make_frame_resources(game_.world_view().object_capacity());
                   }}
 {
-    window_.set_cursor_captured(game_.captures_cursor());
     spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
                  "recenter, M: first-person/oblique view, Esc: quit");
     spdlog::info("[showcase] material exhibits beside the spawn road; F4: lighting, "
                  "F5: pause motion, PageUp/PageDown: exposure");
-    update_title();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+    // The game owns the keyboard; ImGui takes it only while one of its widgets is active
+    // (WantCaptureKeyboard). Keyboard navigation is off for two reasons: it consumes the
+    // arrows and Space the character uses, and a merely focused window -- the always-open
+    // debug panel included -- then reports WantCaptureKeyboard on every frame, which the
+    // session reads as "the game gets no keys". Gamepad navigation cannot capture the
+    // keyboard and stays available; ConfigNavCaptureKeyboard stays false so re-enabling
+    // keyboard navigation later cannot mute gameplay again by focus alone.
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigNavCaptureKeyboard = false;
     if (!ImGui_ImplGlfw_InitForVulkan(window_.handle(), true)) {
         ImGui::DestroyContext();
         fail("the imgui GLFW backend could not initialize");
@@ -311,20 +315,6 @@ bool Application::prepare_swapchain()
     return true;
 }
 
-void Application::update_title()
-{
-    auto const &view = game_.world_view();
-    auto const location = view.location();
-    auto const title =
-        std::format("lc1 | {} | {} | Lighting: {} | Exposure: {:.2f}", location.region,
-                    location.place, view.lighting_name(), view.output().exposure);
-    if (title != current_title_) {
-        window_.set_title(title);
-        spdlog::info("[world] {}", title);
-        current_title_ = title;
-    }
-}
-
 void Application::run_loop(std::function<bool()> const &stop_requested)
 {
     Stopwatch stopwatch;
@@ -332,28 +322,18 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
     FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
                                                                     FrameResources &resources,
                                                                     RenderTarget const &target) {
-        auto const &world = game_.world();
         auto const &view = game_.world_view();
         auto const &camera = game_.player_view().camera();
-        // The graph borrows this frame's computed draws until execute() returns.
-        auto const draws = view.draws();
-        // Same contract for the HUD: the string and its single item outlive
-        // graph.execute(), and screen text is measured in pixels from the
-        // top-left corner of the frame.
-        auto const location = view.location();
-        std::string const hud = std::format("{} | {} / {}", world.player().config().name,
-                                            location.region, location.place);
-        std::vector<ScreenTextItem> screen_texts;
-        // HUD
-        screen_texts.push_back(
-            ScreenTextItem{.text = hud, .position = {24.0F, 46.0F}, .line_height = 22.0F});
-        screen_texts.append_range(
-            game_.ui().screen_labels(world, view.font(), window_.framebuffer_extent()));
+        // Text items own their strings and remain alive until graph.execute() returns.
         TextFrameInput const text{
-            .font = &view.font(), .world = view.world_labels(camera), .screen = screen_texts};
+            .font = &view.font(),
+            .world = view.world_labels(camera),
+            .screen = game_.ui().screen_labels(game_.world(), view.font(),
+                                               window_.framebuffer_extent(), view.location()),
+        };
         RenderGraph graph;
-        renderer_.add_passes(graph, resources, target, camera, view.lights(), draws, view.output(),
-                             text);
+        renderer_.add_passes(graph, resources, target, camera, view.lights(), view.draws(),
+                             view.output(), text);
         graph.add_pass(
             "ImGui overlay", {"output.ui_text"}, {"output.ui"}, [target](CommandBuffer &commands) {
                 // Make the UI text's writes visible to this attachment load and blending.
@@ -387,8 +367,6 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
 
     while (!window_.should_close() && !stop_requested()) {
         window_.poll_events();
-        // Resolve this frame's events before any action is read, including skipped frames.
-        router_.update(window_.input());
         if (window_.should_close() || stop_requested())
             break;
 
@@ -400,36 +378,12 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        auto const &input = window_.input();
-        // Exit is application policy; while ImGui owns the keyboard, Escape belongs to the UI.
-        if (!ImGui::GetIO().WantCaptureKeyboard && input.pressed(Key::Escape))
-            break;
-
         auto const delta_seconds = stopwatch.tick();
-        game_.update_view_mode(router_);
-        // Capture changes reset the baseline; GameSession reads mouse deltas afterwards.
-        window_.set_cursor_captured(game_.captures_cursor());
-        game_.update(router_, delta_seconds);
-        window_.set_cursor_captured(game_.captures_cursor());
-        if (game_.take_save_request()) {
-            try {
-                Save::write(save_.directory(), game_.world().snapshot());
-                game_.set_save_status("Game saved. F6: Save again");
-            }
-            catch (Error const &error) {
-                spdlog::error("[save] {}", error.diagnostic());
-                game_.set_save_status("Save failed. Please try again.");
-            }
-            catch (std::exception const &error) {
-                spdlog::error("[save] {}", error.what());
-                game_.set_save_status("Save failed. Please try again.");
-            }
-        }
-        update_title();
-
-        ImGui::Render();
+        game_.update(window_.input(), delta_seconds);
         if (game_.quit_requested())
             break;
+
+        ImGui::Render();
 
         switch (frame_loop_.draw_frame(*swapchain_, record)) {
         case FrameResult::Ok:

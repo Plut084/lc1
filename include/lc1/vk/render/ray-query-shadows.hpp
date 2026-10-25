@@ -9,6 +9,7 @@
 #include "lc1/vk/resources/gpu-mesh.hpp"
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -19,6 +20,7 @@ class Device;
 class CommandBuffer;
 class RenderGraph;
 struct FrameResources;
+struct FrameScene;
 
 namespace scene {
 class FpsCamera;
@@ -39,12 +41,11 @@ class RayQueryShadows {
 
     // Adds scene preparation, visibility, temporal resolve and spatial filtering.
     // Requires imported "frame.inputs" and produces "shadow.filtered_visibility".
-    // Call after the slot fence. This object and borrowed arguments must outlive
-    // execution; callers keep inputs unchanged until it finishes. Execute the
+    // Call after the slot fence. Scene inputs are owned by the callbacks. This object
+    // and frame resources must outlive execution. Execute the
     // graph once for this frame, before recording another frame on this object.
     void add_passes(RenderGraph &graph, FrameResources &resources, vk::Extent2D extent,
-                    scene::FpsCamera const &camera, std::span<scene::Light const> lights,
-                    std::span<DrawItem const> draws);
+                    std::shared_ptr<FrameScene const> scene);
 
   private:
     void prepare_frame(CommandBuffer &cmd, FrameResources &resources, vk::Extent2D extent,

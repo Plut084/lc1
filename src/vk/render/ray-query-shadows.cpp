@@ -2,6 +2,7 @@
 #include "lc1/vk/render/graphics-state.hpp"
 
 #include "draw-validation.hpp"
+#include "frame-scene.hpp"
 #include "lc1/scene/camera.hpp"
 #include "lc1/vk/core/device.hpp"
 #include "lc1/vk/render/frame-resources.hpp"
@@ -49,20 +50,19 @@ RayQueryShadows::RayQueryShadows(Device const &device, vk::Format depth_format)
 }
 
 void RayQueryShadows::add_passes(RenderGraph &graph, FrameResources &resources, vk::Extent2D extent,
-                                 scene::FpsCamera const &camera,
-                                 std::span<scene::Light const> lights,
-                                 std::span<DrawItem const> draws)
+                                 std::shared_ptr<FrameScene const> scene)
 {
     graph.add_pass("Shadow scene preparation", {"frame.inputs"},
                    {"shadow.scene", "shadow.frame", "shadow.history"},
-                   [this, &resources, extent, &camera, lights, draws](CommandBuffer &cmd) {
-                       prepare_frame(cmd, resources, extent, camera, lights, draws);
+                   [this, &resources, extent, scene](CommandBuffer &cmd) {
+                       prepare_frame(cmd, resources, extent, scene->camera, scene->lights,
+                                     scene->draws);
                    });
     graph.add_pass("Shadow visibility", {"shadow.scene", "shadow.frame"},
                    {"shadow.raw_visibility", "shadow.surface"},
-                   [this, &resources, extent, draws](CommandBuffer &cmd) {
+                   [this, &resources, extent, scene](CommandBuffer &cmd) {
                        cmd.bind_descriptor_heap(*resources.descriptor_heap);
-                       record_visibility(cmd, resources, extent, draws);
+                       record_visibility(cmd, resources, extent, scene->draws);
                    });
     graph.add_pass("Temporal shadow resolve",
                    {"shadow.raw_visibility", "shadow.surface", "shadow.history", "shadow.frame"},
@@ -73,14 +73,13 @@ void RayQueryShadows::add_passes(RenderGraph &graph, FrameResources &resources, 
                    });
     // Temporal resolve must consume raw visibility before spatial filtering
     // overwrites its image. The two resource names describe successive contents.
-    graph.add_pass("Spatial shadow filter",
-                   {"shadow.temporal_visibility", "shadow.surface", "shadow.frame"},
-                   {"shadow.filtered_visibility"},
-                   [this, &resources, extent, &camera, lights, draws](CommandBuffer &cmd) {
-                       cmd.bind_descriptor_heap(*resources.descriptor_heap);
-                       filter_history(cmd, resources, extent);
-                       finish_frame(camera, lights, draws);
-                   });
+    graph.add_pass(
+        "Spatial shadow filter", {"shadow.temporal_visibility", "shadow.surface", "shadow.frame"},
+        {"shadow.filtered_visibility"}, [this, &resources, extent, scene](CommandBuffer &cmd) {
+            cmd.bind_descriptor_heap(*resources.descriptor_heap);
+            filter_history(cmd, resources, extent);
+            finish_frame(scene->camera, scene->lights, scene->draws);
+        });
 }
 
 void RayQueryShadows::ensure_attachments(FrameResources &resources, vk::Extent2D extent) const

@@ -206,29 +206,39 @@ if(MINGW)
     target_link_libraries(lc1_engine INTERFACE stdc++exp)
 endif()
 
-# Game rules, world resources and camera behavior depend on the engine.
+# Game rules, world resources and camera behavior depend on the engine. The list is
+# grouped by gameplay feature, mirroring the game/ directory, so a new file has an
+# obvious home instead of being appended to one flat list.
 # The engine does not link back to the game or application.
 add_library(lc1_game STATIC
-    src/game/continent.cpp
-    src/game/continent-prototype.cpp
-    src/game/continent-present.cpp
-    src/game/continent-layout.cpp
-    src/game/character.cpp
-    src/game/party.cpp
-    src/game/save.cpp
-    src/game/input.cpp
-    src/game/player-controller.cpp
-    src/game/map-camera-controller.cpp
-    src/game/continent-view.cpp
-    src/game/game-session.cpp
-    src/game/game-world.cpp
-    src/game/world-view.cpp
-    src/game/game-ui.cpp
-    src/game/music-browser.cpp
-    src/game/player-view.cpp
+    src/game/actions.cpp
+
+    src/game/character/character.cpp
+    src/game/character/ai-character-controller.cpp
+    src/game/player/player-controller.cpp
+    src/game/player/player-view.cpp
+    src/game/camera/map-camera-controller.cpp
+
+    src/game/continent/continent.cpp
+    src/game/continent/prototype.cpp
+    src/game/continent/present.cpp
+    src/game/continent/layout.cpp
+    src/game/continent/view.cpp
+
+    src/game/party/party.cpp
+    src/game/dialog/dialog.cpp
+
+    src/game/world/game-world.cpp
+    src/game/world/world-view.cpp
+    src/game/world/interactable.cpp
+
+    src/game/session/game-session.cpp
+    src/game/session/save.cpp
+
+    src/game/ui/game-ui.cpp
+    src/game/ui/music-browser.cpp
+
     src/game/debug/pbr-showcase.cpp
-    src/game/interactable.cpp
-    src/game/dialog.cpp
 )
 target_link_libraries(lc1_game PUBLIC lc1_engine imgui::imgui)
 

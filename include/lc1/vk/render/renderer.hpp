@@ -69,8 +69,9 @@ class Renderer {
     // overlay passes. World text is blended into the HDR pass itself, before tone
     // mapping and against the scene depth; it needs a target format that supports
     // blending, which both output paths do.
-    // Execute the graph once before recording another frame. This renderer, resources,
-    // camera and the spans' contents must survive execution with unchanged inputs.
+    // Execute the graph once before recording another frame. This renderer and resources
+    // must survive execution. Camera, lights and draw records are copied into one
+    // immutable snapshot shared by the callbacks; mesh/material pointees remain borrowed.
     // The target is copied; its view and image remain borrowed through GPU completion.
     // The same frame-resource and target contracts as record() apply.
     void add_passes(RenderGraph &graph, FrameResources &resources, RenderTarget const &target,

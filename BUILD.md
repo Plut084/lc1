@@ -23,9 +23,11 @@ builds on Windows. Run commands from the repository root unless stated otherwise
 | Default Linux build | `profiles/linux` | Clang 22 with libstdc++ |
 | Linux GCC build | `profiles/linux-gcc` | GCC 16 |
 | Linux → Windows | `profiles/mingw64` | MinGW-w64 GCC 16 with `x86_64-w64-mingw32-*` tools |
-| Native Windows build | `profiles/windows` | Visual Studio 2022, MSVC 19.4x, x64 developer environment |
+| Native Windows build | Local detected profile + `profiles/windows` | Installed MSVC with C++23 support, x64 developer environment |
 
-The installed toolchain must match the version declared in its profile. The Clang
+The installed toolchain must match the version declared in its profile. Native
+Windows builds detect the local compiler version; CI pins MSVC 19.4x separately
+in `profiles/windows-ci`. The Clang
 profile uses the system libstdc++, so its development files must also provide the
 required C++23 support. Building dependencies from source may require system
 development packages, Autoconf, Automake, Libtool, and pkg-config. See the
@@ -180,13 +182,20 @@ LC1_NO_VALIDATION=1 make run PLATFORM=windows-x86_64
 
 ### Native Windows with MSVC
 
-Run these commands in a Visual Studio 2022 x64 developer command prompt with
-Python, Conan, CMake, Ninja, and Windows Slang on `PATH`. Supply assets separately;
-the empty directory below only satisfies the build step.
+Run these commands in the x64 developer command prompt for your installed Visual
+Studio or Build Tools, with Python, Conan, CMake, Ninja, and Windows Slang on `PATH`.
+Reuse your existing `default` Conan profile. If it does not exist, run
+`conan profile detect` in this developer prompt first. Review it with
+`conan profile show -pr:a default`.
+The detected compiler must be MSVC and provide the C++23 features used by the project;
+other versions have not been validated by the Windows CI configuration. If you change
+toolchains, update your profile to match the active toolchain and move the old
+build tree aside before reinstalling dependencies.
+Supply assets separately; the empty directory below only satisfies the build step.
 
 ```bat
 if not exist runtime\assets mkdir runtime\assets
-conan install . -pr:h profiles/windows -pr:b profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
+conan install . -pr:a default -pr:a ./profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
 cmake --preset windows-x86_64-debug
 cmake --build --preset windows-x86_64-debug
 cd build\windows-x86_64\Debug
@@ -257,3 +266,19 @@ See the [CI documentation](docs/ci.md) (Chinese) for platform coverage, dependen
 installation policies, and validation scope; consult the
 [workflow](.github/workflows/ci.yml) for the actual commands. CI builds and CPU tests
 do not include launching the game or validating GPU rendering.
+
+## Dependency maintenance constraints
+
+- Keep `conanfile.py::layout()` platform/build-type isolation, `presets_prefix` and
+  `build_folder_vars`. Regenerate every included build type after preset changes.
+- Dependency defaults belong in `conanfile.py::default_options`; profiles describe
+  toolchains and environment. Do not inherit unrelated default host options or use
+  `*:shared=False`: Wayland and XKB must remain shared because GLFW dlopens them.
+- Linux is Wayland-only by default: GLFW `with_wayland=True`, GLFW/XKB `with_x11=False`,
+  validation layers `with_wsi_xcb/xlib=False`. X11 requires enabling all four X11 options
+  and installing system development packages.
+- VMA-Hpp bundles `vk_mem_alloc.h`; do not add a second Conan VMA dependency.
+- Preserve MinGW's prefixed C/C++/`rc` tools and CMake link fixes: `stdc++exp` for
+  `<print>`, executable `-static`, and KTX 4.4.2's missing `astcenc-avx2-static`
+  companion archive from the same package. Link flags belong in CMake; profile
+  `*_FLAGS_INIT` changes do not update an existing cache. TinyGLTF filenames use UTF-8.

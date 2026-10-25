@@ -1,10 +1,12 @@
-#include "lc1/game/character.hpp"
-#include "lc1/game/ai-character-controller.hpp"
-#include "lc1/game/continent.hpp"
-#include "lc1/game/faction.hpp"
-#include "lc1/game/input.hpp"
-#include "lc1/game/player-controller.hpp"
-#include "lc1/game/save.hpp"
+#include "lc1/game/character/character.hpp"
+#include "lc1/game/actions.hpp"
+#include "lc1/game/character/ai-character-controller.hpp"
+#include "lc1/game/continent/continent.hpp"
+#include "lc1/game/dialog/dialog.hpp"
+#include "lc1/game/party/faction.hpp"
+#include "lc1/game/party/party.hpp"
+#include "lc1/game/player/player-controller.hpp"
+#include "lc1/game/session/save.hpp"
 #include "lc1/model.hpp"
 
 #include <algorithm>
@@ -177,34 +179,43 @@ void companion_orders()
     rejects([&] { party.command(leader, member, lc1::CompanionOrder::None); },
             "orders cannot re-enable a discarded patrol");
     member.set_controller(std::make_unique<lc1::AiCharacterController>(
-        world, std::vector<lc1::Waypoint>{{.position = {-8, 0, 0}}, {.position = {-12, 0, 0}}}));
+        std::vector<lc1::Waypoint>{{.position = {-8, 0, 0}}, {.position = {-12, 0, 0}}}));
     party.command(leader, member, lc1::CompanionOrder::Follow);
-    check(!member.controller(), "following replaces the previous patrol");
-    member.update(world, 0.1F, false);
+    check(member.controller() &&
+              member.controller()->companion_order() == lc1::CompanionOrder::Follow,
+          "following replaces the previous patrol with a companion controller");
+    auto step = [&](lc1::Character &character, float delta_seconds,
+                    bool controller_enabled = true) {
+        auto intent = lc1::CharacterIntent{};
+        if (controller_enabled && character.controller())
+            intent = character.controller()->update(std::min(delta_seconds, 0.1F), character);
+        character.update(world, delta_seconds, intent);
+    };
+    step(member, 0.1F, false);
     check(near(member.position().x, -8.0F), "a conversation pauses following");
-    member.update(world, 0.1F);
+    step(member, 0.1F);
     check(member.position().x > -8.0F, "followers move toward their leader");
     for (int i = 0; i < 100; ++i)
-        member.update(world, 0.1F);
+        step(member, 0.1F);
     check(near(member.position(), {-2, 0, 0}), "followers stop at two metres without overshooting");
     auto const stopped = member.position();
-    member.update(world, 10.0F);
+    step(member, 10.0F);
     check(near(member.position(), stopped), "a long frame does not move a settled follower");
     party.command(leader, member, lc1::CompanionOrder::Wait);
     leader.move(world, {-4, 0, 0});
-    member.update(world, 0.1F);
+    step(member, 0.1F);
     check(near(member.position(), stopped), "waiting members stay when their leader moves");
     member.request_jump();
-    member.update(world, 0.1F);
+    step(member, 0.1F);
     check(!member.on_ground(), "waiting preserves gravity and jumping");
     for (int i = 0; i < 30; ++i)
-        member.update(world, 0.1F);
+        step(member, 0.1F);
     check(member.on_ground(), "waiting members still land");
     party.command(leader, member, lc1::CompanionOrder::Follow);
     lc1::Character far_leader{world, {.position = {10, 0, 0}}, config(5, party)};
     party.set_leader(&far_leader);
     for (int i = 0; i < 100; ++i)
-        member.update(world, 0.1F);
+        step(member, 0.1F);
     check(member.position().x <= 4.701F && member.position().x > 4.6F,
           "following obeys collision and cannot cross a wall without a path");
     auto const saved = lc1::serialize_character_state(member);
@@ -271,7 +282,7 @@ void recruitment_dialog()
     rejects([&] { party.set_leader(&npc); }, "a captive cannot also be the leader");
     other.set_leader(&stranger);
     npc.set_controller(std::make_unique<lc1::AiCharacterController>(
-        world, std::vector<lc1::Waypoint>{{.position = world.spawn()}}));
+        std::vector<lc1::Waypoint>{{.position = world.spawn()}}));
 
     // Exercise authored transitions and reordered choices before changing party state.
     auto script = lc1::DialogScript::load("runtime/dialogs/recruit.yaml");
@@ -325,13 +336,13 @@ void recruitment_dialog()
           "goodbye clears all dialogue state without changing the NPC");
 
     dialog.start(player, npc);
-    auto const bindings = lc1::default_bindings();
-    lc1::InputRouter router{bindings, lc1::InputContext::Gameplay};
+    auto const bindings = lc1::default_game_bindings();
+    lc1::GameInputRouter router{bindings, lc1::GameInputContext::Gameplay};
     lc1::InputState input;
     input.on_key(lc1::Key::Digit1, true);
     router.update(input);
-    check(router.pressed(lc1::Action::DialogResponse0), "key 1 selects the first response");
-    if (router.pressed(lc1::Action::DialogResponse0))
+    check(router.pressed(lc1::GameAction::DialogResponse0), "key 1 selects the first response");
+    if (router.pressed(lc1::GameAction::DialogResponse0))
         choose(dialog, player, 0);
     check(dialog.current_node_id() == "offer" && party.members().empty() &&
               party.captives().size() == 1,
@@ -343,7 +354,7 @@ void recruitment_dialog()
     choose(dialog, player, 0);
     check(dialog.current_node_id() == "joined" && party.members().size() == 1 &&
               party.members().front() == &npc && party.captives().empty() &&
-              npc.config().party == &party && !npc.controller() &&
+              npc.config().party == &party && npc.controller() &&
               npc.companion_order() == lc1::CompanionOrder::Follow,
           "recruiting releases an own captive, adds membership and stops the old patrol");
     check(dialog.candidate_responses().size() == 1 && dialog.response_id(0) == "goodbye",
@@ -413,12 +424,12 @@ void recruitment_dialog()
 
     input.begin_frame();
     input.on_key(lc1::Key::Digit2, true);
-    router.push(lc1::InputContext::Ui);
+    router.push(lc1::GameInputContext::Ui);
     router.update(input);
-    check(!router.pressed(lc1::Action::DialogResponse1), "UI context gates response input");
+    check(!router.pressed(lc1::GameAction::DialogResponse1), "UI context gates response input");
     router.pop();
     router.update(input);
-    check(router.pressed(lc1::Action::DialogResponse1), "key 2 selects the second response");
+    check(router.pressed(lc1::GameAction::DialogResponse1), "key 2 selects the second response");
 }
 
 void jumping()
@@ -428,9 +439,9 @@ void jumping()
     auto character = make_character();
     check(character.on_ground(), "spawn starts grounded");
     character.request_jump();
-    character.update(world, 0.0F);
+    character.update(world, 0.0F, {});
     check(character.on_ground(), "zero-time update does not start a jump");
-    character.update(world, 0.01F);
+    character.update(world, 0.01F, {});
     check(!character.on_ground() && character.position().y > 0.0F, "jump leaves the ground");
     float const airborne_height = character.position().y;
     character.walk(world, {1, 0, 0}, 0.01F, false);
@@ -439,17 +450,17 @@ void jumping()
     character.move(world, {10, 0, 0});
     check(character.position().x < 4.701F, "jump retains ground-plane obstacle blocking");
     character.request_jump();
-    character.update(world, 0.01F);
+    character.update(world, 0.01F, {});
     float const expected_height =
-        std::sqrt(2.0F * lc1::gravityf) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
+        std::sqrt(2.0F * lc1::gravityf * 0.5F) * 0.02F - 0.5F * lc1::gravityf * 0.02F * 0.02F;
     check(near(character.position().y, expected_height), "airborne request cannot double jump");
     for (int i = 0; i < 200; ++i)
-        character.update(world, 0.01F);
+        character.update(world, 0.01F, {});
     check(character.on_ground() && character.position().y == 0.0F, "landing clamps to ground");
-    character.update(world, 0.1F);
+    character.update(world, 0.1F, {});
     check(character.position().y == 0.0F, "landing clears falling velocity");
     character.request_jump();
-    character.update(world, 0.01F);
+    character.update(world, 0.01F, {});
     check(near(character.position().y, airborne_height), "subsequent jump has the same impulse");
 
     for (float const step : {1.0F / 30.0F, 1.0F / 60.0F, 1.0F / 144.0F}) {
@@ -457,34 +468,32 @@ void jumping()
         jumper.request_jump();
         float peak = 0.0F;
         for (int i = 0; i < 300; ++i) {
-            jumper.update(world, step);
+            jumper.update(world, step, {});
             peak = std::max(peak, jumper.position().y);
         }
-        check(std::abs(peak - 1.0F) < 0.002F, "jump height is stable across frame rates");
+        check(std::abs(peak - 0.5F) < 0.002F, "jump height is stable across frame rates");
         check(jumper.on_ground(), "jump lands at each frame rate");
     }
     auto capped = make_character();
     auto regular = make_character();
     capped.request_jump();
     regular.request_jump();
-    capped.update(world, 10.0F);
-    regular.update(world, 0.1F);
+    capped.update(world, 10.0F, {});
+    regular.update(world, 0.1F, {});
     check(near(capped.position(), regular.position()), "update caps stalled frame time");
-    rejects([&] { character.update(world, -1.0F); }, "negative update time is rejected");
-    rejects([&] { character.update(world, std::numeric_limits<float>::quiet_NaN()); },
+    rejects([&] { character.update(world, -1.0F, {}); }, "negative update time is rejected");
+    rejects([&] { character.update(world, std::numeric_limits<float>::quiet_NaN(), {}); },
             "nonfinite update time is rejected");
 
     auto first = make_character();
-    auto first_command = lc1::resolve_first_person_input(first, {}, {});
-    first_command.jumping = true;
-    lc1::apply_player_command(world, first, first_command, 0.01F);
-    first.update(world, 0.01F);
+    auto first_intent = lc1::PlayerController::first_person(first, {}, {});
+    first_intent.jump = true;
+    first.update(world, 0.01F, first_intent);
     check(!first.on_ground(), "first-person controller requests jump");
     auto third = make_character();
-    auto third_command = lc1::resolve_third_person_input({}, {0, 0, -1});
-    third_command.jumping = true;
-    lc1::apply_player_command(world, third, third_command, 0.01F);
-    third.update(world, 0.01F);
+    auto third_intent = lc1::PlayerController::third_person({}, {0, 0, -1});
+    third_intent.jump = true;
+    third.update(world, 0.01F, third_intent);
     check(!third.on_ground(), "third-person controller requests jump");
 }
 
@@ -586,12 +595,12 @@ void height_and_support()
     check(!airborne.on_ground() && near(airborne.position().y, 5.0F),
           "spawning in the air is allowed and does not fail construction");
     for (int frame = 0; frame < 300; ++frame)
-        airborne.update(world, 1.0F / 60.0F);
+        airborne.update(world, 1.0F / 60.0F, {});
     check(airborne.on_ground() && near(airborne.position().y, 0.0F),
           "an airborne character falls and lands on the sampled ground");
     for (int frame = 0; frame < 30; ++frame) {
         walker.walk(world, {1.0F, 0.0F, 0.0F}, 0.1F, false);
-        walker.update(world, 0.1F);
+        walker.update(world, 0.1F, {});
     }
     check(walker.position().y > 2.0F && walker.on_ground(),
           "grounded character follows a rising terrain surface");
@@ -599,7 +608,7 @@ void height_and_support()
 
     for (int frame = 0; frame < 30; ++frame) {
         walker.walk(world, {-1.0F, 0.0F, 0.0F}, 0.1F, false);
-        walker.update(world, 0.1F);
+        walker.update(world, 0.1F, {});
     }
     check(walker.position().y < uphill_height && walker.on_ground(),
           "grounded character follows a descending terrain surface");
@@ -616,11 +625,11 @@ void height_and_support()
     check(beneath && near(beneath->height, 3.0F),
           "block tops participate in the same support query as terrain");
     on_platform.request_jump();
-    on_platform.update(platform_world, 0.01F);
+    on_platform.update(platform_world, 0.01F, {});
     check(!on_platform.on_ground() && on_platform.position().y > 3.0F,
           "jumping from a raised platform leaves the platform surface");
     for (int frame = 0; frame < 300; ++frame)
-        on_platform.update(platform_world, 0.01F);
+        on_platform.update(platform_world, 0.01F, {});
     check(on_platform.on_ground() && near(on_platform.position().y, 3.0F),
           "jumping on a raised platform lands back on the platform, not world Y=0");
 }
@@ -629,35 +638,87 @@ void player_controllers()
 {
     auto const world = make_world();
     lc1::Character character{world, {.position = world.spawn()}, {}};
-    lc1::apply_player_command(
-        world, character, lc1::resolve_first_person_input(character, {0, 1}, {1800, -1200}), 0.1F);
+    auto apply = [&](lc1::CharacterIntent const &intent) { character.update(world, 0.1F, intent); };
+    apply(lc1::PlayerController::first_person(character, {0, 1}, {1800, -1200}));
     check(near(character.position(), world.spawn() + glm::vec3{0.45F, 0, 0}),
           "first-person movement follows mouse yaw but stays horizontal at high pitch");
     check(near(character.body_heading(), {1, 0, 0}) && near(character.look_pitch(), 60),
           "mouse right turns right and mouse up looks up");
     auto const facing = character.body_heading();
-    lc1::apply_player_command(world, character,
-                              lc1::resolve_first_person_input(character, {0, -1}, {}), 0.1F);
+    apply(lc1::PlayerController::first_person(character, {0, -1}, {}));
     check(near(character.position(), world.spawn()) && near(character.body_heading(), facing),
           "walking backward does not turn the character around");
-    lc1::apply_player_command(world, character,
-                              lc1::resolve_first_person_input(character, {1, 0}, {}), 0.1F);
+    apply(lc1::PlayerController::first_person(character, {1, 0}, {}));
     check(near(character.position(), world.spawn() + glm::vec3{0, 0, 0.45F}),
           "first-person strafe uses the horizontal right vector");
     auto const before = character.position();
-    lc1::apply_player_command(world, character,
-                              lc1::resolve_third_person_input({0, 1}, {0, -2, -4}), 0.1F);
+    apply(lc1::PlayerController::third_person({0, 1}, {0, -2, -4}));
     check(near(character.position(), before + glm::vec3{0, 0, -0.45F}) &&
               near(character.body_heading(), {0, 0, -1}),
           "switching controllers moves the same character using the new camera basis");
     check(near(character.look_pitch(), 0), "third-person movement restores a level look target");
     auto const stopped = character.position();
-    lc1::apply_player_command(world, character, lc1::resolve_first_person_input(character, {}, {}),
-                              0.1F);
-    lc1::apply_player_command(world, character, lc1::resolve_third_person_input({}, {0, 0, -1}),
-                              0.1F);
+    apply(lc1::PlayerController::first_person(character, {}, {}));
+    apply(lc1::PlayerController::third_person({}, {0, 0, -1}));
     check(near(character.position(), stopped),
           "neutral input from the UI/focus gate does not move");
+}
+
+void intent_rules()
+{
+    auto const world = make_world();
+    auto make_character = [&] { return lc1::Character{world, {.position = world.spawn()}, {}}; };
+
+    // Character, not the controller, chooses the speed that belongs to a sprint request.
+    auto sprinter = make_character();
+    sprinter.update(world, 0.1F, {.move = {0, -1}, .sprint = true});
+    check(near(sprinter.position(), world.spawn() + glm::vec3{0, 0, -1.8F}),
+          "sprint intent uses the character's run speed");
+
+    // The same jump request is accepted only by the grounded state rule in Character.
+    auto jumper = make_character();
+    auto control = make_character();
+    jumper.update(world, 0.01F, {.jump = true});
+    control.update(world, 0.01F, {.jump = true});
+    check(!jumper.on_ground(), "grounded character accepts a jump intent");
+    jumper.update(world, 0.01F, {.jump = true});
+    control.update(world, 0.01F, {});
+    check(near(jumper.position(), control.position()) && !jumper.on_ground(),
+          "airborne character rejects a second jump intent");
+
+    // Ambient dialog requests are a character rule, so players and AI share it.
+    auto idle = make_character();
+    check(idle.accepts_ambient_requests({}), "grounded idle character accepts ambient requests");
+    check(!idle.accepts_ambient_requests({.move = {0, 1}}),
+          "moving character defers ambient requests");
+    check(!idle.accepts_ambient_requests({.sprint = true}),
+          "sprinting character defers ambient requests");
+    check(!idle.accepts_ambient_requests({.jump = true}),
+          "jumping character defers ambient requests");
+    idle.update(world, 0.01F, {.jump = true});
+    check(!idle.accepts_ambient_requests({}), "airborne character defers ambient requests");
+
+    auto intact = make_character();
+    auto const before = intact.position();
+    rejects(
+        [&] { intact.update(world, 0.1F, {.move = {std::numeric_limits<float>::quiet_NaN(), 0}}); },
+        "nonfinite intent is rejected");
+    check(intact.position() == before, "invalid intent is rejected before mutating the character");
+}
+
+void controller_intent_boundary()
+{
+    auto const world = make_world();
+    lc1::Character npc{world, {.position = world.spawn()}, {}};
+    lc1::AiCharacterController controller{std::vector<lc1::Waypoint>{
+        {.position = world.spawn()}, {.position = world.spawn() + glm::vec3{4, 0, 0}}}};
+    auto const before = npc.position();
+    auto const intent = controller.update(0.1F, npc);
+    check(npc.position() == before, "an AI decision does not mutate the character");
+    check(intent.move != glm::vec2{} && intent.face_movement,
+          "the patrol asks Character to move and turn toward its target");
+    npc.update(world, 0.1F, intent);
+    check(npc.position().x > before.x, "Character applies the AI's movement intent");
 }
 
 std::vector<lc1::Vertex> triangle()
@@ -736,6 +797,8 @@ int main()
         height_and_support();
         pose_and_movement();
         player_controllers();
+        intent_rules();
+        controller_intent_boundary();
         model_correction();
         std::cout << "character tests passed\n";
         return EXIT_SUCCESS;

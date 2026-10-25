@@ -1,5 +1,6 @@
 #include "lc1/vk/render/renderer.hpp"
 #include "draw-validation.hpp"
+#include "frame-scene.hpp"
 #include "lc1/vk/render/graphics-state.hpp"
 #include "lc1/vk/render/render-graph.hpp"
 
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace lc1 {
@@ -186,11 +188,16 @@ void Renderer::add_passes(RenderGraph &graph, FrameResources &resources, RenderT
 
     graph.import_resource("frame.inputs");
     graph.import_resource("output.target");
-    ray_query_shadows_.add_passes(graph, resources, target.extent, camera, lights, draws);
+    auto const scene = std::make_shared<FrameScene const>(FrameScene{
+        .camera = camera,
+        .lights = {lights.begin(), lights.end()},
+        .draws = {draws.begin(), draws.end()},
+    });
+    ray_query_shadows_.add_passes(graph, resources, target.extent, scene);
     graph.add_pass(
         "HDR lighting", {"shadow.frame", "shadow.filtered_visibility"}, {"hdr.color"},
-        [this, &resources, extent = target.extent, draws, &camera, text](CommandBuffer &commands) {
-            record_hdr(commands, resources, extent, draws, camera, text);
+        [this, &resources, extent = target.extent, scene, text](CommandBuffer &commands) {
+            record_hdr(commands, resources, extent, scene->draws, scene->camera, text);
         });
     graph.add_pass("Tone mapping", {"hdr.color", "output.target"}, {"output.color"},
                    [this, &resources, target, output](CommandBuffer &commands) {

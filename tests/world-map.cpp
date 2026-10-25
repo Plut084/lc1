@@ -1,5 +1,5 @@
 #include "lc1/error.hpp"
-#include "lc1/game/continent.hpp"
+#include "lc1/game/continent/continent.hpp"
 
 #include <algorithm>
 #include <array>

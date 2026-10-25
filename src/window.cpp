@@ -186,7 +186,7 @@ std::optional<Key> mouse_key_from_glfw(int glfw_button)
 
 } // namespace
 
-Window::Window(int width, int height, std::string_view title)
+Window::Window(int width, int height, std::string_view title) : title_(title)
 {
     glfwSetErrorCallback(glfw_error_callback);
     if (glfwInit() != GLFW_TRUE)
@@ -198,7 +198,7 @@ Window::Window(int width, int height, std::string_view title)
     // Must come after glfwInit and before glfwCreateWindow.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    handle_ = glfwCreateWindow(width, height, std::string{title}.c_str(), nullptr, nullptr);
+    handle_ = glfwCreateWindow(width, height, title_.c_str(), nullptr, nullptr);
     if (handle_ == nullptr)
         fail("glfwCreateWindow failed");
 
@@ -358,9 +358,13 @@ std::vector<char const *> Window::required_instance_extensions() const
     return {extensions, extensions + count};
 }
 
-void Window::set_title(std::string_view title)
+bool Window::set_title(std::string_view title)
 {
-    glfwSetWindowTitle(handle_, std::string{title}.c_str());
+    if (title == title_)
+        return false;
+    title_ = title;
+    glfwSetWindowTitle(handle_, title_.c_str());
+    return true;
 }
 
 bool Window::should_close() const

@@ -1,9 +1,11 @@
-#include "lc1/game/dialog.hpp"
+#include "lc1/game/dialog/dialog.hpp"
 #include "lc1/error.hpp"
-#include "lc1/game/ai-character-controller.hpp"
-#include "lc1/game/character.hpp"
-#include "lc1/game/continent.hpp"
-#include "lc1/game/faction.hpp"
+#include "lc1/game/character/ai-character-controller.hpp"
+#include "lc1/game/character/character.hpp"
+#include "lc1/game/continent/continent.hpp"
+#include "lc1/game/party/faction.hpp"
+#include "lc1/game/party/party.hpp"
+#include "lc1/game/world/interactable.hpp"
 
 #include <array>
 #include <chrono>
@@ -242,19 +244,25 @@ void ambient_scheduling_and_patrol(std::filesystem::path const &path)
     check(first->talker() == &world.captive && first->target() == &world.leader,
           "equal-distance scheduling uses character ids as a stable tie break");
 
-    world.captive.set_controller(std::make_unique<lc1::AiCharacterController>(
-        world.continent, std::vector<lc1::Waypoint>{{.position = world.continent.spawn()},
-                                                    {.position = {4.0F, 0.0F, 0.0F}}}));
+    world.captive.set_controller(
+        std::make_unique<lc1::AiCharacterController>(std::vector<lc1::Waypoint>{
+            {.position = world.continent.spawn()}, {.position = {4.0F, 0.0F, 0.0F}}}));
     auto const original = world.captive.position();
-    world.captive.update(world.continent, 0.1F, !system.find(world.captive));
+    auto step = [&](bool controller_enabled) {
+        auto intent = lc1::CharacterIntent{};
+        if (controller_enabled && world.captive.controller())
+            intent = world.captive.controller()->update(0.1F, world.captive);
+        world.captive.update(world.continent, 0.1F, intent);
+    };
+    step(!system.find(world.captive));
     check(world.captive.position() == original && world.captive.controller(),
           "conversation pauses patrol without deleting its controller");
     system.interrupt(world.captive);
-    world.captive.update(world.continent, 0.1F, !system.find(world.captive));
+    step(!system.find(world.captive));
     check(world.captive.position().x > original.x && world.captive.controller(),
           "interruption resumes the same patrol controller");
     world.captive.request_jump();
-    world.captive.update(world.continent, 0.1F, false);
+    step(false);
     check(!world.captive.on_ground(), "paused controllers do not pause physical simulation");
 
     World another;

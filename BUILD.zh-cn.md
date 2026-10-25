@@ -22,9 +22,10 @@ MinGW-w64 交叉编译和 Windows 原生 MSVC 配置。以下命令除特别说�
 | Linux 默认构建 | `profiles/linux` | Clang 22，libstdc++ |
 | Linux GCC 构建 | `profiles/linux-gcc` | GCC 16 |
 | Linux → Windows | `profiles/mingw64` | MinGW-w64 GCC 16，`x86_64-w64-mingw32-*` 工具 |
-| Windows 原生构建 | `profiles/windows` | Visual Studio 2022，MSVC 19.4x，x64 开发环境 |
+| Windows 原生构建 | 本机检测 profile + `profiles/windows` | 已安装且支持所需 C++23 功能的 MSVC，x64 开发环境 |
 
-Profile 中声明的版本必须与实际工具链一致。Clang 配置使用系统 libstdc++，因此也需要
+Profile 中声明的版本必须与实际工具链一致。Windows 原生构建检测本机编译器版本，
+CI 单独通过 `profiles/windows-ci` 固定 MSVC 19.4x。Clang 配置使用系统 libstdc++，因此也需要
 提供 C++23 支持的标准库开发文件。首次构建依赖还可能需要系统开发包及 Autoconf、Automake、
 Libtool、pkg-config 等工具；具体安装列表可参考 [CI 配置](.github/workflows/ci.yml)。
 
@@ -156,12 +157,17 @@ LC1_NO_VALIDATION=1 make run PLATFORM=windows-x86_64
 
 ### Windows 原生 MSVC
 
-在 Visual Studio 2022 的 x64 开发者命令提示符中执行，确保 Python、Conan、CMake、Ninja
-和 Windows 版 Slang 在 `PATH` 中。资源仍需自行准备；以下空目录只满足构建步骤。
+在已安装的 Visual Studio 或 Build Tools 对应的 x64 开发者命令提示符中执行，
+确保 Python、Conan、CMake、Ninja 和 Windows 版 Slang 在 `PATH` 中。
+复用已有的 Conan `default` profile；仅在没有该 profile 时，先在此开发者命令提示符中
+执行 `conan profile detect`。通过 `conan profile show -pr:a default` 核对结果。
+检测到的编译器应为 MSVC，且必须支持项目使用的 C++23 功能；其他版本尚未由 Windows CI 验证。
+切换工具链后，更新 profile 以匹配当前工具链，并先移走旧构建树再安装依赖。
+资源仍需自行准备；以下空目录只满足构建步骤。
 
 ```bat
 if not exist runtime\assets mkdir runtime\assets
-conan install . -pr:h profiles/windows -pr:b profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
+conan install . -pr:a default -pr:a ./profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
 cmake --preset windows-x86_64-debug
 cmake --build --preset windows-x86_64-debug
 cd build\windows-x86_64\Debug

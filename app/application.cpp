@@ -152,9 +152,14 @@ Device make_device(Instance const &instance, Surface const &surface)
                 &vk::PhysicalDeviceShaderObjectFeaturesEXT::shaderObject,
             },
     };
-    auto devices = filter_physical_devices(instance, requirements);
+    auto [devices, unavailable_reasons] = filter_physical_devices(instance, requirements);
     if (devices.empty())
         fail("no Vulkan physical device meets the requirements");
+    for (auto const &[dev, reasons] : unavailable_reasons) {
+        spdlog::info("device {} unavailable, reasons:", dev);
+        for (auto const &reason : reasons)
+            spdlog::info("\t- {}", reason);
+    }
     auto picked = pick_physical_device(devices, surface.raii());
     return Device{instance, std::move(*picked.device), picked.queue_family, requirements};
 }

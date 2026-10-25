@@ -1,6 +1,7 @@
 #include "lc1/game/world/game-world.hpp"
 
 #include "lc1/error.hpp"
+#include "lc1/game/continent/patrol-house.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/player/player-view.hpp"
 
@@ -191,6 +192,39 @@ void reload_world()
     world.update(0.1F, {});
 }
 
+void restored_house_patrol()
+{
+    Checkpoint checkpoint;
+    auto data = lc1::Save{checkpoint.directory()}.data();
+    auto const example = data.session.example;
+    for (auto &state : data.states) {
+        if (state.keyid != example)
+            continue;
+        state.x = 36;
+        state.y = 7.8F;
+        state.z = 23;
+        state.patrol = true;
+    }
+    lc1::Save::write(checkpoint.directory(), data);
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(find(world, example).position().y == 7.8F,
+          "house patrol restores the saved floor without teleporting");
+    bool descended = false;
+    bool climbed_again = false;
+    for (int frame = 0; frame < 60 * 160; ++frame) {
+        world.update(1.0F / 60.0F, {});
+        auto const height = find(world, example).position().y;
+        descended |= height < 0.7F;
+        climbed_again |= descended && height > 7.7F;
+    }
+    check(descended && climbed_again,
+          "world restores a multi-floor patrol and completes its return route");
+    auto snapshot = world.snapshot();
+    check(
+        std::ranges::find(snapshot.states, example, &lc1::SerializedCharacterState::keyid)->patrol,
+        "house patrol retains the existing save patrol flag");
+}
+
 void world_applies_control()
 {
     Checkpoint checkpoint;
@@ -265,6 +299,7 @@ int main()
         reload_world();
         control_physics_camera_order();
         world_applies_control();
+        restored_house_patrol();
         std::cout << "Game world tests passed\n";
         return EXIT_SUCCESS;
     }

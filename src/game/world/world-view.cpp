@@ -140,6 +140,14 @@ std::vector<WorldTextItem> WorldView::world_labels(scene::FpsCamera const &camer
     std::vector<WorldTextItem> labels;
     labels.append_range(showcase_.labels());
 
+    if (world_->continent().identity().id == "present") {
+        glm::vec3 const center{27.0F, 3.4F, 34.0F};
+        labels.push_back({.text = "Patrol House",
+                          .center = center,
+                          .line_height = 0.5F,
+                          .normal = camera.position() - center});
+    }
+
     for (auto const *character : world_->characters())
         labels.push_back(WorldTextItem{
             .text = std::format("{} from {}", character->config().name,

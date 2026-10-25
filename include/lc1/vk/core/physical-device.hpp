@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <string>
 #include <variant>
@@ -48,6 +49,44 @@ struct DeviceRequirements {
     std::vector<Feature> features;
 };
 
+template <class Feature> std::string_view to_string(Feature const &feature)
+{
+    return std::visit(
+        []<class T>(T member) -> std::string_view {
+            if constexpr (std::same_as<T, vk::Bool32 vk::PhysicalDeviceFeatures::*>) {
+                if (member == &vk::PhysicalDeviceFeatures::samplerAnisotropy)
+                    return "samplerAnisotropy";
+                if (member == &vk::PhysicalDeviceFeatures::fillModeNonSolid)
+                    return "fillModeNonSolid";
+                if (member == &vk::PhysicalDeviceFeatures::geometryShader)
+                    return "geometryShader";
+                if (member == &vk::PhysicalDeviceFeatures::tessellationShader)
+                    return "tessellationShader";
+            }
+
+            if constexpr (std::same_as<T, vk::Bool32 vk::PhysicalDeviceVulkan12Features::*>) {
+                if (member == &vk::PhysicalDeviceVulkan12Features::bufferDeviceAddress)
+                    return "bufferDeviceAddress";
+                if (member == &vk::PhysicalDeviceVulkan12Features::descriptorIndexing)
+                    return "descriptorIndexing";
+                if (member == &vk::PhysicalDeviceVulkan12Features::timelineSemaphore)
+                    return "timelineSemaphore";
+            }
+
+            if constexpr (std::same_as<T, vk::Bool32 vk::PhysicalDeviceVulkan13Features::*>) {
+                if (member == &vk::PhysicalDeviceVulkan13Features::dynamicRendering)
+                    return "dynamicRendering";
+                if (member == &vk::PhysicalDeviceVulkan13Features::synchronization2)
+                    return "synchronization2";
+                if (member == &vk::PhysicalDeviceVulkan13Features::maintenance4)
+                    return "maintenance4";
+            }
+
+            return "<unknown feature>";
+        },
+        feature);
+}
+
 inline FeatureChain get_features_chain(vk::raii::PhysicalDevice const &physical_device)
 {
     return detail::FeatureChainTraits<FeatureChain>::query(physical_device);
@@ -68,8 +107,13 @@ template <class Chain> auto &feature_value(Chain &chain, Feature const &feature)
         feature);
 }
 
-inline std::vector<vk::raii::PhysicalDevice>
-filter_physical_devices(Instance const &instance, DeviceRequirements const &requirements)
+struct FilterPhysicalDevicesResult {
+    std::vector<vk::raii::PhysicalDevice> available_devices;
+    std::map<std::string, std::vector<std::string>> device_unavailable_reasons;
+};
+
+inline FilterPhysicalDevicesResult filter_physical_devices(Instance const &instance,
+                                                           DeviceRequirements const &requirements)
 {
     auto get_available_extensions = [](vk::raii::PhysicalDevice const &physical_device) {
         std::set<Extension> available_extensions;
@@ -79,9 +123,13 @@ filter_physical_devices(Instance const &instance, DeviceRequirements const &requ
         return available_extensions;
     };
 
-    std::vector<vk::raii::PhysicalDevice> filtered;
+    FilterPhysicalDevicesResult result;
 
     for (auto const &physical_device : instance.raii().enumeratePhysicalDevices()) {
+        auto const props = physical_device.getProperties();
+
+        bool available{true};
+
         auto const available_extensions = get_available_extensions(physical_device);
         auto extension_supported = [&](Extension const &extension) {
             return available_extensions.contains(extension);
@@ -90,19 +138,39 @@ filter_physical_devices(Instance const &instance, DeviceRequirements const &requ
         auto feature_supported = [&](Feature const &feature) {
             return feature_value(features_chain, feature) == vk::True;
         };
-        if (requirements.vulkan_version > physical_device.getProperties().apiVersion) {
-            continue;
+
+        if (requirements.vulkan_version > props.apiVersion) {
+            available = false;
+            result.device_unavailable_reasons[props.deviceName].push_back(std::format(
+                "Vulkan {}.{}.{} required, but device supports only {}.{}.{}",
+                vk::apiVersionMajor(requirements.vulkan_version),
+                vk::apiVersionMinor(requirements.vulkan_version),
+                vk::apiVersionPatch(requirements.vulkan_version),
+                vk::apiVersionMajor(props.apiVersion), vk::apiVersionMinor(props.apiVersion),
+                vk::apiVersionPatch(props.apiVersion)));
         }
-        if (!std::ranges::all_of(requirements.extensions, extension_supported)) {
-            continue;
+
+        for (auto const &required_ext : requirements.extensions) {
+            if (!extension_supported(required_ext)) {
+                available = false;
+                result.device_unavailable_reasons[props.deviceName].push_back(
+                    std::format("Required extension {} is not supported", required_ext));
+            }
         }
-        if (!std::ranges::all_of(requirements.features, feature_supported)) {
-            continue;
+
+        for (auto const &required_feature : requirements.features) {
+            if (!feature_supported(required_feature)) {
+                available = false;
+                result.device_unavailable_reasons[props.deviceName].push_back(std::format(
+                    "Required feature {} is not supported", to_string(required_feature)));
+            }
         }
-        filtered.push_back(physical_device);
+
+        if (available)
+            result.available_devices.push_back(physical_device);
     }
 
-    return filtered;
+    return result;
 }
 
 } // namespace lc1

@@ -222,6 +222,7 @@ add_library(lc1_game STATIC
     src/game/continent/continent.cpp
     src/game/continent/prototype.cpp
     src/game/continent/present.cpp
+    src/game/continent/patrol-house.cpp
     src/game/continent/layout.cpp
     src/game/continent/view.cpp
 

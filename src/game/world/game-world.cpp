@@ -2,6 +2,7 @@
 
 #include "lc1/error.hpp"
 #include "lc1/game/character/ai-character-controller.hpp"
+#include "lc1/game/continent/patrol-house.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/world/interactable.hpp"
@@ -59,8 +60,27 @@ void GameWorld::load(Save const &save)
             {.position = continent_.spawn() + glm::vec3{-2.96F, 0.0F, -3.41F},
              .wait_seconds = 1.61F},
         };
+        if (continent_.identity().id == "present") {
+            auto const route = patrol_house_route();
+            waypoints.clear();
+            for (auto const position : route)
+                waypoints.push_back(
+                    {.position = position,
+                     .wait_seconds = position == glm::vec3{36, 7.8F, 23} ? 2.0F : 0.0F});
+            // Resume at the nearest authored point on the saved floor. Keep that point
+            // at index 1, the controller's initial target; never head across floor slabs.
+            auto const nearest =
+                std::ranges::min_element(waypoints, {}, [&](Waypoint const &point) {
+                    return glm::distance(point.position, example_->position());
+                });
+            auto const index = static_cast<std::size_t>(nearest - waypoints.begin());
+            std::rotate(waypoints.begin(),
+                        waypoints.begin() + (index + waypoints.size() - 1) % waypoints.size(),
+                        waypoints.end());
+        }
         if (save.states().empty() || save.states().at(save.example()).patrol)
-            example_->set_controller(std::make_unique<AiCharacterController>(waypoints));
+            example_->set_controller(std::make_unique<AiCharacterController>(
+                waypoints, continent_.identity().id == "present" ? 0.4F : 0.5F));
     }
 
     for (auto const &[id, state] : save.states()) {
@@ -140,6 +160,9 @@ void GameWorld::build_world(Save const &save)
         // the Character constructor itself still permits an airborne spawn.
         if (auto const ground = continent_.ground_height({actual.position.x, actual.position.z}))
             actual.position.y = *ground;
+        if (save.states().empty() && save.has_example() && record.keyid == save.example() &&
+            continent_.identity().id == "present")
+            actual.position = patrol_house_spawn;
         auto const state = save.states().find(record.keyid);
         if (state != save.states().end()) {
             auto const &pose = state->second;

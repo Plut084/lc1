@@ -94,6 +94,7 @@ Continent Continent::make_present(std::span<ContinentBlock const> spawn_blocks)
 
     add_terrain_relief(data);
     add_starter_buildings(data);
+    add_patrol_house(data);
     for (auto const &extra : spawn_blocks)
         data.blocks.push_back({extra.min + data.spawn, extra.max + data.spawn, extra.surface,
                                extra.solid, extra.walkable_top});

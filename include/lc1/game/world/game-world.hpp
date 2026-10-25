@@ -53,6 +53,7 @@ class GameWorld {
     void update(float delta_seconds, WorldInteraction const &interaction);
 
     // Discards runtime state and rebuilds from save, **keeping the continent and dialog catalog**.
+    // Rejects a different continent identity before clearing existing state.
     // Invalidates all character/dialog borrows. If rebuilding throws, retry load() before use.
     void load(Save const &save);
 

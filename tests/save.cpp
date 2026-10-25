@@ -271,8 +271,15 @@ void checkpoint_round_trip()
     check(lc1::Save{scratch.directory()}.states().at(1).x == 12.5F,
           "committed checkpoint wins over seed and unfinished staging");
 
+    auto alternate = data;
+    alternate.continent = {"prototype", 1};
+    lc1::Save::write(scratch.directory(), alternate);
+    check(lc1::Save{scratch.directory()}.continent() == alternate.continent,
+          "checkpoint preserves the selected continent");
+    lc1::Save::write(scratch.directory(), data);
+
     auto invalid = data;
-    invalid.version = 3;
+    invalid.version = 4;
     rejects_write([&] { lc1::Save::write(scratch.directory(), invalid); },
                   "unsupported checkpoint version");
     invalid = data;
@@ -325,23 +332,48 @@ void legacy_checkpoints_are_upgraded()
     lc1::Save::write(scratch.directory(), data);
     auto stream = std::ifstream{scratch.directory() / "checkpoint.yaml"};
     std::string legacy;
+    bool continent_fields = false;
     for (std::string line; std::getline(stream, line);) {
+        if (line == "continent:") {
+            continent_fields = true;
+            continue;
+        }
+        if (continent_fields && line.starts_with(" "))
+            continue;
+        continent_fields = false;
         if (!line.contains("companion_order:"))
             legacy += line + "\n";
     }
     stream.close();
-    auto const version = legacy.find("version: 2");
-    check(version != std::string::npos, "checkpoint writer emits version 2");
-    legacy.replace(version, std::string_view{"version: 2"}.size(), "version: 1");
+    auto const version = legacy.find("version: 3");
+    check(version != std::string::npos, "checkpoint writer emits version 3");
+    legacy.replace(version, std::string_view{"version: 3"}.size(), "version: 1");
     scratch.write("checkpoint.yaml", legacy);
     auto const upgraded = lc1::Save{scratch.directory()}.data();
-    check(upgraded.version == 2 &&
+    check(upgraded.version == 3 &&
               upgraded.states.front().companion_order == lc1::CompanionOrder::None &&
               upgraded.states.at(1).patrol,
           "version 1 checkpoints preserve patrol and gain no implicit follow orders");
     lc1::Save::write(scratch.directory(), upgraded);
-    check(lc1::Save{scratch.directory()}.data().version == 2,
+    check(lc1::Save{scratch.directory()}.data().version == 3,
           "upgraded saves can be written and reloaded");
+    check(upgraded.continent == lc1::ContinentIdentity{"present", 1},
+          "legacy checkpoints select present continent revision 1");
+    auto v2 = legacy;
+    v2.replace(version, std::string_view{"version: 1"}.size(), "version: 2");
+    // Restore the companion field required by version 2.
+    for (std::size_t pos = 0; (pos = v2.find("patrol:", pos)) != std::string::npos;) {
+        auto const end = v2.find('\n', pos);
+        v2.insert(end + 1, "    companion_order: None\n");
+        pos = end + 1 + std::string_view{"    companion_order: None\n"}.size();
+    }
+    scratch.write("checkpoint.yaml", v2);
+    check(lc1::Save{scratch.directory()}.data().continent == lc1::ContinentIdentity{"present", 1},
+          "version 2 checkpoints gain continent identity");
+    auto missing_continent = v2;
+    missing_continent.replace(version, std::string_view{"version: 2"}.size(), "version: 3");
+    scratch.write("checkpoint.yaml", missing_continent);
+    check_rejected_in(scratch, "continent");
     // Version 2 must supply the new field; migration never relaxes its required schema.
     legacy.replace(version, std::string_view{"version: 1"}.size(), "version: 2");
     scratch.write("checkpoint.yaml", legacy);
@@ -403,6 +435,12 @@ int main(int argc, char **argv)
             return EXIT_SUCCESS;
         }
         seed_names_the_player();
+        check_rejected("unknown-continent", "continent.yaml", "id: missing\nversion: 1\n",
+                       "unknown continent id");
+        check_rejected("unknown-continent-version", "continent.yaml", "id: present\nversion: 2\n",
+                       "unsupported continent");
+        check_rejected("missing-continent-version", "continent.yaml", "id: present\n",
+                       "cannot read save file");
         an_existing_character_can_be_the_player();
         a_save_without_an_example_loads();
         invalid_sessions_are_rejected();

@@ -23,7 +23,7 @@ void insert_unique(Map &map, std::uint32_t keyid, Value value, std::string_view 
 } // namespace
 
 GameWorld::GameWorld(Save const &save, std::filesystem::path const &dialog_catalog)
-    : continent_(Continent::make_present(demo::PbrShowcase::spawn_blocks())),
+    : continent_(Continent::load(save.continent(), demo::PbrShowcase::spawn_blocks())),
       dialogs_(dialog_catalog)
 {
     load(save);
@@ -31,6 +31,8 @@ GameWorld::GameWorld(Save const &save, std::filesystem::path const &dialog_catal
 
 void GameWorld::load(Save const &save)
 {
+    if (save.continent() != continent_.identity())
+        fail("cannot load a different continent into an existing world");
     // Release participant and roster borrows before destroying their owners.
     dialogs_.reset();
     interaction_target_ = nullptr;
@@ -161,7 +163,8 @@ void GameWorld::build_world(Save const &save)
 
 SerializedWorld GameWorld::snapshot() const
 {
-    SerializedWorld world{.version = 2,
+    SerializedWorld world{.version = 3,
+                          .continent = continent_.identity(),
                           .session = {.player = player_->config().keyid,
                                       .example = example_ ? example_->config().keyid : 0},
                           .factions = {},

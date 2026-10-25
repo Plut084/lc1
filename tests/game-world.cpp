@@ -23,22 +23,6 @@ void check(bool condition, std::string_view message)
         throw std::runtime_error(std::string{message});
 }
 
-lc1::Continent continent()
-{
-    return lc1::Continent{{
-        .origin = {-128, -128},
-        .tile_size = 128,
-        .tiles = std::vector(2, std::vector<lc1::TileData>(2)),
-        .spawn = {0, 0, 0},
-        .patches = {},
-        .blocks = {},
-        .regions = {{lc1::RegionId{1}, "Plain", lc1::RegionType::Plain}},
-        .locations = {},
-        .roads = {},
-        .height_samples = {},
-    }};
-}
-
 class Checkpoint {
   public:
     Checkpoint()
@@ -52,7 +36,7 @@ class Checkpoint {
             data.states.push_back({.keyid = character.keyid,
                                    .x = static_cast<float>(index) * 10.0F,
                                    .y = 0,
-                                   .z = 20,
+                                   .z = 64,
                                    .body_yaw = 0,
                                    .look_yaw = 0,
                                    .look_pitch = 0,
@@ -61,11 +45,11 @@ class Checkpoint {
         for (auto &state : data.states) {
             if (state.keyid == data.session.player) {
                 state.x = 0;
-                state.z = 0;
+                state.z = 64;
             }
             if (state.keyid == 100025) {
                 state.x = 0;
-                state.z = -2;
+                state.z = 62;
             }
         }
         lc1::Save::write(directory_, data);
@@ -96,7 +80,7 @@ void world_and_checkpoint()
 {
     Checkpoint checkpoint;
     // Save is destroyed immediately after construction. The world retains no borrow to it.
-    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     check(world.characters().size() == 7, "headless world builds the entire fixture");
     check(std::ranges::is_sorted(world.characters(), {},
                                  [](auto const *character) { return character->config().keyid; }),
@@ -133,7 +117,7 @@ void world_and_checkpoint()
     world.player().set_body_yaw(40);
     world.player().set_look_angles(20, 10);
     lc1::Save::write(checkpoint.directory(), world.snapshot());
-    lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     check(restored.player().position() == world.player().position(),
           "checkpoint restores position");
     check(restored.player().body_yaw() == 40 && restored.player().look_yaw() == 20 &&
@@ -160,7 +144,7 @@ void world_and_checkpoint()
 void reload_world()
 {
     Checkpoint checkpoint;
-    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     auto const initial_position = world.player().position();
     lc1::CharacterIntent interact;
     interact.interact = true;
@@ -184,6 +168,20 @@ void reload_world()
     }
 
     auto data = lc1::Save{checkpoint.directory()}.data();
+    auto alternate = data;
+    alternate.continent = {"prototype", 1};
+    lc1::Save::write(checkpoint.directory(), alternate);
+    bool rejected = false;
+    try {
+        world.load(lc1::Save{checkpoint.directory()});
+    }
+    catch (lc1::Error const &) {
+        rejected = true;
+    }
+    check(rejected && world.player().position() == initial_position,
+          "changing continent is rejected without clearing the existing world");
+    check(world.snapshot().continent == data.continent,
+          "world snapshots retain the actual continent identity");
     data.session.player = 100025;
     data.session.example = 0;
     lc1::Save::write(checkpoint.directory(), data);
@@ -196,7 +194,7 @@ void reload_world()
 void world_applies_control()
 {
     Checkpoint checkpoint;
-    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     auto const before = world.player().position();
     world.update(
         10,
@@ -224,7 +222,7 @@ void world_applies_control()
 void control_physics_camera_order()
 {
     Checkpoint checkpoint;
-    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, continent(), "dialogs/catalog.yaml"};
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     lc1::PlayerView view{world.continent(), world.player().position()};
     world.player().set_body_yaw(25);
     world.player().set_look_angles(10, 5);

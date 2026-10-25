@@ -173,6 +173,7 @@ Continent Continent::make_prototype(std::span<ContinentBlock const> spawn_blocks
     for (auto const &extra : spawn_blocks)
         data.blocks.push_back(
             {extra.min + data.spawn, extra.max + data.spawn, extra.surface, extra.solid});
+    data.identity = {"prototype", 1};
     return Continent{std::move(data)};
 }
 

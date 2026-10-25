@@ -2,6 +2,7 @@
 
 #include "lc1/error.hpp"
 #include "lc1/game/character/character.hpp"
+#include "lc1/game/continent/continent.hpp"
 #include "lc1/game/party/faction.hpp"
 #include "lc1/game/party/party.hpp"
 
@@ -68,7 +69,7 @@ struct LegacyCharacterState {
     bool patrol;
 };
 
-struct LegacyWorld {
+template <typename State> struct LegacyWorldData {
     std::uint32_t version;
     SerializedSession session;
     std::vector<SerializedFaction> factions;
@@ -76,19 +77,33 @@ struct LegacyWorld {
     std::vector<SerializedWeapon> weapons;
     std::vector<SerializedParty> parties;
     std::vector<SerializedCharacterConfig> characters;
-    std::vector<LegacyCharacterState> states;
+    std::vector<State> states;
 };
 
 SerializedWorld read_checkpoint(std::filesystem::path const &directory)
 {
     auto const version =
         read_save_file_single<CheckpointHeader>(directory, "checkpoint.yaml").version;
-    if (version == 2)
+    if (version == 3)
         return read_save_file_single<SerializedWorld>(directory, "checkpoint.yaml");
+    if (version == 2) {
+        auto legacy = read_save_file_single<LegacyWorldData<SerializedCharacterState>>(
+            directory, "checkpoint.yaml");
+        return {.version = 3,
+                .continent = {"present", 1},
+                .session = legacy.session,
+                .factions = std::move(legacy.factions),
+                .equipments = std::move(legacy.equipments),
+                .weapons = std::move(legacy.weapons),
+                .parties = std::move(legacy.parties),
+                .characters = std::move(legacy.characters),
+                .states = std::move(legacy.states)};
+    }
     if (version != 1)
         fail("unsupported checkpoint version {}", version);
-    auto legacy = read_save_file_single<LegacyWorld>(directory, "checkpoint.yaml");
-    SerializedWorld world{.version = 2,
+    auto legacy =
+        read_save_file_single<LegacyWorldData<LegacyCharacterState>>(directory, "checkpoint.yaml");
+    SerializedWorld world{.version = 3,
                           .session = legacy.session,
                           .factions = std::move(legacy.factions),
                           .equipments = std::move(legacy.equipments),
@@ -145,6 +160,7 @@ Save::Save(std::filesystem::path directory) : directory_{std::move(directory)}, 
     read_parties();
     read_characters();
     read_session();
+    continent_ = read_save_file_single<ContinentIdentity>(directory_, "continent.yaml");
     validate_references();
 }
 
@@ -157,9 +173,10 @@ Save::Save(std::filesystem::path directory, SerializedWorld const &world)
 
 void Save::read_world(SerializedWorld const &world)
 {
-    if (world.version != 2)
+    if (world.version != 3)
         fail("unsupported checkpoint version {}", world.version);
     session_ = world.session;
+    continent_ = world.continent;
     for (auto const &record : world.factions)
         insert_unique(factions_, record, "faction");
     for (auto const &record : world.equipments)
@@ -178,7 +195,8 @@ void Save::read_world(SerializedWorld const &world)
 
 SerializedWorld Save::data() const
 {
-    return {.version = 2,
+    return {.version = 3,
+            .continent = continent_,
             .session = session_,
             .factions = sorted_records(factions_),
             .equipments = sorted_records(equipments_),
@@ -319,6 +337,7 @@ void Save::read_session()
 
 void Save::validate_references() const
 {
+    Continent::validate_identity(continent_);
     if (session_.player == 0)
         fail("session.yaml must name the player character");
     // The session goes first: a save that cannot say who the player is has no business

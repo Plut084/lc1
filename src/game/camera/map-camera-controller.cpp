@@ -22,7 +22,7 @@ MapCameraController::MapCameraController(glm::vec3 player_position)
 void MapCameraController::apply(scene::FpsCamera &camera) const
 {
     // Frame the target at the requested span using distance, with a fixed lens and angle.
-    float const distance = view_height_ / (2.0F * std::tan(glm::radians(fov_y) * 0.5F));
+    float const distance = smoothed_view_height_ / (2.0F * std::tan(glm::radians(fov_y) * 0.5F));
     camera.set_position(smoothed_center_ + glm::normalize(offset) * distance);
     camera.look_at(smoothed_center_);
     camera.set_fov_y(fov_y);
@@ -48,7 +48,8 @@ void MapCameraController::pan(glm::vec2 direction, GroundBounds bounds, float de
         std::isfinite(delta_seconds) ? std::clamp(delta_seconds, 0.0F, 0.1F) : 0.0F;
     auto const heading = glm::normalize(glm::vec3{-offset.x, 0, -offset.z});
     auto const right = glm::cross(heading, glm::vec3{0, 1, 0});
-    center_ += (right * direction.x + heading * direction.y) * view_height_ * 0.7F * elapsed;
+    center_ +=
+        (right * direction.x + heading * direction.y) * smoothed_view_height_ * 0.7F * elapsed;
     center_.x = std::clamp(center_.x, bounds.min.x, bounds.max.x);
     center_.z = std::clamp(center_.z, bounds.min.y, bounds.max.y);
 }
@@ -60,7 +61,9 @@ void MapCameraController::update(scene::FpsCamera &camera, glm::vec3 player_posi
         recenter(player_position);
     float const elapsed =
         std::isfinite(delta_seconds) ? std::clamp(delta_seconds, 0.0F, 0.1F) : 0.0F;
-    smoothed_center_ = glm::mix(smoothed_center_, center_, std::clamp(elapsed * 12.0F, 0.0F, 1.0F));
+    float const blend = std::clamp(elapsed * 12.0F, 0.0F, 1.0F);
+    smoothed_center_ = glm::mix(smoothed_center_, center_, blend);
+    smoothed_view_height_ = glm::mix(smoothed_view_height_, view_height_, blend);
     apply(camera);
 }
 

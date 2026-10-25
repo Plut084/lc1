@@ -414,6 +414,24 @@ void perspective_camera_zoom()
           "default framing covers 48 metres at the target depth");
 
     controller.zoom(1.0F);
+    controller.apply(camera);
+    check(near(glm::distance(camera.position(), center), initial_distance),
+          "wheel input changes the target without snapping the camera");
+    controller.update(camera, player, 0.0F);
+    check(near(glm::distance(camera.position(), center), initial_distance),
+          "zero elapsed time does not advance zoom smoothing");
+    controller.update(camera, player, 1.0F / 60.0F);
+    float const partial_distance = glm::distance(camera.position(), center);
+    float const target_distance = initial_distance * std::exp(-0.12F);
+    check(partial_distance < initial_distance && partial_distance > target_distance,
+          "zoom moves partway toward its target like recenter smoothing");
+    controller.update(camera, player, 1.0F / 60.0F);
+    check(glm::distance(camera.position(), center) < partial_distance,
+          "zoom keeps settling after wheel input ends");
+    controller.zoom(1.0F);
+    check(near(controller.view_height(), 48.0F * std::exp(-0.24F)),
+          "successive wheel events accumulate on the target framing");
+    controller.zoom(-1.0F);
     controller.update(camera, player, 0.1F);
     check(glm::distance(camera.position(), center) < initial_distance &&
               project(sample).x > initial_size,

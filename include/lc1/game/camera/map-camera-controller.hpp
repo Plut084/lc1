@@ -25,7 +25,8 @@ class MapCameraController {
 
     glm::vec3 center() const { return center_; }
 
-    // Vertical span on the plane through center(), perpendicular to the viewing direction.
+    // Target vertical span on the plane through center(), perpendicular to the viewing direction.
+    // The displayed span approaches this target with the same smoothing as recenter.
     // Perspective zoom changes camera distance; apparent size still varies with depth.
     float view_height() const { return view_height_; }
 
@@ -34,6 +35,7 @@ class MapCameraController {
     glm::vec3 center_;
     glm::vec3 smoothed_center_;
     float view_height_ = 48.0F;
+    float smoothed_view_height_ = 48.0F;
 };
 
 } // namespace lc1

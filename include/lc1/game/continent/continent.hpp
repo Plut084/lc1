@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lc1/game/continent/identity.hpp"
+
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -105,6 +107,7 @@ struct ContinentData {
     // Terrain heights at tile corners, indexed [z][x]. Expected dimensions are
     // (rows + 1) x (columns + 1). Empty means a flat world at Y=0.
     std::vector<std::vector<float>> height_samples;
+    ContinentIdentity identity{.id = "custom", .version = 1};
 };
 
 class Continent {
@@ -115,6 +118,12 @@ class Continent {
     static Continent make_prototype(std::span<ContinentBlock const> spawn_blocks = {});
     // The playable continent follows continent-present.svg, the source of the PNG.
     static Continent make_present(std::span<ContinentBlock const> spawn_blocks = {});
+
+    static void validate_identity(ContinentIdentity const &identity);
+    static Continent load(ContinentIdentity const &identity,
+                          std::span<ContinentBlock const> spawn_blocks = {});
+
+    ContinentIdentity const &identity() const { return data_.identity; }
 
     GroundBounds bounds() const;
 

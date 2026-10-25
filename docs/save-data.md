@@ -1,12 +1,12 @@
 # 存档与继续游戏
 
 角色、队伍、势力、装备和武器从 `runtime/saves/01/` 下的 YAML 读取。大陆地形、区域、地点和道路
-仍由 `Continent` 生成，不属于存档数据。文件相对工作目录打开，和 `shaders/` 一致；
+仍由 `Continent` 生成；存档通过 `continent` 的稳定字符串 `id` 和内容 `version` 选择大陆，不重复保存完整地图。文件相对工作目录打开，和 `shaders/` 一致；
 CMake 目标 `copy_saves` 只把缺失的种子文件复制进运行树，不覆盖已有文件，所以 `make run`
-直接可用，也不会在重新构建时清除进度。脚本只复制六类初始数据，不复制进度文件。
+直接可用，也不会在重新构建时清除进度。脚本只复制七类初始数据，不复制进度文件。
 
 按 F6 或调试面板里的 Save game 按钮保存，HUD 显示成功或失败；失败的详细原因写入日志。
-启动时，目录里存在 `checkpoint.yaml` 就优先读取完整进度，否则读取六个初始 YAML。
+启动时，目录里存在 `checkpoint.yaml` 就优先读取完整进度，否则读取七个初始 YAML。
 `LC1_SAVE_ROOT` 可以覆盖默认的 `runtime/saves/01`。退出不会自动保存。
 
 `Application` 用临时 `Save` 构造 `GameSession`，会话内部的 `GameWorld` 在构造或调用 `load(Save const&)` 时消费 Save，
@@ -24,9 +24,10 @@ Save 只负责 YAML 记录、文件读写及引用校验；GameWorld 负责运�
 | `parties.yaml` | `SerializedParty` | 角色 |
 | `characters.yaml` | `SerializedCharacterConfig` | 队伍、`session.yaml` |
 | `session.yaml` | `SerializedSession` | 角色 |
+| `continent.yaml` | `ContinentIdentity` | 大陆内容 |
 
-六个文件是初始数据。实际写回使用单个 `checkpoint.yaml`，包含版本号 `version: 2`、
-`session`、`factions`、`equipments`、`weapons`、`parties`、`characters` 和 `states`，
+七个文件是初始数据。实际写回使用单个 `checkpoint.yaml`，包含版本号 `version: 3`、
+`continent`、`session`、`factions`、`equipments`、`weapons`、`parties`、`characters` 和 `states`，
 将角色所属队伍和双方成员列表一起提交，避免多文件写到一半形成矛盾数据。
 每类记录按编号排序输出。进度文件损坏时明确报错，不静默回退到初始世界。
 
@@ -115,9 +116,9 @@ example: 2
 
 ## 读取、校验与装配
 
-`Save` 先把六个文件全部读成记录，再校验，最后才由 `GameWorld` 建对象：
+`Save` 先把七个文件全部读成记录，再校验，最后才由 `GameWorld` 建对象：
 
-1. `Save` 读六个文件，检查同类编号重复。
+1. `Save` 读七个文件，检查同类编号重复。
 2. `Save::validate_references` 检查每个引用：会话的 `player`、`example`，队伍的 `faction`、
    `leader`、`members`、`captives`，以及角色的 `party`、`equipment`、`weapon`。`player`
    为 `0` 或指向不存在的角色、`example` 与玩家同一个人，都在这一步失败。悬空引用是数据错误，
@@ -165,7 +166,7 @@ example: 2
 玩家角色仍由玩家控制，其保存的队员命令不驱动自动移动。
 
 读取 `version: 1` 时按旧的必填字段解析，保留姿态和巡逻，并将所有命令迁移为 `None`；
-下次写入为 version 2。version 2 的 `companion_order` 必填，其他版本明确拒绝。
+下次写入为 version 3。version 2 的 `companion_order` 必填，version 3 另需大陆字段，其他版本明确拒绝。
 成员关系校验适用于两版进度，不自动修正不一致的历史数据。
 当前不保存跳跃速度、巡逻当前路点、对话和相机模式／缩放；重启默认使用斜视角，空中角色以
 零初始速度继续下落，巡逻从初始路点重新开始。
@@ -194,7 +195,7 @@ example: 2
 ## 尚未实现
 
 - 游戏内存档槽位选择、自动保存和会话层运行中读档入口；世界层已支持 `load()`，重启仍会读取最近一次手动保存的进度。
-- 除 version 1 → 2 之外的世界版本迁移、角色存活状态，以及完整控制器／物理状态的恢复。
+- 除上述旧进度升级之外的世界版本迁移、角色存活状态，以及完整控制器／物理状态的恢复。
 
 ## 测试数据
 
@@ -203,3 +204,24 @@ example: 2
 `runtime_save_data` 另行检查构建树中的 `runtime/saves/01/` 能否完整加载。
 `character` 检查运行对象招募后的序列化结果，`seed_save_preservation` 检查重复安装不覆盖
 玩家数据。以上均为 CPU 测试，不能替代窗口内保存按钮和重启画面的实机验证。
+
+## 大陆选择与内容版本
+
+种子存档的 `continent.yaml` 为单个映射：
+
+```yaml
+id: present
+version: 1
+```
+
+进度文件在顶层 `continent` 字段保存相同结构。`id` 是内容标识，不是显示名称；
+内容版本与进度文件格式版本互相独立。当前支持 `present` 和 `prototype`，均为 version 1。
+未知标识、不支持的内容版本和缺失字段明确报错，不回退到默认地图。
+
+`GameWorld` 按存档标识构造并拥有大陆，快照从实际大陆读取标识。
+`load()` 只接受与现有大陆相同的标识和内容版本；不匹配时在清理旧世界前拒绝。
+切换大陆需重建会话，以协调地图显示与相机借用。
+
+旧 version 1、2 进度按原有必填结构解析，迁移为 `present` version 1，写回为格式 version 3。
+version 3 必须显式包含大陆字段。种子安装只补充缺失的 `continent.yaml`，保留已有选择。
+当前未实现随机生成、地图文件加载或内容版本迁移；改变地图空间布局时需显式考虑内容版本兼容性。

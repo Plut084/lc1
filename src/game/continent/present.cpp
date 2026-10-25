@@ -97,6 +97,7 @@ Continent Continent::make_present(std::span<ContinentBlock const> spawn_blocks)
     for (auto const &extra : spawn_blocks)
         data.blocks.push_back({extra.min + data.spawn, extra.max + data.spawn, extra.surface,
                                extra.solid, extra.walkable_top});
+    data.identity = {"present", 1};
     return Continent{std::move(data)};
 }
 

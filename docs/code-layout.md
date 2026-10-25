@@ -42,7 +42,7 @@
 
 | 对象 | 职责与边界 |
 |---|---|
-| `GameWorld` | 拥有大陆、势力、装备、武器、队伍、角色和 `DialogSystem`；装配世界、推进规则、生成存档快照；不依赖 Window、ImGui、音频或 Vulkan |
+| `GameWorld` | 按存档标识和内容版本加载并拥有大陆、势力、装备、武器、队伍、角色和 `DialogSystem`；装配世界、推进规则、生成存档快照；不依赖 Window、ImGui、音频或 Vulkan |
 | `WorldView` | 借用只读世界，拥有地形/角色 GPU 资源、字体、展示场景、灯光与音频 context/listener；生成绘制项和世界文字 |
 | `PlayerView` | 拥有视角模式、记忆观察角和相机；生成世界空间控制意图，世界更新后再更新相机 |
 | `GameUi` | 菜单、调试面板、保存反馈及屏幕文字；返回保存请求和音量变化，由会话执行 |
@@ -108,8 +108,8 @@ Application 拥有 `GameSession`，通过临时 `Save` 提供初始数据；`Gam
 重新加载的失败语义及表现层协调要求见[存档与装配](save-data.md)。
 `GameSession`、`GameWorld`、`WorldView` 和 `MusicBrowser` 禁止复制/移动。
 
-Application 在正常/异常退出时先等 GPU 完成。`DrawItem` 借用 WorldView 的资源；录制回调持有
-本帧 `vector<DrawItem>` 直到 `RenderGraph::execute()` 返回。设备和 Renderer 比会话长寿，
+Application 在正常/异常退出时先等 GPU 完成。`DrawItem` 借用 WorldView 的资源；渲染 pass 持有注册时复制的
+本帧相机、灯光与 draw 记录快照，直到图销毁；GPU 资源仍由 WorldView 持有。设备和 Renderer 比会话长寿，
 FrameLoop 的帧资源在会话之后构造、之前销毁。`GameLocation` 的字符串视图借用世界或静态名称。
 
 ## 构建与验证

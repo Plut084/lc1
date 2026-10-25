@@ -2,6 +2,7 @@
 
 #include "lc1/game/character/equipment.hpp"
 #include "lc1/game/character/weapon.hpp"
+#include "lc1/game/continent/identity.hpp"
 #include "lc1/game/party/companion-order.hpp"
 
 #include <cstdint>
@@ -82,7 +83,8 @@ struct SerializedCharacterState {
 
 // One complete checkpoint: membership and character records are committed together.
 struct SerializedWorld {
-    std::uint32_t version = 2;
+    std::uint32_t version = 3;
+    ContinentIdentity continent{"present", 1};
     SerializedSession session;
     std::vector<SerializedFaction> factions;
     std::vector<SerializedEquipment> equipments;
@@ -111,6 +113,8 @@ class Save {
     SerializedWorld data() const;
 
     std::filesystem::path const &directory() const { return directory_; }
+
+    ContinentIdentity const &continent() const { return continent_; }
 
     std::uint32_t player() const { return session_.player; }
 
@@ -149,6 +153,7 @@ class Save {
 
     std::filesystem::path directory_;
     SerializedSession session_;
+    ContinentIdentity continent_{"present", 1};
     std::unordered_map<std::uint32_t, SerializedFaction> factions_;
     std::unordered_map<std::uint32_t, SerializedEquipment> equipments_;
     std::unordered_map<std::uint32_t, SerializedWeapon> weapons_;

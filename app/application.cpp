@@ -324,7 +324,6 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
                                                                     RenderTarget const &target) {
         auto const &view = game_.world_view();
         auto const &camera = game_.player_view().camera();
-        // The graph borrows this frame's computed draws until execute() returns.
         // Text items own their strings and remain alive until graph.execute() returns.
         TextFrameInput const text{
             .font = &view.font(),

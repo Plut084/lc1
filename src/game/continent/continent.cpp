@@ -147,6 +147,21 @@ bool Road::contains(glm::vec2 position, float clearance) const
     return false;
 }
 
+void Continent::validate_identity(ContinentIdentity const &identity)
+{
+    if (identity.id != "present" && identity.id != "prototype")
+        fail("unknown continent id {}", identity.id);
+    if (identity.version != 1)
+        fail("unsupported continent {} version {}", identity.id, identity.version);
+}
+
+Continent Continent::load(ContinentIdentity const &identity,
+                          std::span<ContinentBlock const> spawn_blocks)
+{
+    validate_identity(identity);
+    return identity.id == "present" ? make_present(spawn_blocks) : make_prototype(spawn_blocks);
+}
+
 Continent::Continent(ContinentData data) : data_(std::move(data))
 {
     if (!finite(data_.origin) || !std::isfinite(data_.tile_size) || data_.tile_size <= 0.0F ||

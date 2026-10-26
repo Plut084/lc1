@@ -1,15 +1,15 @@
 # clangd configuration.
 #
-# conan's cmake_layout puts the build tree at build/<build_type>/, so the
-# compilation database lands at build/Debug/compile_commands.json -- which clangd
-# does not look in. Without this, clangd has no include paths and reports
-# 'volk.h' file not found for every conan-provided header.
+# The build tree is build/<platform>/<build_type>/ (conanfile.py's layout()), so the
+# compilation database lands at build/linux-x86_64/Debug/compile_commands.json --
+# which clangd does not look in. Without this, clangd has no include paths and reports
+# 'vulkan/vulkan.hpp' file not found for every conan-provided header.
 #
 # Pointing at it from a committed file rather than a compile_commands.json
 # symlink at the repo root: the symlink is gitignored, so it does not survive a
 # fresh clone, and it silently breaks when the build type changes.
 #
-# Note this is build-type specific. If you configure Release, change this to
-# build/Release (or run Debug).
+# Note this is both platform- and build-type specific, and clangd takes one directory:
+# if you configure another tree, change this line to match it.
 CompileFlags:
-  CompilationDatabase: build/Debug
+  CompilationDatabase: build/linux-x86_64/Debug

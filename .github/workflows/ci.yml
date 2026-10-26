@@ -1,0 +1,169 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_HOME: ${{ github.workspace }}/.conan2
+  SLANG_VERSION: 2026.18.3
+
+jobs:
+  linux:
+    name: ${{ matrix.name }} / Debug
+    runs-on: ubuntu-24.04
+    # Provides Clang 22, GCC 16 and MinGW-w64 GCC 16.
+    container: fedora:44
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / Clang 22
+            profile: linux
+            build-profile: linux
+            preset: linux-x86_64-debug
+            testing: 'ON'
+          - name: Linux / GCC 16
+            profile: linux-gcc
+            build-profile: linux-gcc
+            preset: linux-x86_64-debug
+            testing: 'ON'
+          - name: Windows / MinGW GCC 16
+            profile: mingw64
+            build-profile: linux-gcc
+            preset: windows-x86_64-debug
+            testing: 'OFF'
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y clang gcc-c++ cmake ninja-build python3 python3-pip git curl-minimal tar gzip zstd pkgconf-pkg-config autoconf automake libtool make perl patch diffutils libglvnd-devel
+          python3 -m venv /opt/ci
+          echo /opt/ci/bin >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: Install MinGW toolchain
+        if: matrix.profile == 'mingw64'
+        run: dnf install -y mingw64-gcc-c++
+      - name: Install Conan
+        run: python -m pip install conan==2.33.0
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CONAN_HOME }}/p
+          key: conan-2.33-fedora44-${{ matrix.profile }}-debug-${{ hashFiles('conanfile.py', 'profiles/*') }}
+          restore-keys: |
+            conan-2.33-fedora44-${{ matrix.profile }}-debug-
+      - name: Cache Slang
+        id: slang-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/slang
+          key: slang-linux-x86_64-glibc2.28-${{ env.SLANG_VERSION }}
+      - name: Install Slang
+        if: steps.slang-cache.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --location --retry 3 "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64-glibc-2.28.tar.gz" -o /tmp/slang.tar.gz
+          mkdir -p /opt/slang
+          tar -xzf /tmp/slang.tar.gz -C /opt/slang
+      - name: Add Slang to PATH
+        run: echo /opt/slang/bin >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: |
+          # The disposable container runs as root. Let recipes install required
+          # system development packages for both host and build dependencies.
+          conan install . -pr:h profiles/${{ matrix.profile }} -pr:b profiles/${{ matrix.build-profile }} --build=missing -s:h build_type=Debug -s:b build_type=Release -o:h "lc1/*:with_validation_layers=False" -c:a tools.system.package_manager:mode=install
+      - name: Configure and build
+        run: |
+          # Assets are not tracked; CPU tests use procedural fixtures.
+          mkdir -p runtime/assets
+          cmake --preset ${{ matrix.preset }} -DBUILD_TESTING=${{ matrix.testing }}
+          cmake --build --preset ${{ matrix.preset }}
+      - name: Run CPU tests
+        if: matrix.testing == 'ON'
+        run: |
+          source build/linux-x86_64/Debug/generators/conanrun.sh
+          ctest --test-dir build/linux-x86_64/Debug --output-on-failure --no-tests=error --timeout 120 --output-junit test-results.xml
+      - name: Upload test results
+        if: always() && matrix.testing == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.profile }}
+          path: |
+            build/linux-x86_64/Debug/test-results.xml
+            build/linux-x86_64/Debug/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows / MSVC / Debug
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install build tools
+        run: python -m pip install conan==2.33.0 cmake==3.31.10 ninja==1.13.0
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CONAN_HOME }}/p
+          key: conan-2.33-windows2022-msvc194-debug-${{ hashFiles('conanfile.py', 'profiles/windows', 'profiles/windows-ci') }}
+          restore-keys: |
+            conan-2.33-windows2022-msvc194-debug-
+      - name: Cache Slang
+        id: slang-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/slang
+          key: slang-windows-x86_64-${{ env.SLANG_VERSION }}
+      - name: Install Slang
+        if: steps.slang-cache.outputs.cache-hit != 'true'
+        run: |
+          $archive = "$env:RUNNER_TEMP/slang.zip"
+          $destination = "$env:RUNNER_TEMP/slang"
+          Invoke-WebRequest "https://github.com/shader-slang/slang/releases/download/v$env:SLANG_VERSION/slang-$env:SLANG_VERSION-windows-x86_64.zip" -OutFile $archive
+          Expand-Archive $archive -DestinationPath $destination
+      - name: Add Slang to PATH
+        run: '"$env:RUNNER_TEMP/slang/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+      - name: Install dependencies
+        shell: cmd
+        run: |
+          conan install . -pr:h profiles/windows-ci -pr:b profiles/windows-ci --build=missing -s:h build_type=Debug -s:b build_type=Release -o:h "lc1/*:with_validation_layers=False"
+      - name: Configure and build
+        shell: cmd
+        run: |
+          rem Assets are not tracked; CPU tests use procedural fixtures.
+          if not exist runtime\assets mkdir runtime\assets
+          cmake --preset windows-x86_64-debug -DBUILD_TESTING=ON
+          if errorlevel 1 exit /b 1
+          cmake --build --preset windows-x86_64-debug
+      - name: Run CPU tests
+        shell: cmd
+        run: |
+          call build\windows-x86_64\Debug\generators\conanrun.bat
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build/windows-x86_64/Debug --output-on-failure --no-tests=error --timeout 120 --output-junit test-results.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows-msvc
+          path: |
+            build/windows-x86_64/Debug/test-results.xml
+            build/windows-x86_64/Debug/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

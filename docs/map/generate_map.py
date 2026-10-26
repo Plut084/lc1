@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成《博宇大陆 · 现世形势图》。
+"""Generate the present-day political map of the Boyu Continent.
 
-用法::
+Usage::
 
-    python3 docs/map/generate_map.py          # 写出 docs/map/world-map.svg
+    python3 docs/map/generate_map.py          # Write docs/map/world-map.svg
     magick -density 144 -background none \\
         docs/map/world-map.svg docs/map/world-map.png
 
-只依赖标准库。地图上每一个地理要素都来自下面那几张表，改表就改图；
-随机抖动用固定种子，因此同样的输入永远得到同一张图。
+Uses only the standard library. Geographic features come from the tables below;
+edit the tables to edit the map. A fixed seed makes all random detail reproducible.
 
-世界观到地理的映射（见 docs/content.md 与世界观草案）：
+Geographic interpretation of the setting in docs/content.md:
 
-* 帝国占据大陆中部与东部的大河平原 —— 「大部分地区」；
-* 类人种（部落）退守四周：北岭、西部森林、南部荒原、东北群岛，
-  正好是「森林、山脉、荒原以及群岛等地区」；
-* 11战争停战线（灰烬防线）把帝国与南部荒原隔开，是当前争议地带；
-* 星尘枯竭之后，神秘种遗迹散布各地，帝国把仅存的星尘收拢到都城研究；
-* 组织不入明面，只有几个传闻据点。
+* The Empire controls the central and eastern river plains, covering most of the continent.
+* The tribes occupy the northern ridges, western forests, southern wastes and northeastern isles.
+* The Ashen Line marks the disputed armistice frontier between the Empire and southern tribes.
+* Ancient ruins retain traces of stardust; the Empire gathers the remaining supply in its capital.
+* The secret organization appears only through rumored outposts.
 """
 
 from __future__ import annotations
@@ -30,9 +29,9 @@ from pathlib import Path
 OUT = Path(__file__).with_name("world-map.svg")
 
 W, H = 2200.0, 1500.0
-SEED = 112011  # 11战争
+SEED = 112011  # War Eleven
 
-# ---------------------------------------------------------------- 颜色
+# ---------------------------------------------------------------- Colors
 
 INK = "#3b2b1a"
 INK_SOFT = "#6d5940"
@@ -55,11 +54,11 @@ HALO = "#f7efdb"
 
 FONT = "'Noto Serif CJK SC','Noto Sans CJK SC',serif"
 
-# ---------------------------------------------------------------- 几何工具
+# ---------------------------------------------------------------- Geometry helpers
 
 
 def catmull_rom(points, per_segment=12, closed=True):
-    """把控制点变成平滑折线。"""
+    """Turn control points into a smooth polyline."""
     n = len(points)
     out = []
     last = n if closed else n - 1
@@ -84,7 +83,7 @@ def catmull_rom(points, per_segment=12, closed=True):
 
 
 def value_noise(n, period, rng):
-    """一维值噪声，余弦插值，用来做海岸线的自然抖动。"""
+    """One-dimensional value noise with cosine interpolation for coastline detail."""
     keys = [rng.uniform(-1.0, 1.0) for _ in range(n // period + 3)]
     out = []
     for i in range(n):
@@ -96,7 +95,7 @@ def value_noise(n, period, rng):
 
 
 def roughen(points, layers, rng):
-    """沿法线做多倍频扰动。layers 是 [(周期, 振幅), ...]。"""
+    """Displace along normals at multiple frequencies; layers holds (period, amplitude) pairs."""
     n = len(points)
     offset = [0.0] * n
     for period, amp in layers:
@@ -121,7 +120,7 @@ def d_of(points, closed=True, prec=1):
 
 
 def region_d(points, samples=8, closed=True):
-    """势力范围一律走平滑曲线：填充和边界必须用同一条，否则会对不齐。"""
+    """Use the same smooth curve for faction fills and borders to keep them aligned."""
     return d_of(catmull_rom(points, samples), closed=closed)
 
 
@@ -150,7 +149,7 @@ def inside(point, polygon):
 
 
 def scatter(rng, polygon, count, bbox, jitter=0.0):
-    """在多边形内撒点；jitter 额外放宽 bbox 边缘。"""
+    """Scatter points inside a polygon, then optionally jitter their positions."""
     x0, y0, x1, y1 = bbox
     out = []
     guard = 0
@@ -172,7 +171,7 @@ def bbox_of(polygon):
 
 
 def lerp_curve(points, x):
-    """按 x 在折线上线性取值，用来沿山脊铺山。"""
+    """Interpolate the polyline at x to place peaks along a ridge."""
     ordered = sorted(points)
     if x <= ordered[0][0]:
         return ordered[0][1]
@@ -187,12 +186,12 @@ def lerp_curve(points, x):
     return ordered[-1][1]
 
 
-# ---------------------------------------------------------------- 文字
+# ---------------------------------------------------------------- Text
 
 
 def text(x, y, s, size, fill=INK, anchor="middle", spacing=None, rotate=None,
          italic=False, weight=None, opacity=None, halo=HALO, halo_width=4.0):
-    """带纸色描边的文字：先画描边层，再画填充层（比 paint-order 兼容性好）。"""
+    """Draw a paper-colored halo before the text fill for wider support than paint-order."""
     attrs = [f'x="{x:.1f}"', f'y="{y:.1f}"', f'font-family="{FONT}"',
              f'font-size="{size:.1f}"', f'text-anchor="{anchor}"']
     if spacing is not None:
@@ -215,9 +214,9 @@ def text(x, y, s, size, fill=INK, anchor="middle", spacing=None, rotate=None,
     return "".join(out)
 
 
-# ---------------------------------------------------------------- 数据表
+# ---------------------------------------------------------------- Data tables
 
-# 大陆轮廓（顺时针：北岸自西向东 → 东岸南下 → 南岸向西 → 西岸北上）
+# Mainland outline, clockwise from the northwestern coast.
 LAND_CONTROL = [
     (620, 400), (700, 330), (860, 300), (1010, 322), (1150, 286), (1300, 312),
     (1430, 382), (1520, 452), (1466, 540), (1544, 640), (1580, 762),
@@ -227,19 +226,19 @@ LAND_CONTROL = [
     (500, 662), (452, 562), (560, 482), (600, 432),
 ]
 
-# 碎星群岛：地图边缘，东北方向的岛链
+# Shattered Star Isles: the northeastern island chain at the map edge.
 ISLANDS = [
     (1720, 700, 44), (1800, 620, 30), (1880, 540, 54), (1970, 452, 34),
     (2060, 380, 26), (1700, 402, 24), (1780, 350, 20), (1900, 706, 22),
     (2020, 600, 30), (2100, 502, 22), (1656, 562, 18),
-    (1130, 1400, 16), (980, 1382, 12),  # 南岸外侧小岛，纯装饰
+    (1130, 1400, 16), (980, 1382, 12),  # Decorative islets off the southern coast.
 ]
 
-# 铁脊山脉：东西横贯北境，帝国的天然北界
+# The Ironspine Mountains run east to west along the natural northern imperial border.
 CREST = [(660, 424), (800, 392), (950, 384), (1100, 390), (1240, 406),
          (1360, 428), (1460, 460)]
 
-# 势力的范围。都会被 landclip 裁进陆地，所以靠海的一侧可以画得随便一点。
+# Faction polygons are clipped to land, so offshore edges need not follow the coast.
 EMPIRE_REGION = [
     (620, 424), (800, 392), (950, 384), (1100, 390), (1240, 406), (1360, 428),
     (1460, 460), (1520, 520), (1560, 650), (1560, 870), (1470, 900),
@@ -259,93 +258,93 @@ TRIBE_DESERT = [
     (1400, 1078), (1520, 1230), (1520, 1440), (700, 1440),
 ]
 
-# 11战争停战线：帝国与南部荒原之间的旧战线，现在的争议地带
+# War Eleven armistice line: the disputed frontier between the Empire and southern wastes.
 ASH_LINE = [(668, 908), (790, 986), (960, 1036), (1150, 1036), (1290, 998),
             (1400, 1078)]
 
 RIVERS = {
-    "沧河": [(1002, 452), (1030, 528), (1040, 620), (1010, 700), (972, 756),
+    "Cang River": [(1002, 452), (1030, 528), (1040, 620), (1010, 700), (972, 756),
              (1004, 820), (1032, 874)],
-    "沧河下游": [(1075, 898), (1132, 962), (1206, 1032), (1300, 1106),
+    "Lower Cang River": [(1075, 898), (1132, 962), (1206, 1032), (1300, 1106),
                  (1400, 1162), (1494, 1206)],
-    "青溪": [(470, 700), (560, 748), (662, 792), (764, 812), (880, 800),
+    "Qing Creek": [(470, 700), (560, 748), (662, 792), (764, 812), (880, 800),
              (972, 756)],
-    "铁水": [(1136, 392), (1200, 432), (1246, 482), (1200, 546), (1120, 586),
+    "Iron River": [(1136, 392), (1200, 432), (1246, 482), (1200, 546), (1120, 586),
              (1044, 616)],
 }
 LAKE = (1032, 880, 62)
 
-# name, x, y, kind, 标签方位
+# name, x, y, kind, label position
 CITIES = [
-    ("曜京", 1040, 620, "capital", "br"),
-    ("铁炉城", 1246, 482, "city", "r"),
-    ("河梁城", 972, 756, "city", "bl"),
-    ("浦海港", 1452, 1140, "port", "r"),
-    ("望北关", 1178, 402, "fort", "r"),
-    ("青溪镇", 700, 806, "town", "bl"),
-    ("赤垒", 1292, 996, "fort", "r"),
+    ("Yaojing", 1040, 620, "capital", "br"),
+    ("Ironforge City", 1246, 482, "city", "r"),
+    ("Riverbridge City", 972, 756, "city", "bl"),
+    ("Puhai Port", 1452, 1140, "port", "r"),
+    ("Northwatch Pass", 1178, 402, "fort", "r"),
+    ("Qingxi Town", 700, 806, "town", "bl"),
+    ("Red Bastion", 1292, 996, "fort", "r"),
 ]
 ROADS = [
     [(1040, 620), (1088, 560), (1180, 512), (1246, 482)],
-    # 绕星陨湖东岸走，别从湖里穿过去
+    # Follow the eastern shore of Starfall Lake without crossing the water.
     [(1040, 620), (1000, 690), (972, 756), (1052, 798), (1160, 862),
      (1240, 962), (1312, 1060), (1452, 1140)],
     [(1040, 620), (1092, 540), (1140, 462), (1178, 402)],
     [(1040, 620), (938, 662), (830, 722), (700, 806)],
 ]
 
-# 神秘种遗迹：True 表示仍有星尘残留
+# Ancient ruins: True indicates that stardust remains.
 MYSTERY = [
-    ("观星峰·古观星台", 1042, 372, True, "t"),
-    ("星陨湖·湖底遗迹", 1032, 880, True, "bl"),
-    ("沉语林·古神祭坛", 508, 792, False, "b"),
-    ("碎星群岛·坠落之环", 1880, 540, True, "b"),
-    ("赤砂荒原·风蚀台地", 1188, 1218, False, "r"),
+    ("Stargazer Peak: Ancient Observatory", 1042, 372, True, "t"),
+    ("Starfall Lake: Sunken Ruins", 1032, 880, True, "bl"),
+    ("Whispering Forest: Altar of the Old Gods", 508, 792, False, "b"),
+    ("Shattered Star Isles: Fallen Ring", 1880, 540, True, "b"),
+    ("Red Sand Wastes: Windworn Mesa", 1188, 1218, False, "r"),
 ]
-STARDUST_FACILITY = ("帝国星尘院", 1122, 556)
+STARDUST_FACILITY = ("Imperial Stardust Institute", 1122, 556)
 WAR_RUINS = [(700, 942), (800, 1000), (900, 1030), (1010, 1042), (1120, 1042),
              (1230, 1022), (1330, 1008), (1402, 1080)]
 ORG_SITES = [(1158, 690), (900, 452), (1800, 620)]
 
 SEA_LABELS = [
-    ("北寂海", 950, 178, 0, 34, 12),
-    ("星落洋", 300, 812, -72, 34, 12),
-    ("月牙湾", 1622, 1024, 0, 30, 6),
-    ("碎星海", 1618, 690, -78, 30, 8),
+    ("Silent North Sea", 950, 178, 0, 34, 12),
+    ("Starfall Ocean", 300, 812, -72, 34, 12),
+    ("Crescent Bay", 1622, 1024, 0, 30, 6),
+    ("Shattered Star Sea", 1618, 690, -78, 30, 8),
 ]
 
 NOTES = [
-    "11战争停战后，大陆表面归于稳定。",
-    "帝国据中部与东部，以人类为首，控扼大河与山口。",
-    "类人种退守北岭、森林、荒原与碎星群岛，阶级已成。",
-    "星尘枯竭：神秘种凋零，法术由常见变为稀有而危险。",
-    "帝国转以机械、炼金、冶炼立国，星尘只用于军事与研究。",
-    "战争遗迹、失落群落与残余星尘散布各地，三方皆在搜寻。",
+    "An uneasy peace follows the War Eleven armistice.",
+    "The human-led Empire holds the rivers and passes.",
+    "The tribes have retreated to the borderlands.",
+    "Stardust fades; magic grows rare and dangerous.",
+    "Industry rises; stardust serves war and research.",
+    "All three powers seek ruins and surviving stardust.",
 ]
 
 LEGEND_REGIONS = [
-    ("帝国疆域", "empire"),
-    ("部落势力范围", "tribe"),
-    ("争议地带（11战争旧战线）", "contest"),
+    ("Imperial territory", "empire"),
+    ("Tribal territory", "tribe"),
+    ("Disputed frontier (War Eleven)", "contest"),
 ]
-LEGEND_TERRAIN = [("山脉", "peak"), ("森林", "tree"), ("荒原", "dune"),
-                  ("河流 · 湖泊", "river")]
+LEGEND_TERRAIN = [("Mountains", "peak"), ("Forest", "tree"), ("Wasteland", "dune"),
+                  ("Rivers and lakes", "river")]
 LEGEND_MARKS = [
-    ("都城", "capital"), ("城市", "city"), ("关隘 · 城镇", "fort"),
-    ("驿道", "road"), ("神秘种遗迹（星尘已枯）", "ruin_star"),
-    ("神秘种遗迹（星尘残留）", "ruin_star_live"), ("战争遗迹", "ruin_wall"),
-    ("帝国星尘院", "facility"), ("组织据点（传闻）", "org"),
+    ("Capital", "capital"), ("City", "city"), ("Passes and towns", "fort"),
+    ("Trade roads", "road"), ("Ancient ruins (depleted)", "ruin_star"),
+    ("Ancient ruins (stardust remains)", "ruin_star_live"), ("War ruins", "ruin_wall"),
+    ("Imperial Stardust Institute", "facility"), ("Rumored secret outpost", "org"),
 ]
 
 
-# ---------------------------------------------------------------- 符号库
+# ---------------------------------------------------------------- Symbol library
 
 
 def defs():
-    """所有可复用的图形符号。形状不带 fill，由 <use> 上的 fill 继承。"""
+    """Reusable symbols inherit their fill from the corresponding <use> element."""
     shapes = []
 
-    # 针叶树 / 阔叶树
+    # Conifers and broadleaf trees
     for i, (w, h, tiers) in enumerate([(6.0, 22.0, 3), (7.0, 18.0, 3),
                                        (5.0, 25.0, 4), (8.0, 20.0, 2)]):
         parts = [f"M 0 0 L 0 {-h * 0.26:.1f}"]
@@ -362,7 +361,7 @@ def defs():
             f'a {r:.1f} {r * 0.92:.1f} 0 1 0 {r * 2:.1f} 0 '
             f'a {r:.1f} {r * 0.92:.1f} 0 1 0 {-r * 2:.1f} 0 Z"/>')
 
-    # 山峰：左坡 + 右坡 + 右侧阴影 + 雪顶
+    # Peaks: left slope, right slope, right shadow and snowcap
     for i in range(6):
         rng = random.Random(SEED + 900 + i)
         w = rng.uniform(13.0, 17.0)
@@ -382,7 +381,7 @@ def defs():
             f'<path d="{shade}" fill="{INK}" opacity="0.20"/>'
             f'<path d="{cap}" fill="{SNOW}" opacity="0.9"/></g>')
 
-    # 沙丘
+    # Dunes
     for i, (w, h) in enumerate([(11.0, 6.0), (14.0, 7.5), (8.0, 5.0)]):
         shapes.append(
             f'<g id="dune{i}" fill="none" stroke="{SAND}" '
@@ -391,12 +390,12 @@ def defs():
             f'<path d="M {-w * 0.45:.1f} 0 Q 0 {-h * 0.55:.1f} '
             f'{w * 0.45:.1f} 0" stroke="{INK_SOFT}" opacity="0.45"/></g>')
 
-    # 风蚀台地
+    # Windworn mesas
     shapes.append(
         f'<path id="mesa" d="M -17 0 L -11 -14 L 9 -14 L 16 0 Z" fill="{SAND}" '
         f'stroke="{INK_SOFT}" stroke-width="1.3" stroke-linejoin="round"/>')
 
-    # 田畴：帝国腹地沿河的耕作痕迹
+    # Fields along the rivers in the imperial heartland
     shapes.append(
         f'<g id="field">'
         f'<path d="M 0 0 L 18 -4 L 18 8 L 0 12 Z" fill="{SAND}" '
@@ -406,7 +405,7 @@ def defs():
         f'stroke="{INK_SOFT}" stroke-width="1.1" stroke-opacity="0.55" '
         f'fill="none"/></g>')
 
-    # 四角星：神秘种的记号
+    # Four-pointed star marking the ancient species
     star = []
     for i in range(8):
         a = -math.pi / 2 + i * math.pi / 4
@@ -415,7 +414,7 @@ def defs():
     star_d = d_of(star)
     shapes.append(f'<path id="star" d="{star_d}"/>')
 
-    # 战争遗迹：带垛口的断墙
+    # War ruins: broken walls with battlements
     shapes.append(
         '<g id="ruin_wall" fill="none" stroke="' + INK + '" stroke-width="1.5" '
         'stroke-linejoin="round">'
@@ -423,7 +422,7 @@ def defs():
         'L 1.5 -4.5 L 5.5 -4.5 L 5.5 -8 L 9 -8 L 9 -2.5 L 11 -2.5 L 11 0"/>'
         '<path d="M -8 0 L -8 3.5 M 6 0 L 6 3" opacity="0.6"/></g>')
 
-    # 城市记号
+    # City markers
     shapes.append(
         f'<g id="capital"><circle r="12" fill="none" stroke="{INK}" '
         f'stroke-width="2"/><circle r="5.4" fill="{INK}"/>'
@@ -444,13 +443,13 @@ def defs():
         f'<path d="M 0 9 L 0 20 M -4 12 L 4 12 M -5 15 Q 0 21 5 15" fill="none" '
         f'stroke="{INK}" stroke-width="1.6" stroke-linecap="round"/></g>')
 
-    # 帝国星尘院：星尘被收进一个圈里
+    # Imperial Stardust Institute: stardust enclosed in a circle
     shapes.append(
         f'<g id="facility"><circle r="11" fill="{PANEL}" stroke="{GOLD}" '
         f'stroke-width="2"/><use xlink:href="#star" fill="{GOLD}" '
         f'transform="scale(0.72)"/></g>')
 
-    # 组织的眼睛
+    # The eye of the secret organization
     shapes.append(
         f'<g id="org" fill="none" stroke="{VIOLET}" stroke-width="1.7">'
         f'<path d="M -12 0 Q 0 -11 12 0 Q 0 11 -12 0 Z"/>'
@@ -474,7 +473,7 @@ def defs():
     return '<defs>' + "".join(shapes) + patterns + '</defs>'
 
 
-# ---------------------------------------------------------------- 组装
+# ---------------------------------------------------------------- Assembly
 
 
 def build():
@@ -494,11 +493,11 @@ def build():
         f'xmlns:xlink="http://www.w3.org/1999/xlink" '
         f'width="{W:.0f}" height="{H:.0f}" viewBox="0 0 {W:.0f} {H:.0f}">')
 
-    # ---- 符号与裁剪
+    # ---- Symbols and clipping
     add(defs())
     add(f'<clipPath id="landclip"><path d="{all_land_d}"/></clipPath>')
 
-    # ---- 纸与海
+    # ---- Paper and sea
     add(f'<rect width="{W:.0f}" height="{H:.0f}" fill="{PARCHMENT}"/>')
     add(f'<rect width="{W:.0f}" height="{H:.0f}" fill="{SEA}" opacity="0.5"/>')
 
@@ -511,7 +510,7 @@ def build():
                      f'fill="{c}" opacity="{rng.uniform(0.03, 0.09):.3f}"/>')
     add("<g>" + "".join(grain) + "</g>")
 
-    # ---- 海岸光晕 + 陆地
+    # ---- Coastal glow and land
     for width, op in ((30, 0.10), (16, 0.16), (8, 0.26)):
         add(f'<path d="{all_land_d}" fill="none" stroke="{INK}" '
             f'stroke-width="{width}" opacity="{op}" stroke-linejoin="round"/>')
@@ -519,7 +518,7 @@ def build():
     add(f'<path d="{all_land_d}" fill="none" stroke="{INK}" stroke-width="2.2" '
         f'stroke-linejoin="round"/>')
 
-    # ---- 势力范围（裁进陆地）
+    # ---- Faction areas clipped to land
     empire_d = region_d(EMPIRE_REGION)
     add(f'<g clip-path="url(#landclip)">')
     add(f'<path d="{empire_d}" fill="{EMPIRE}" opacity="0.32"/>')
@@ -531,11 +530,11 @@ def build():
     add(f'<path d="{island_d}" fill="url(#hatch)"/>')
     add('</g>')
 
-    # ---- 河与湖（在陆地裁剪内，压在地形符号下面）
+    # ---- Rivers and lakes, clipped to land and drawn below terrain symbols
     add('<g clip-path="url(#landclip)">')
     for name, pts in RIVERS.items():
         smooth = catmull_rom(pts, 10, closed=False)
-        width = 5.6 if name == "沧河" else 3.0
+        width = 5.6 if name == "Cang River" else 3.0
         add(f'<path d="{d_of(smooth, closed=False)}" fill="none" '
             f'stroke="{RIVER}" stroke-width="{width + 2.6:.1f}" opacity="0.35" '
             f'stroke-linecap="round"/>')
@@ -562,7 +561,7 @@ def build():
     add("".join(cracks))
     add('</g>')
 
-    # ---- 森林
+    # ---- Forest
     trees = []
     forest_poly = catmull_rom(TRIBE_FOREST, 6)
     empire_poly = catmull_rom(EMPIRE_REGION, 6)
@@ -570,11 +569,11 @@ def build():
         dark = rng.random() < 0.5
         add_tree(trees, x, y, rng.uniform(0.6, 1.1),
                  FOREST_DARK if dark else FOREST, rng, rng.uniform(0.72, 0.95))
-    # 北岭林带
+    # Northern forest belt
     north_poly = catmull_rom(TRIBE_NORTH, 6)
     for x, y in scatter(rng, north_poly, 95, (600, 250, 1320, 440)):
         add_tree(trees, x, y, rng.uniform(0.45, 0.8), FOREST, rng, 0.6)
-    # 帝国境内的疏林：中部不该是一片空色
+    # Scattered imperial woods break up the central plains
     placed = 0
     while placed < 200:
         x, y = rng.uniform(660, 1440), rng.uniform(450, 990)
@@ -582,7 +581,7 @@ def build():
             add_tree(trees, x, y, rng.uniform(0.38, 0.7), FOREST, rng,
                      rng.uniform(0.3, 0.55))
             placed += 1
-    # 大岛上的几棵树
+    # Trees on the larger islands
     for ix, iy, ir in ISLANDS[:5]:
         for _ in range(int(ir / 9)):
             a, d = rng.uniform(0, 2 * math.pi), rng.uniform(0, ir * 0.6)
@@ -590,7 +589,7 @@ def build():
                      rng.uniform(0.4, 0.7), FOREST_DARK, rng, 0.6)
     add(f'<g clip-path="url(#landclip)">{"".join(trees)}</g>')
 
-    # ---- 荒原
+    # ---- Wasteland
     dunes = []
     desert_poly = catmull_rom(TRIBE_DESERT, 6)
     for x, y in scatter(rng, desert_poly, 190, bbox_of(desert_poly)):
@@ -612,7 +611,7 @@ def build():
                            f'opacity="{rng.uniform(0.10, 0.28):.3f}"/>')
     add('<g clip-path="url(#landclip)">' + "".join(dunes) + "".join(stipple) + '</g>')
 
-    # ---- 铁脊山脉
+    # ---- Ironspine Mountains
     peaks = []
     for row, (dy, smin, smax, step) in enumerate([(-46, 0.65, 0.92, 40),
                                                   (-12, 0.95, 1.35, 48),
@@ -623,12 +622,12 @@ def build():
             y = base + dy + rng.uniform(-15, 15)
             peaks.append((x + rng.uniform(-16, 16), y, rng.uniform(smin, smax)))
             x += step * rng.uniform(0.78, 1.28)
-    peaks.append((1042, 352, 1.95))          # 观星峰
+    peaks.append((1042, 352, 1.95))          # Stargazer Peak
     peaks.append((1008, 372, 1.45))
     peaks.append((1076, 368, 1.35))
     peaks.append((600, 432, 1.0))
     peaks.append((1508, 474, 0.95))
-    # 山麓与帝国东部的零星丘陵
+    # Scattered foothills and hills in the eastern Empire
     placed = 0
     while placed < 30:
         x, y = rng.uniform(700, 1440), rng.uniform(452, 556)
@@ -641,7 +640,7 @@ def build():
         if inside((x, y), empire_poly):
             peaks.append((x, y, rng.uniform(0.4, 0.6)))
             placed += 1
-    # 大岛上的小山
+    # Hills on the larger islands
     for ix, iy, ir in ISLANDS[:3]:
         peaks.append((ix, iy - ir * 0.2, rng.uniform(0.45, 0.7)))
     peaks.sort(key=lambda p: p[1])
@@ -652,8 +651,8 @@ def build():
                       f'{y:.0f}) scale({s:.2f})"/>')
     add('<g clip-path="url(#landclip)">' + "".join(glyphs) + '</g>')
 
-    # ---- 田畴：帝国腹地沿沧河的耕作带
-    river_pts = catmull_rom(RIVERS["沧河"], 8, closed=False)
+    # ---- Farmland along the Cang River in the imperial heartland
+    river_pts = catmull_rom(RIVERS["Cang River"], 8, closed=False)
     fields = []
     tries = 0
     while len(fields) < 30 and tries < 6000:
@@ -669,7 +668,7 @@ def build():
               for x, y, rot, s in fields]
     add('<g clip-path="url(#landclip)">' + "".join(glyphs) + '</g>')
 
-    # ---- 驿道
+    # ---- Trade roads
     roads = []
     for pts in ROADS:
         smooth = catmull_rom(pts, 10, closed=False)
@@ -681,7 +680,7 @@ def build():
                      f'stroke-linecap="round"/>')
     add('<g clip-path="url(#landclip)">' + "".join(roads) + '</g>')
 
-    # ---- 帝国边界与争议地带
+    # ---- Imperial borders and disputed territory
     add(f'<g clip-path="url(#landclip)">')
     add(f'<path d="{empire_d}" fill="none" stroke="{INK}" '
         f'stroke-width="3.4" stroke-linejoin="round" opacity="0.85"/>')
@@ -692,7 +691,7 @@ def build():
         f'stroke-width="4.2" stroke-dasharray="16 9" stroke-linecap="round"/>')
     add('</g>')
 
-    # ---- 遗迹、城市、据点
+    # ---- Ruins, cities and outposts
     for x, y in WAR_RUINS:
         add(f'<use xlink:href="#ruin_wall" transform="translate({x},{y}) '
             f'scale({rng.uniform(1.1, 1.4):.2f})" opacity="0.9"/>')
@@ -731,21 +730,21 @@ def build():
         labels.append(text(x + dx, y + dy, name, size, anchor=anchor,
                            weight=weight, spacing=1.5))
 
-    # ---- 地名
+    # ---- Place names
     region_labels = [
-        ("曜帝国", 1180, 706, -7, 46, 20, INK, 0.9),
-        ("铁脊山脉", 790, 328, 0, 34, 22, INK, 0.9),
-        ("沉语森林", 520, 700, -68, 34, 14, INK, 0.85),
-        ("赤砂荒原", 1120, 1180, 4, 38, 22, INK, 0.85),
-        ("北岭部落", 1300, 344, 0, 26, 10, INK, 0.8),
-        ("碎星部族", 1885, 645, 0, 26, 8, INK, 0.8),
-        ("灰烬防线", 900, 962, 6, 26, 8, CONTEST, 0.95),
-        ("星尘滩", 1158, 836, 0, 20, 4, INK_SOFT, 0.9),
+        ("Yao Empire", 1180, 706, -7, 46, 20, INK, 0.9),
+        ("Ironspine Mountains", 790, 328, 0, 34, 22, INK, 0.9),
+        ("Whispering Forest", 520, 700, -68, 34, 14, INK, 0.85),
+        ("Red Sand Wastes", 1120, 1180, 4, 38, 22, INK, 0.85),
+        ("Northridge Tribe", 1300, 344, 0, 26, 10, INK, 0.8),
+        ("Shattered Star Tribe", 1885, 645, 0, 26, 8, INK, 0.8),
+        ("Ashen Line", 900, 962, 6, 26, 8, CONTEST, 0.95),
+        ("Stardust Flats", 1158, 836, 0, 20, 4, INK_SOFT, 0.9),
     ]
     for s, x, y, rot, size, spacing, fill, op in region_labels:
         labels.append(text(x, y, s, size, fill=fill, rotate=rot,
                            spacing=spacing, opacity=op, halo_width=5.0))
-    labels.append(text(1032, 880, "星陨湖", 20, fill="#2f4a55", halo_width=4.5))
+    labels.append(text(1032, 880, "Starfall Lake", 20, fill="#2f4a55", halo_width=4.5))
     labels.append(text(STARDUST_FACILITY[1] + 20, STARDUST_FACILITY[2] + 6,
                        STARDUST_FACILITY[0], 18, fill=INK_SOFT,
                        anchor="start", halo_width=4.5))
@@ -760,7 +759,7 @@ def build():
                            opacity=0.9))
     add("".join(labels))
 
-    # ---- 海面波纹
+    # ---- Sea ripples
     waves = []
     for _ in range(400):
         x, y = rng.uniform(60, W - 60), rng.uniform(60, H - 60)
@@ -784,12 +783,12 @@ def build():
             break
     add("".join(waves))
 
-    # ---- 面板
+    # ---- Panels
     add(panel(90, 70, 620, 196))
-    add(text(400, 148, "博宇大陆", 62, spacing=16, weight="700"))
-    add(text(400, 196, "现世形势图", 34, spacing=12, fill=INK_SOFT))
+    add(text(400, 148, "Boyu Continent", 62, spacing=16, weight="700"))
+    add(text(400, 196, "Present-Day Map", 34, spacing=12, fill=INK_SOFT))
     add(f'<path d="M 250 216 L 550 216" stroke="{INK_SOFT}" stroke-width="1"/>')
-    add(text(400, 242, "星尘枯竭之世 · 11战争停战之后", 20, fill=INK_SOFT,
+    add(text(400, 242, "Fading Stardust - After War Eleven", 20, fill=INK_SOFT,
              spacing=2))
     add(f'<use xlink:href="#star" transform="translate(140,168) scale(0.8)" '
         f'fill="{GOLD}" stroke="{INK}" stroke-width="1.4"/>')
@@ -797,7 +796,7 @@ def build():
         f'fill="{GOLD}" stroke="{INK}" stroke-width="1.4"/>')
 
     add(panel(90, 1040, 570, 340))
-    add(text(120, 1090, "世 情 提 要", 26, anchor="start", weight="700",
+    add(text(120, 1090, "World Overview", 26, anchor="start", weight="700",
              spacing=3))
     add(f'<path d="M 118 1108 L 632 1108" stroke="{INK_SOFT}" stroke-width="1"/>')
     for i, line in enumerate(NOTES):
@@ -807,15 +806,15 @@ def build():
 
     legend = []
     y = 866.0
-    for head, items in (("势力", LEGEND_REGIONS), ("地貌", LEGEND_TERRAIN),
-                        ("标记", LEGEND_MARKS)):
+    for head, items in (("Factions", LEGEND_REGIONS), ("Terrain", LEGEND_TERRAIN),
+                        ("Markers", LEGEND_MARKS)):
         legend.append(("head", head, y))
         y += 28
         for name, kind in items:
             legend.append((kind, name, y))
             y += 31
     add(panel(1660, 760, 500, y - 760 + 30))
-    add(text(1692, 810, "图 例", 26, anchor="start", weight="700", spacing=3))
+    add(text(1692, 810, "Legend", 26, anchor="start", weight="700", spacing=3))
     add(f'<path d="M 1690 828 L 2130 828" stroke="{INK_SOFT}" stroke-width="1"/>')
     for kind, name, ry in legend:
         if kind == "head":
@@ -926,7 +925,7 @@ def compass(cx, cy, r):
         parts.append(f'<path d="{d_of(pts)}" fill="{fill}" '
                      f'opacity="{0.92 if cardinal else 0.7}"/>')
     parts.append(f'<circle cx="{cx}" cy="{cy}" r="4" fill="{INK}"/>')
-    for s, dx, dy in (("北", 0, -1), ("南", 0, 1), ("东", 1, 0), ("西", -1, 0)):
+    for s, dx, dy in (("N", 0, -1), ("S", 0, 1), ("E", 1, 0), ("W", -1, 0)):
         parts.append(text(cx + dx * (r + 24), cy + dy * (r + 24) + 9, s, 24,
                           weight="700"))
     return "".join(parts)
@@ -944,7 +943,7 @@ def scale_bar(x, y, segments, seg_w):
                      f'{y + 16}" stroke="{INK}" stroke-width="1.2"/>')
         parts.append(text(x + i * seg_w, y - 12, str(i * 100), 17,
                           halo_width=3.5))
-    parts.append(text(x + segments * seg_w + 52, y + 10, "里（示意）", 18,
+    parts.append(text(x + segments * seg_w + 52, y + 10, "li (schematic)", 18,
                       anchor="start", fill=INK_SOFT, halo_width=3.5))
     return "".join(parts)
 

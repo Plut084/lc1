@@ -1,5 +1,10 @@
 # 博宇大陆 · 现世形势图
 
+当前游戏轮廓采用 `continent-present.svg`，对应 `assets/textures/continent-present.png`。
+运行 `python3 docs/map/export_continent.py` 导出海陆格，`--check` 检查生成数据是否过期；
+完整流程见 [现世大陆轮廓接入](../continent-outline.md)。
+下文介绍的是较早的 `world-map.svg` 设定图，其地名和区域布局与当前现世图不完全相同。
+
 按世界观草案画的「现在」的大陆形势图。`docs/content.md` 里三个模块中的「地图」，这是它第一版的样子。
 
 | 文件 | 说明 |

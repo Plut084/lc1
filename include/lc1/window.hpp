@@ -1,10 +1,12 @@
 #pragma once
 
 #include "lc1/error.hpp"
+#include "lc1/input.hpp"
 
 #include <GLFW/glfw3.h>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -42,6 +44,24 @@ class Window {
     GLFWwindow *handle() const { return handle_; }
 
     bool should_close() const;
+    // Returns true when the title changed and GLFW was called.
+    bool set_title(std::string_view title);
+
+    // Device state, valid for the frame poll_events() most recently opened. Always wired:
+    // the callbacks are registered in the constructor, so there is no state where this
+    // exists but receives nothing.
+    InputState const &input() const { return input_; }
+
+    // Captured means the cursor is hidden, held inside the window and reported as
+    // unaccelerated raw motion when supported. UI interaction needs a visible
+    // pointer, and which one is wanted is a decision only the application can
+    // make, so this is an explicit call rather than something Window infers from focus.
+    //
+    // Re-enabling the cursor does not move it back: where it reappears is the platform's
+    // choice, which is why the delta baseline is reset either way.
+    void set_cursor_captured(bool captured);
+
+    bool cursor_captured() const { return cursor_captured_; }
 
     // Reads and clears the flag the resize callback sets. The caller must
     // consume it unconditionally: `recreate_requested ||
@@ -49,17 +69,43 @@ class Window {
     // forces a second rebuild on the next frame.
     bool take_resize_event();
 
-    // Not const: dispatching events runs the resize callback, which writes
+    // Not const: dispatching events runs the callbacks, which write into input_ and
     // framebuffer_resized_.
+    //
+    // This is the input frame boundary: it clears the edge flags and then pumps GLFW, so
+    // "pressed" describes exactly the events since the previous call. It lives here rather
+    // than in the application because a boundary the caller has to remember is a boundary
+    // that will eventually be in the wrong place.
     void poll_events();
-    void wait_events();
+    // Bounded so the application can also check signal-based shutdown.
+    // timeout_seconds must be positive and finite.
+    //
+    // Deliberately not a frame boundary: the application calls this only while it has
+    // nothing to draw and reads no input, so anything it pumps is dropped by the next
+    // poll_events rather than leaking into a later frame.
+    void wait_events(double timeout_seconds);
 
     // {0, 0} when the window is minimized or the framebuffer is unusable.
     FrameExtent framebuffer_extent() const;
 
+    // GLFW cursor positions use logical window coordinates, not framebuffer pixels.
+    glm::vec2 content_size() const;
+    bool focused() const;
+    bool hovered() const;
+
   private:
-    static void framebuffer_size_callback(GLFWwindow *window, int width,
-                                          int height);
+    // Every callback starts here. The user pointer is the only channel GLFW gives a C
+    // callback back to the Window that owns the callback, and it is set before any
+    // callback is registered.
+    static Window *owner_of(GLFWwindow *window);
+
+    static void framebuffer_size_callback(GLFWwindow *window, int width, int height);
+    static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods);
+    static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods);
+    static void cursor_position_callback(GLFWwindow *window, double x, double y);
+    static void scroll_callback(GLFWwindow *window, double x_offset, double y_offset);
+    static void cursor_enter_callback(GLFWwindow *window, int entered);
+    static void focus_callback(GLFWwindow *window, int focused);
 
     struct GlfwLifetime {
         ~GlfwLifetime();
@@ -73,7 +119,15 @@ class Window {
 
     // Owning: GLFW has no raii form, so ~Window is the single destroy site.
     GLFWwindow *handle_ = nullptr;
+    std::string title_;
     bool framebuffer_resized_ = false;
+
+    // Window owns the device state because it owns the callbacks that fill it. It does not
+    // interpret any of it: what a key means, and therefore whether ESC closes the window,
+    // is application policy, and a hardcoded ESC-to-close would make ESC unusable as the
+    // pause/back key every strategy game needs.
+    InputState input_;
+    bool cursor_captured_ = false;
 };
 
 } // namespace lc1

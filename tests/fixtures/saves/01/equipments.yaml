@@ -1,0 +1,11 @@
+# EquipmentType is one of Head, Body, Foot. The record is flat on purpose: reflect-cpp
+# reads a std::map with enum keys as a sequence of pairs, not as a YAML mapping.
+- keyid: 1
+  type: Head
+  armor: 4.0
+- keyid: 2
+  type: Body
+  armor: 12.0
+- keyid: 3
+  type: Foot
+  armor: 3.0

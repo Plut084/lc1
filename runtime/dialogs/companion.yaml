@@ -1,0 +1,48 @@
+version: 2
+entry: greeting
+nodes:
+  - id: greeting
+    speaker: Target
+    respondent: Talker
+    text: "Good to see you, {talker_name}."
+    choices:
+      - id: chat
+        text: "How are you doing?"
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 10
+        next: reply
+      - id: follow
+        text: "Follow me."
+        condition: CanCommand
+        action: Follow
+        recruiter: Talker
+        npc_priority: -1
+        next: end
+      - id: wait
+        text: "Wait here."
+        condition: CanCommand
+        action: Wait
+        recruiter: Talker
+        npc_priority: -1
+        next: end
+      - id: goodbye
+        text: "See you later."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end
+  - id: reply
+    speaker: Target
+    respondent: Talker
+    text: "I am glad we are in the same party."
+    choices:
+      - id: goodbye
+        text: "Take care."
+        condition: Always
+        action: None
+        recruiter: Talker
+        npc_priority: 0
+        next: end

@@ -35,7 +35,7 @@ class Model {
     ModelDefinition definition() &&;
     ModelDefinition definition() const && = delete;
 
-    // Static-model correction is baked once, before uploading or sharing a mesh.
+    // OBJ/procedural correction is baked once. glTF keeps it in a shared import root.
     // Character/world transforms do not contain import-axis or unit conversions.
     Transform const &correction() const;
 

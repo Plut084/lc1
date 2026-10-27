@@ -123,6 +123,7 @@ add_library(lc1_engine STATIC
     src/scene/model-instance.cpp
     src/scene/model-node.cpp
     src/scene/model.cpp
+    src/scene/model-gltf.cpp
     src/scene/object.cpp
     src/scene/scene.cpp
     src/scene/transform.cpp
@@ -396,6 +397,13 @@ if(BUILD_TESTING)
         target_link_options(lc1_model_tests PRIVATE -static)
     endif()
     add_test(NAME model COMMAND lc1_model_tests)
+    add_executable(lc1_model_loading_tests tests/model-loading.cpp)
+    target_link_libraries(lc1_model_loading_tests PRIVATE lc1_engine)
+    lc1_enable_warnings(lc1_model_loading_tests)
+    if(MINGW)
+        target_link_options(lc1_model_loading_tests PRIVATE -static)
+    endif()
+    add_test(NAME model_loading COMMAND lc1_model_loading_tests)
     add_executable(lc1_tangent_tests tests/tangent-space.cpp)
     target_link_libraries(lc1_tangent_tests PRIVATE lc1_engine)
     lc1_enable_warnings(lc1_tangent_tests)

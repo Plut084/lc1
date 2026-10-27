@@ -1,29 +1,14 @@
 #include "lc1/scene/model.hpp"
 #include "lc1/error.hpp"
 #include "lc1/tangent-space.hpp"
-#include "lc1/vk/resources/gpu-image.hpp"
 #include <algorithm>
 #include <cmath>
-#include <ktx.h>
-#include <ktxvulkan.h>
 #include <ranges>
-#include <tiny_gltf.h>
 #include <tiny_obj_loader.h>
 #include <unordered_map>
 #include <utility>
 
 namespace lc1::scene {
-
-namespace {
-struct KtxTextureDeleter {
-    void operator()(ktxTexture2 *texture) const noexcept;
-};
-
-void KtxTextureDeleter::operator()(ktxTexture2 *texture) const noexcept
-{
-    ktxTexture2_Destroy(texture);
-}
-} // namespace
 
 Model Model::load_from_file(std::filesystem::path const &path, Transform correction)
 {
@@ -90,79 +75,6 @@ Model Model::load_from_obj(std::filesystem::path const &path, Transform correcti
 
     model.apply_correction(correction);
     return model;
-}
-
-Model Model::load_from_gltf(std::filesystem::path const &path, Transform correction)
-{
-    auto extension = path.extension();
-    if (extension != ".gltf" && extension != ".glb")
-        fail("model extension not supported: {}. Expected .gltf or .glb",
-             extension.generic_string());
-
-    tinygltf::Model gltf_model;
-    tinygltf::TinyGLTF loader;
-    std::string err;
-    std::string warn;
-    // TinyGLTF takes UTF-8, while filesystem::path is wide on Windows.
-    auto const utf8_path = path.u8string();
-    std::string const filename{utf8_path.begin(), utf8_path.end()};
-    bool ok{};
-    if (extension == ".gltf") {
-        ok = loader.LoadASCIIFromFile(&gltf_model, &err, &warn, filename);
-    }
-    if (extension == ".glb") {
-        ok = loader.LoadBinaryFromFile(&gltf_model, &err, &warn, filename);
-    }
-
-    if (!warn.empty()) {
-        spdlog::warn("[gltf] {}", warn);
-    }
-    if (!err.empty()) {
-        spdlog::warn("[gltf] {}", err);
-    }
-    if (!ok) {
-        fail("failed to load glTF/GLB model: {}", path.string());
-    }
-
-    Model model;
-    for (auto [i, texture] : std::views::enumerate(gltf_model.textures)) {
-        // NOLINTBEGIN
-        auto const &image = gltf_model.images[texture.source];
-        auto name = image.name.empty() ? std::format("texture-{}", i) : image.name;
-        if (image.mimeType == "image/ktx2" && image.bufferView >= 0) {
-            auto const &buffer_view = gltf_model.bufferViews[image.bufferView];
-            auto const &buffer = gltf_model.buffers[buffer_view.buffer];
-
-            std::uint8_t const *data = buffer.data.data() + buffer_view.byteOffset;
-            auto size = buffer_view.byteLength;
-
-            ktxTexture2 *raw_ktx_texture;
-
-            ktxResult result = ktxTexture2_CreateFromMemory(
-                data, size, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &raw_ktx_texture);
-            if (result != KTX_SUCCESS) {
-                fail("failed to load KTX2 texture: {}", ktxErrorString(result));
-            }
-            std::unique_ptr<ktxTexture2, KtxTextureDeleter> ktx_texture(raw_ktx_texture);
-
-            if (ktx_texture->isCompressed && ktxTexture2_NeedsTranscoding(ktx_texture.get())) {
-                result = ktxTexture2_TranscodeBasis(ktx_texture.get(), KTX_TTF_ASTC_4x4_RGBA, 0);
-                if (result != KTX_SUCCESS) {
-                    fail("failed to transcode KTX2 texture: {}", ktxErrorString(result));
-                }
-            }
-
-            auto format = ktxTexture2_GetVkFormat(ktx_texture.get());
-            vk::Extent3D extent{
-                ktx_texture->baseWidth,
-                ktx_texture->baseHeight,
-                ktx_texture->baseDepth,
-            };
-            auto mip_levels = ktx_texture->numLevels;
-        }
-        // NOLINTEND
-    }
-    fail("glTF geometry and hierarchy import is not implemented: {}", path.string());
 }
 
 Model::Model(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices, Transform correction)

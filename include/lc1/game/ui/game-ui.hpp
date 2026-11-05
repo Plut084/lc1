@@ -1,9 +1,9 @@
 #pragma once
 
-#include "lc1/game/world/game-world.hpp"
+#include "lc1/game/world/world-snapshot.hpp"
+#include "lc1/platform/window.hpp"
 #include "lc1/vk/render/text-pass.hpp"
 #include "lc1/vk/resources/gpu-font.hpp"
-#include "lc1/window.hpp"
 #include <array>
 #include <optional>
 #include <span>
@@ -48,8 +48,9 @@ class GameUi {
 
     void set_save_status(std::string status);
 
-    std::vector<ScreenTextItem> screen_labels(GameWorld const &world, GpuFont const &font,
-                                              FrameExtent extent, GameLocation location) const;
+    std::vector<ScreenTextItem> screen_labels(WorldSnapshot const &world, PlayerId observer,
+                                              GpuFont const &font, FrameExtent extent,
+                                              GameLocation location) const;
 
   private:
     enum class State { MainMenu, InSettings, InGame };

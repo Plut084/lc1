@@ -8,7 +8,10 @@
 
 ## 构建检查
 
-`.github/workflows/ci.yml` 在 push、pull request 和手动触发时执行四组独立的构建任务：
+`.github/workflows/ci.yml` 在推送到 `main`、以 `main` 为目标的 pull request 和手动触发时
+执行四组独立的构建任务。工作分支 push 不单独运行 CI，创建或更新 PR 时只运行 PR 检查，
+避免同一次更新同时触发 push 和 PR 两套构建。未创建 PR 时可手动触发；合并到 `main`
+后仍验证实际合入的版本。
 
 | 平台 | 环境 | 配置 |
 |---|---|---|

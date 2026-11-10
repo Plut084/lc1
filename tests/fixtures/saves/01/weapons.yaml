@@ -1,9 +1,18 @@
-# WeaponType is one of MeleeWeapon, RangedWeapon. Range is in metres.
-- keyid: 1
-  type: MeleeWeapon
+# WeaponType is one of MainHand, OffHand. Range is in metres.
+- keyid: 1001
   attack: 12.0
   range: 1.5
-- keyid: 2
-  type: RangedWeapon
+- keyid: 1004
+  action: RangedAttack
   attack: 9.0
   range: 40.0
+
+- keyid: 1005
+  attack: 0
+  range: 20
+  action: ToggleLight
+  model:
+    path: builtin:flashlight
+    material:
+      metallic: 0.7
+      roughness: 0.3

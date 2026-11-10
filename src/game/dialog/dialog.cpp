@@ -461,7 +461,9 @@ bool DialogSystem::cooling_down(Character const &character) const
 bool DialogSystem::can_start(Character const &talker, Character const &target,
                              DialogTrigger trigger) const
 {
-    return &talker != &target && !find(talker) && !find(target) &&
+    return &talker != &target && !talker.dead() && !target.dead() &&
+           talker.reaction_time() >= combat::hit_duration &&
+           target.reaction_time() >= combat::hit_duration && !find(talker) && !find(target) &&
            glm::distance(talker.position(), target.position()) <=
                catalog_.settings().start_distance &&
            (trigger != DialogTrigger::Nearby ||

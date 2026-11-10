@@ -39,6 +39,7 @@ void GameWorld::load(Save const &save)
         fail("saved patrol requires a scenario route");
     // Release participant and roster borrows before destroying their owners.
     dialogs_.reset();
+    controllers_.clear();
     players_.clear();
     example_ = nullptr;
     dialog_participants_.clear();
@@ -56,7 +57,9 @@ void GameWorld::load(Save const &save)
         auto &player =
             players_.emplace(PlayerId{binding.keyid}, WorldPlayer{character, {}}).first->second;
         controlled.push_back(character);
-        character->set_controller(std::make_unique<PlayerCharacterController>(player.controls));
+        auto &controller =
+            controllers_.emplace_back(std::make_unique<PlayerCharacterController>(player.controls));
+        character->set_controller(controller.get());
         if (save.states().empty())
             for (auto const &stack : setup_.initial_player_resources) {
                 auto const *resource = game::find_resource(stack.keyid);
@@ -82,16 +85,19 @@ void GameWorld::load(Save const &save)
                 std::ranges::rotate(waypoints, waypoints.begin() + (index + waypoints.size() - 1) %
                                                                        waypoints.size());
             }
-            example_->set_controller(std::make_unique<AiCharacterController>(
+            auto &controller = controllers_.emplace_back(std::make_unique<AiCharacterController>(
                 dialogs_, [this](CharacterId id) -> Character & { return character(id); },
                 controlled, std::move(waypoints), setup_.example_patrol->arrival_radius));
+            example_->set_controller(controller.get());
         }
     }
 
     for (auto const &[_, character] : characters_) {
-        if (!character->controller())
-            character->set_controller(std::make_unique<AiCharacterController>(
+        if (!character->controller()) {
+            auto &controller = controllers_.emplace_back(std::make_unique<AiCharacterController>(
                 dialogs_, [this](CharacterId id) -> Character & { return this->character(id); }));
+            character->set_controller(controller.get());
+        }
         character->set_interactable(
             std::make_unique<InteractableCharacter>(character.get(), &dialogs_));
     }
@@ -122,12 +128,21 @@ void GameWorld::build_world(Save const &save)
     }
     for (auto const &entry : save.weapons()) {
         auto const &record = entry.second;
-        insert_unique(
-            weapons_, record.keyid,
-            std::make_unique<Weapon>(record.keyid, record.type,
-                                     WeaponProperty{.attack = record.attack, .range = record.range},
-                                     record.model.value()),
-            "weapon");
+        std::unique_ptr<Weapon> weapon;
+        WeaponProperty const property{.attack = record.attack, .range = record.range};
+        // Decode the saved discriminator once; use() dispatches through the definition.
+        switch (record.action.value()) {
+        case WeaponAction::MeleeAttack:
+            weapon = std::make_unique<MeleeWeapon>(record.keyid, property, record.model.value());
+            break;
+        case WeaponAction::RangedAttack:
+            weapon = std::make_unique<RangedWeapon>(record.keyid, property, record.model.value());
+            break;
+        case WeaponAction::ToggleLight:
+            weapon = std::make_unique<Flashlight>(record.keyid, property, record.model.value());
+            break;
+        }
+        insert_unique(weapons_, record.keyid, std::move(weapon), "weapon");
     }
 
     // Parties precede characters because a character record names the party it belongs to.
@@ -149,13 +164,13 @@ void GameWorld::build_world(Save const &save)
             .party = parties_.at(record.party).get(),
             .level = record.level,
             .equipment = {},
-            .weapon = {},
+            .main_hand = nullptr,
             .model = record.model.value(),
         };
         for (auto const &slot : record.equipment)
             config.equipment[slot.first] = equipments_.at(slot.second).get();
-        for (auto const &slot : record.weapon)
-            config.weapon[slot.first] = weapons_.at(slot.second).get();
+        if (record.main_hand)
+            config.main_hand = weapons_.at(record.main_hand).get();
         auto actual = prototype;
         // Randomize in x,z [-5,5]
         std::uint32_t const seed = record.keyid * 0x9E3779B9U;
@@ -177,10 +192,12 @@ void GameWorld::build_world(Save const &save)
             auto const &pose = state->second;
             actual.position = {pose.x, pose.y, pose.z};
             actual.rotation.y = pose.body_yaw;
+            config.health_lost = pose.health_lost.value();
         }
         auto character = std::make_unique<Character>(setup_.continent, actual, std::move(config));
         if (state != save.states().end()) {
             character->set_look_angles(state->second.look_yaw, state->second.look_pitch);
+            character->set_flashlight_on(state->second.flashlight_on.value());
             character->bag() = game::Bag{state->second.bag_capacity};
             for (auto const &stack : state->second.bag)
                 if (!character->bag().add(*game::find_resource(stack.keyid), stack.quantity))
@@ -201,7 +218,7 @@ void GameWorld::build_world(Save const &save)
 SerializedWorld GameWorld::snapshot() const
 {
     SerializedWorld world{
-        .version = 5,
+        .version = 6,
         .continent = setup_.continent.identity(),
         .session = {.players = {}, .example = example_ ? example_->config().keyid : 0},
         .factions = {},
@@ -219,10 +236,10 @@ SerializedWorld GameWorld::snapshot() const
             {.keyid = id, .type = equipment->type(), .armor = equipment->property().armor});
     for (auto const &[id, weapon] : weapons_)
         world.weapons.push_back({.keyid = id,
-                                 .type = weapon->type(),
                                  .attack = weapon->property().attack,
                                  .range = weapon->property().range,
-                                 .model = weapon->model_config()});
+                                 .model = weapon->model_config(),
+                                 .action = weapon->action()});
     for (auto const &[_, party] : parties_)
         world.parties.push_back(serialize_party(*party));
     for (auto const &[_, character] : characters_) {
@@ -324,12 +341,54 @@ void GameWorld::update(float delta_seconds, std::map<PlayerId, PlayerControls> c
         if (character->companion_order() == CompanionOrder::Follow)
             character->update(delta_seconds, setup_.continent);
 
+    for (auto *character : dialog_participants_)
+        character->resolve_attack(dialog_participants_, setup_.continent);
+    for (auto *character : dialog_participants_)
+        if (character->dead() || character->reaction_time() < combat::hit_duration)
+            dialogs_.interrupt(*character);
+
     // Resolve each player's actions in stable player-id order, then advance dialogue once.
     std::vector<DialogPlayer> dialog_players;
     dialog_players.reserve(players_.size());
     for (auto &[_, player] : players_) {
         auto &actor = *player.character;
         auto &input = player.controls;
+        if (input.equipment) {
+            auto const request = *input.equipment;
+            auto const target = characters_.find(request.character.value);
+            auto const *resource = game::find_resource(request.resource);
+            auto const *party = actor.config().party;
+            bool const owns_target =
+                target != characters_.end() &&
+                (target->second.get() == &actor ||
+                 (party->leader() == actor.id() && party->has_member(request.character) &&
+                  std::ranges::none_of(players_, [&](auto const &entry) {
+                      return entry.second.character == target->second.get();
+                  })));
+            if (owns_target && resource && !actor.dead()) {
+                auto &character = *target->second;
+                if (auto const definition = equipments_.find(resource->keyid);
+                    definition != equipments_.end()) {
+                    auto &equipment = *definition->second;
+                    if (request.equip)
+                        character.equip(*resource, equipment);
+                    else if (auto const slot = character.config().equipment.find(equipment.type());
+                             slot != character.config().equipment.end() &&
+                             slot->second->keyid() == resource->keyid)
+                        character.unequip(equipment.type());
+                }
+                else if (auto const definition = weapons_.find(resource->keyid);
+                         definition != weapons_.end()) {
+                    auto &weapon = *definition->second;
+                    if (request.equip)
+                        character.equip(*resource, weapon);
+                    else if (character.config().main_hand &&
+                             character.config().main_hand->keyid() == resource->keyid)
+                        character.unequip_weapon();
+                }
+            }
+            input.equipment.reset();
+        }
         player.interaction_target = find_interaction_target(actor);
         if (auto *dialog = dialogs_.find(actor)) {
             if (input.interact)

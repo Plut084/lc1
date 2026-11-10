@@ -77,14 +77,36 @@ struct LegacyCharacterState {
     bool patrol;
 };
 
+enum class LegacyWeaponSlot { MeleeWeapon, RangedWeapon };
+
+struct LegacyWeapon {
+    std::uint32_t keyid;
+    LegacyWeaponSlot type;
+    float attack;
+    float range;
+    rfl::DefaultVal<ModelConfig> model;
+};
+
+struct LegacyCharacter {
+    std::uint32_t keyid;
+    std::string name;
+    bool sex;
+    int age;
+    std::uint32_t party;
+    int level;
+    std::map<EquipmentType, std::uint32_t> equipment;
+    std::map<LegacyWeaponSlot, std::uint32_t> weapon;
+    rfl::DefaultVal<ModelConfig> model;
+};
+
 template <typename State> struct LegacyWorldData {
     std::uint32_t version;
     LegacySession session;
     std::vector<SerializedFaction> factions;
     std::vector<SerializedEquipment> equipments;
-    std::vector<SerializedWeapon> weapons;
+    std::vector<LegacyWeapon> weapons;
     std::vector<SerializedParty> parties;
-    std::vector<SerializedCharacterConfig> characters;
+    std::vector<LegacyCharacter> characters;
     std::vector<State> states;
 };
 
@@ -100,42 +122,86 @@ struct LegacyCommandState {
     CompanionOrder companion_order;
 };
 
-struct LegacyContinentWorld {
+template <typename State, typename Session = LegacySession> struct LegacyContinentData {
     std::uint32_t version;
     ContinentIdentity continent;
-    LegacySession session;
+    Session session;
     std::vector<SerializedFaction> factions;
     std::vector<SerializedEquipment> equipments;
-    std::vector<SerializedWeapon> weapons;
+    std::vector<LegacyWeapon> weapons;
     std::vector<SerializedParty> parties;
-    std::vector<SerializedCharacterConfig> characters;
-    std::vector<LegacyCommandState> states;
+    std::vector<LegacyCharacter> characters;
+    std::vector<State> states;
 };
 
-struct LegacyInventoryWorld {
-    std::uint32_t version;
-    ContinentIdentity continent;
-    LegacySession session;
-    std::vector<SerializedFaction> factions;
-    std::vector<SerializedEquipment> equipments;
-    std::vector<SerializedWeapon> weapons;
-    std::vector<SerializedParty> parties;
-    std::vector<SerializedCharacterConfig> characters;
-    std::vector<SerializedCharacterState> states;
-};
+using LegacyContinentWorld = LegacyContinentData<LegacyCommandState>;
+using LegacyInventoryWorld = LegacyContinentData<SerializedCharacterState>;
+using LegacyPlayersWorld = LegacyContinentData<SerializedCharacterState, SerializedSession>;
 
 template <typename Legacy> SerializedWorld upgrade_checkpoint(Legacy legacy)
 {
-    SerializedWorld world{
-        .session = {.players = {{1, legacy.session.player}}, .example = legacy.session.example},
-        .factions = std::move(legacy.factions),
-        .equipments = std::move(legacy.equipments),
-        .weapons = std::move(legacy.weapons),
-        .parties = std::move(legacy.parties),
-        .characters = std::move(legacy.characters),
-        .states = {}};
+    // Explicit namespace migration: backpack resource 1 is still Moneta.
+    auto equipment_id = [](std::uint32_t id) {
+        switch (id) {
+        case 1:
+            return 4U;
+        case 2:
+            return 5U;
+        case 3:
+            return 6U;
+        default:
+            return id;
+        }
+    };
+    auto weapon_id = [](std::uint32_t id) {
+        switch (id) {
+        case 1:
+            return 1001U;
+        case 2:
+            return 1004U;
+        default:
+            return id;
+        }
+    };
+    SerializedWorld world{.session = {},
+                          .factions = std::move(legacy.factions),
+                          .equipments = std::move(legacy.equipments),
+                          .weapons = {},
+                          .parties = std::move(legacy.parties),
+                          .characters = {},
+                          .states = {}};
+    if constexpr (requires { legacy.session.players; })
+        world.session = std::move(legacy.session);
+    else
+        world.session = {.players = {{1, legacy.session.player}},
+                         .example = legacy.session.example};
     if constexpr (requires { legacy.continent; })
         world.continent = std::move(legacy.continent);
+    for (auto &definition : world.equipments)
+        definition.keyid = equipment_id(definition.keyid);
+    for (auto &definition : legacy.weapons)
+        world.weapons.push_back({.keyid = weapon_id(definition.keyid),
+                                 .attack = definition.attack,
+                                 .range = definition.range,
+                                 .model = std::move(definition.model),
+                                 .action = definition.type == LegacyWeaponSlot::MeleeWeapon
+                                               ? WeaponAction::MeleeAttack
+                                               : WeaponAction::RangedAttack});
+    for (auto &character : legacy.characters) {
+        for (auto &[slot, id] : character.equipment)
+            id = equipment_id(id);
+        world.characters.push_back({.keyid = character.keyid,
+                                    .name = std::move(character.name),
+                                    .sex = character.sex,
+                                    .age = character.age,
+                                    .party = character.party,
+                                    .level = character.level,
+                                    .equipment = std::move(character.equipment),
+                                    .main_hand = character.weapon.empty()
+                                                     ? 0
+                                                     : weapon_id(character.weapon.begin()->second),
+                                    .model = std::move(character.model)});
+    }
     for (auto const &state : legacy.states) {
         auto &upgraded =
             world.states.emplace_back(SerializedCharacterState{.keyid = state.keyid,
@@ -151,6 +217,24 @@ template <typename Legacy> SerializedWorld upgrade_checkpoint(Legacy legacy)
         if constexpr (requires { state.bag; }) {
             upgraded.bag_capacity = state.bag_capacity;
             upgraded.bag = state.bag;
+            upgraded.health_lost = state.health_lost;
+        }
+        // If an old character occupied both weapon slots, retain the second item in
+        // its backpack. Normal save validation checks capacity before accepting it.
+        auto const old_record =
+            std::ranges::find(legacy.characters, state.keyid, &LegacyCharacter::keyid);
+        if (old_record == legacy.characters.end())
+            fail("checkpoint state refers to unknown character {}", state.keyid);
+        auto const &old = *old_record;
+        if (old.weapon.size() > 1) {
+            auto const id = weapon_id(std::next(old.weapon.begin())->second);
+            auto const stack = std::ranges::find(upgraded.bag, id, &SerializedResourceStack::keyid);
+            if (stack == upgraded.bag.end())
+                upgraded.bag.push_back({id, 1});
+            else if (stack->quantity == std::numeric_limits<std::uint32_t>::max())
+                fail("legacy weapon quantity overflows");
+            else
+                ++stack->quantity;
         }
     }
     return world;
@@ -161,8 +245,11 @@ SerializedWorld read_checkpoint(std::filesystem::path const &directory)
     auto const version =
         read_save_file_single<CheckpointHeader>(directory, "checkpoint.yaml").version;
     switch (version) {
-    case 5:
+    case 6:
         return read_save_file_single<SerializedWorld>(directory, "checkpoint.yaml");
+    case 5:
+        return upgrade_checkpoint(
+            read_save_file_single<LegacyPlayersWorld>(directory, "checkpoint.yaml"));
     case 4:
         return upgrade_checkpoint(
             read_save_file_single<LegacyInventoryWorld>(directory, "checkpoint.yaml"));
@@ -276,7 +363,7 @@ Save::Save(std::filesystem::path directory, SerializedWorld const &world)
 
 void Save::read_world(SerializedWorld const &world)
 {
-    if (world.version != 5)
+    if (world.version != 6)
         fail("unsupported checkpoint version {}", world.version);
     session_ = world.session;
     std::ranges::sort(session_.players, {}, &SerializedPlayer::keyid);
@@ -301,7 +388,7 @@ void Save::read_world(SerializedWorld const &world)
 
 SerializedWorld Save::data() const
 {
-    return {.version = 5,
+    return {.version = 6,
             .continent = continent_,
             .session = session_,
             .factions = sorted_records(factions_),
@@ -343,12 +430,10 @@ SerializedCharacterConfig serialize_character(Character const &character)
                                      .party = config.party->keyid(),
                                      .level = config.level,
                                      .equipment = {},
-                                     .weapon = {},
+                                     .main_hand = config.main_hand ? config.main_hand->keyid() : 0,
                                      .model = config.model};
     for (auto const &[slot, equipment] : config.equipment)
         record.equipment.emplace(slot, equipment->keyid());
-    for (auto const &[slot, weapon] : config.weapon)
-        record.weapon.emplace(slot, weapon->keyid());
     return record;
 }
 
@@ -368,7 +453,9 @@ SerializedCharacterState serialize_character_state(Character const &character)
         // itself is serialized separately and restored by Party::command.
         .patrol = character.ai_controller() && character.ai_controller()->patrolling(),
         .companion_order = order,
-        .bag_capacity = character.bag().max_weight()};
+        .bag_capacity = character.bag().max_weight(),
+        .health_lost = character.config().health_lost,
+        .flashlight_on = character.flashlight_on()};
     for (auto const &[keyid, quantity] : character.bag().quantities())
         record.bag.push_back({keyid, quantity});
     std::ranges::sort(record.bag, {}, &SerializedResourceStack::keyid);
@@ -414,8 +501,7 @@ void Save::read_weapons()
     for (auto const &record :
          read_save_file_sequence<SerializedWeapon>(directory_, "weapons.yaml")) {
         insert_unique(weapons_, record, "weapon");
-        spdlog::info("[save] {}: weapon {} {} loaded", directory_.string(), record.keyid,
-                     to_string(record.type));
+        spdlog::info("[save] {}: weapon {} loaded", directory_.string(), record.keyid);
     }
 }
 
@@ -448,8 +534,22 @@ void Save::read_session()
 
 void Save::validate_references() const
 {
-    for (auto const &[_, weapon] : weapons_)
+    for (auto const &[id, equipment] : equipments_) {
+        if (!game::find_resource(id))
+            fail("equipment {} refers to unknown resource", id);
+        if (weapons_.contains(id))
+            fail("resource {} has both equipment and weapon definitions", id);
+        if (!std::isfinite(equipment.armor) || equipment.armor < 0)
+            fail("equipment {} has invalid armor", id);
+    }
+    for (auto const &[_, weapon] : weapons_) {
+        if (!game::find_resource(weapon.keyid))
+            fail("weapon {} refers to unknown resource", weapon.keyid);
+        if (!std::isfinite(weapon.attack) || weapon.attack < 0 || !std::isfinite(weapon.range) ||
+            weapon.range <= 0)
+            fail("weapon {} has invalid attack or range", weapon.keyid);
         validate_model_config(weapon.model.value());
+    }
     for (auto const &[_, character] : characters_)
         validate_model_config(character.model.value());
 
@@ -479,7 +579,7 @@ void Save::validate_references() const
         for (auto const captive : party.captives)
             character(captive, std::format("party {} captive", party.keyid));
     }
-    std::unordered_set<std::uint32_t> displayed_weapons;
+
     for (auto const &entry : characters_) {
         auto const &character_record = entry.second;
         if (!parties_.contains(character_record.party))
@@ -489,14 +589,9 @@ void Save::validate_references() const
             if (!equipments_.contains(slot.second))
                 fail("character {} refers to unknown equipment {}", character_record.keyid,
                      slot.second);
-        for (auto const &slot : character_record.weapon) {
-            if (!weapons_.contains(slot.second))
-                fail("character {} refers to unknown weapon {}", character_record.keyid,
-                     slot.second);
-            if (!weapons_.at(slot.second).model.value().path.value().empty() &&
-                !displayed_weapons.insert(slot.second).second)
-                fail("weapon {} with a model is equipped by multiple characters", slot.second);
-        }
+        if (character_record.main_hand && !weapons_.contains(character_record.main_hand))
+            fail("character {} refers to unknown weapon {}", character_record.keyid,
+                 character_record.main_hand);
     }
     // Keep referential diagnostics above independent of membership checks below.
     for (auto const &[_, party] : parties_) {
@@ -531,12 +626,13 @@ void Save::validate_references() const
         for (auto const &[slot, id] : record.equipment)
             if (equipments_.at(id).type != slot)
                 fail("character {} equipment {} does not match its slot", record.keyid, id);
-        for (auto const &[slot, id] : record.weapon)
-            if (weapons_.at(id).type != slot)
-                fail("character {} weapon {} does not match its slot", record.keyid, id);
     }
     for (auto const &[id, state] : states_) {
-        character(id, "checkpoint state");
+        auto const &config = character(id, "checkpoint state");
+        float const max_health = 100.0F + static_cast<float>(config.level);
+        if (!std::isfinite(state.health_lost.value()) || state.health_lost.value() < 0 ||
+            state.health_lost.value() > max_health)
+            fail("character {} has invalid saved health", id);
         game::Bag bag{state.bag_capacity};
         std::unordered_set<std::uint32_t> resources;
         for (auto const &stack : state.bag) {

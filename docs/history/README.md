@@ -16,3 +16,5 @@
 - [Ray-query 迁移验证](ray-query-validation.md)；现行说明：[ray-query-shadows](../ray-query-shadows.md)。
 
 新增记录应注明日期、代码版本（可取得时）、环境、方法与验证边界。已结束的实验不追加到现行设计正文；仍影响代码的外部绕行保留在[外部缺陷记录](../external-defects.md)。
+
+- [物品可选装备属性块：已替代提案](items-optional-equipment-proposal-2026-11-10.md)；现行说明：[资源与穿戴](../design/resources.md)。

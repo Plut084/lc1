@@ -47,12 +47,15 @@ WorldSnapshot interpolate_world(WorldSnapshot const &previous, WorldSnapshot con
 WorldSnapshot capture_world(GameWorld const &world)
 {
     WorldSnapshot snapshot;
+    for (auto const &[id, equipment] : world.equipments())
+        snapshot.equipments.emplace(id, *equipment);
+    for (auto const &[id, weapon] : world.weapons())
+        snapshot.weapons.emplace(id, *weapon);
     snapshot.characters.reserve(world.characters().size());
     for (auto const *character : world.characters()) {
         std::optional<ModelConfig> weapon_model;
-        auto const slot = character->config().weapon.find(WeaponType::MeleeWeapon);
-        if (slot != character->config().weapon.end())
-            weapon_model = slot->second->model_config();
+        if (character->config().main_hand)
+            weapon_model = character->config().main_hand->model_config();
         std::string speech;
         auto const *dialog = world.dialogs().find(*character);
         if (dialog && dialog->speaker() == character)
@@ -66,6 +69,11 @@ WorldSnapshot capture_world(GameWorld const &world)
              .weapon_model = std::move(weapon_model),
              .attack_sequence = character->attack_sequence(),
              .nod_sequence = character->nod_sequence(),
+             .hit_sequence = character->hit_sequence(),
+             .health = character->config().health(),
+             .max_health = character->config().max_health(),
+             .dead = character->dead(),
+             .reaction_time = character->reaction_time(),
              .speech = std::move(speech),
              .dialog_partner =
                  dialog ? std::optional{(dialog->talker() == character ? dialog->target()
@@ -78,13 +86,14 @@ WorldSnapshot capture_world(GameWorld const &world)
              .party_id = character->config().party->keyid(),
              .companion_order = character->companion_order(),
              .equipment = {},
-             .weapon = {},
-             .bag = character->bag()});
+             .main_hand = character->config().main_hand
+                              ? std::optional<WeaponDefinition>{*character->config().main_hand}
+                              : std::nullopt,
+             .bag = character->bag(),
+             .flashlight_on = character->flashlight_on()});
         auto &view = snapshot.characters.back();
         for (auto const &[slot, equipment] : character->config().equipment)
             view.equipment.emplace(slot, *equipment);
-        for (auto const &[slot, weapon] : character->config().weapon)
-            view.weapon.emplace(slot, *weapon);
     }
     snapshot.parties.reserve(world.parties().size());
     for (auto const &[id, party] : world.parties())

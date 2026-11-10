@@ -4,6 +4,10 @@
 
 namespace lc1 {
 
+// First intersection fraction in [0, 1], including an origin inside the box.
+std::optional<float> segment_box_fraction(glm::vec3 from, glm::vec3 to, glm::vec3 min,
+                                          glm::vec3 max);
+
 // Read-only collision view. Borrows a non-null Continent, which must remain alive
 // at the same address for the lifetime of the view. Geometry is never copied.
 class WorldCollision {
@@ -11,6 +15,9 @@ class WorldCollision {
     explicit WorldCollision(Continent const &continent);
     WorldCollision(Continent &&) = delete;
     WorldCollision(Continent const &&) = delete;
+
+    // Solid authored blocks occlude a blade; non-solid decoration does not.
+    bool segment_blocked(glm::vec3 from, glm::vec3 to, float radius) const;
 
     std::optional<float> ground_height(glm::vec2 position) const;
 

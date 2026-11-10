@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lc1/game/player/player-character-controller.hpp"
 #include "lc1/game/world/world-snapshot.hpp"
 #include "lc1/platform/window.hpp"
 #include "lc1/vk/render/text-pass.hpp"
@@ -21,6 +22,8 @@ struct GameUiInfo {
     FrameExtent extent;
     std::string_view lighting_name;
     float exposure;
+    double time_of_day;
+    float time_rate;
     bool showcase_animated;
     std::string_view interaction_target;
 };
@@ -32,6 +35,8 @@ struct GameUiActions {
     bool start = false;
     bool quit = false;
     std::optional<float> volume;
+    std::optional<float> time_rate;
+    std::optional<EquipmentRequest> equipment;
 };
 
 class GameUi {
@@ -57,7 +62,7 @@ class GameUi {
                                               GameLocation location) const;
 
   private:
-    void player_info(GameUiInfo const &info);
+    void player_info(GameUiInfo const &info, GameUiActions &actions);
 
     enum class State { MainMenu, InSettings, InGame };
     State state_ = State::MainMenu;
@@ -71,7 +76,10 @@ class GameUi {
     std::optional<CharacterId> selected_character_;
     std::optional<std::uint32_t> selected_resource_;
     int inventory_category_ = 0;
-    int selected_slot_ = 1;
+    int selected_slot_ = -1;
+    float slot_position_ = 0;
+    float slot_target_ = 0;
+    std::vector<std::uint32_t> inventory_order_;
 };
 
 } // namespace lc1

@@ -62,7 +62,7 @@ lc1::CharacterConfig config(std::uint32_t id, std::string name, lc1::Party &part
             .party = &party,
             .level = 1,
             .equipment = {},
-            .weapon = {}};
+            .main_hand = nullptr};
 }
 
 struct World {
@@ -77,12 +77,17 @@ struct World {
     lc1::Character passerby{
         continent, {.position = continent.spawn()}, config(5, "Passerby", other)};
 
+    std::vector<std::unique_ptr<lc1::CharacterController>> controllers;
+
     explicit World(lc1::DialogSystem const &dialogs)
         : party(1, faction.keyid()), other(2, faction.keyid())
     {
-        for (auto *character : {&captive, &leader, &worker, &passerby})
-            character->set_controller(std::make_unique<lc1::AiCharacterController>(
-                dialogs, character_lookup({&player, &captive, &leader, &worker, &passerby})));
+        for (auto *character : {&captive, &leader, &worker, &passerby}) {
+            auto &controller =
+                controllers.emplace_back(std::make_unique<lc1::AiCharacterController>(
+                    dialogs, character_lookup({&player, &captive, &leader, &worker, &passerby})));
+            character->set_controller(controller.get());
+        }
         party.restore_roster(&player, {}, {&captive});
         other.restore_roster(&leader, {&worker, &passerby}, {});
     }
@@ -188,12 +193,12 @@ void npc_initiates_and_player_decides(std::filesystem::path const &path)
               world.captive.config().party == &world.party &&
               world.captive.controller() == original_controller && dialog->displaying_response(),
           "explicit Target recruiter roles let the player recruit an initiating NPC");
-    auto request = world.captive.controller()->update(0.1F, world.captive);
+    auto request = world.captive.controller()->decide(0.1F);
     check(request.move == glm::vec2{} && !request.swing_weapon && request.body_direction &&
               world.captive.companion_order() == lc1::CompanionOrder::Follow,
           "recruitment keeps the existing AI and pauses following during the active dialog");
     world.party.command(world.player, world.captive, lc1::CompanionOrder::Wait);
-    request = world.captive.controller()->update(0.1F, world.captive);
+    request = world.captive.controller()->decide(0.1F);
     check(world.captive.controller() == original_controller && request.move == glm::vec2{} &&
               !request.swing_weapon && request.body_direction &&
               world.captive.companion_order() == lc1::CompanionOrder::Wait,
@@ -290,15 +295,16 @@ void ambient_scheduling_and_patrol(std::filesystem::path const &path)
     check(first->talker() == &world.captive && first->target() == &world.leader,
           "equal-distance scheduling uses character ids as a stable tie break");
 
-    world.captive.set_controller(std::make_unique<lc1::AiCharacterController>(
+    lc1::AiCharacterController patrol_controller{
         system,
         character_lookup(
             {&world.player, &world.captive, &world.leader, &world.worker, &world.passerby}),
         std::array{&world.player},
         std::vector<lc1::Waypoint>{{.position = world.continent.spawn()},
-                                   {.position = {4.0F, 0.0F, 0.0F}}}));
+                                   {.position = {4.0F, 0.0F, 0.0F}}}};
+    world.captive.set_controller(&patrol_controller);
     auto const original = world.captive.position();
-    auto const talking = world.captive.controller()->update(0.1F, world.captive);
+    auto const talking = world.captive.controller()->decide(0.1F);
     check(talking.body_direction && talking.move == glm::vec2{} && !talking.swing_weapon,
           "bound dialog lookup overrides patrol movement and attacks");
     world.captive.update(0.1F, world.continent);

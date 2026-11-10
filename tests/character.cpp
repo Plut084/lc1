@@ -90,9 +90,9 @@ void blacksmith_forging()
     auto const &iron = pig_iron;
     auto const &helmet = iron_helmet;
     auto &bag = player.bag();
-    // This recipe needs 12.2 kg of inputs; give the crafting fixture an explicit capacity.
-    bag = Bag{12200};
-    check(bag.add(moneta, 20) && bag.add(wood, 2) && bag.add(iron, 5),
+    // This recipe needs 3.05 kg of inputs; give the crafting fixture an explicit capacity.
+    bag = Bag{3050};
+    check(bag.add(moneta, 5) && bag.add(wood, 1) && bag.add(iron, 1),
           "prepare exact crafting inputs through the public bag interface");
     lc1::DialogCatalog catalog{"runtime/dialogs/catalog.yaml"};
     check(catalog.select(player, smith, lc1::DialogTrigger::Interaction) == "blacksmith",
@@ -105,23 +105,23 @@ void blacksmith_forging()
     check(dialog.response_id(0) == "forge", "exact ingredients allow forging");
     check(bag.remove(moneta, 1), "remove one coin before choosing the stale response");
     dialog.respond(player, 0);
-    check(!dialog.displaying_response() && bag.quantity_of(pig_iron.keyid) == 5 &&
-              bag.quantity_of(wood.keyid) == 2 && bag.quantity_of(iron_helmet.keyid) == 0,
+    check(!dialog.displaying_response() && bag.quantity_of(pig_iron.keyid) == 1 &&
+              bag.quantity_of(wood.keyid) == 1 && bag.quantity_of(iron_helmet.keyid) == 0,
           "stale unaffordable choice consumes nothing");
     check(dialog.candidate_responses().size() == 1 && dialog.response_id(0) == "cancel",
           "unaffordable crafting still allows exiting");
     check(bag.add(moneta, 1), "restore the missing coin");
-    Bag limited{12200};
-    check(limited.add(moneta, 20) && limited.add(wood, 2) && limited.add(iron, 5),
+    Bag limited{3050};
+    check(limited.add(moneta, 5) && limited.add(wood, 1) && limited.add(iron, 1),
           "prepare a bag exactly at its weight limit");
     auto const &recipe = iron_helmet_recipe();
-    check(recipe.input_weight == 12200 && recipe.output_weight == 2500,
+    check(recipe.input_weight == 3050 && recipe.output_weight == 2500,
           "helmet recipe reports the weight of its inputs and outputs");
     Recipe too_large{recipe.inputs, {{&wood, 10}, {&iron, 18}}};
-    check(!craft(limited, too_large) && limited.quantity_of(moneta.keyid) == 20 &&
-              limited.quantity_of(wood.keyid) == 2 && limited.quantity_of(pig_iron.keyid) == 5,
+    check(!craft(limited, too_large) && limited.quantity_of(moneta.keyid) == 5 &&
+              limited.quantity_of(wood.keyid) == 1 && limited.quantity_of(pig_iron.keyid) == 1,
           "failure on a later output preserves all materials and weight");
-    check(can_craft(limited, recipe) && limited.quantity_of(moneta.keyid) == 20,
+    check(can_craft(limited, recipe) && limited.quantity_of(moneta.keyid) == 5,
           "a full bag can craft when consuming the ingredients frees enough weight");
     dialog.clear();
     dialog.start(player, smith);
@@ -133,7 +133,7 @@ void blacksmith_forging()
               bag.quantity_of(wood.keyid) == 0 && bag.quantity_of(pig_iron.keyid) == 0,
           "forging consumes exactly one recipe and repeated input cannot duplicate the result");
     check(!craft(bag, iron_helmet_recipe()), "missing materials cannot forge a second helmet");
-    check(bag.remove(helmet, 1) && bag.add(wood, 12) && !bag.add(wood, 1),
+    check(bag.remove(helmet, 1) && bag.add(wood, 3) && !bag.add(wood, 1),
           "crafting commits the weight counter together with the stacks");
     Bag overflow{std::numeric_limits<std::uint32_t>::max()};
     auto const max_helmets = std::numeric_limits<std::uint32_t>::max() / helmet.weight;
@@ -174,9 +174,9 @@ void blacksmith_forging()
               weighted.total_weight() == 3000,
           "weight multiplication cannot wrap before the capacity check");
     Bag duplicate_inputs{10000};
-    check(duplicate_inputs.add(wood, 2), "prepare repeated recipe inputs");
+    check(duplicate_inputs.add(wood, 1), "prepare repeated recipe inputs");
     Recipe repeated{{{&wood, 2}, {&wood, 1}}, {{&helmet, 1}}};
-    check(!craft(duplicate_inputs, repeated) && duplicate_inputs.quantity_of(wood.keyid) == 2,
+    check(!craft(duplicate_inputs, repeated) && duplicate_inputs.quantity_of(wood.keyid) == 1,
           "repeated inputs cannot consume the same resources twice");
 }
 
@@ -270,7 +270,7 @@ void companion_orders()
                                     .party = &owner,
                                     .level = 1,
                                     .equipment = {},
-                                    .weapon = {}};
+                                    .main_hand = nullptr};
     };
     lc1::Character leader{world, {.position = {0, 0, 0}}, config(1, party)};
     lc1::Character member{world, {.position = {-8, 0, 0}}, config(2, party)};
@@ -278,7 +278,8 @@ void companion_orders()
     lc1::Character stranger{world, {.position = {-4, 0, 0}}, config(4, other)};
     lc1::Character far_leader{world, {.position = {10, 0, 0}}, config(5, party)};
     auto const characters = character_lookup({&leader, &member, &captive, &stranger, &far_leader});
-    far_leader.set_controller(std::make_unique<lc1::AiCharacterController>(dialogs, characters));
+    lc1::AiCharacterController far_ai{dialogs, characters};
+    far_leader.set_controller(&far_ai);
     party.restore_roster(&leader, {&member, &far_leader}, {&captive});
     other.restore_roster(&stranger, {}, {});
     check(!party.can_command(member, leader) && !party.can_command(leader, captive) &&
@@ -290,9 +291,10 @@ void companion_orders()
             "captives cannot receive orders");
     rejects([&] { party.command(leader, member, lc1::CompanionOrder::None); },
             "orders cannot re-enable a discarded patrol");
-    member.set_controller(std::make_unique<lc1::AiCharacterController>(
+    lc1::AiCharacterController member_ai{
         dialogs, characters, std::array{&leader},
-        std::vector<lc1::Waypoint>{{.position = {-8, 0, 0}}, {.position = {-12, 0, 0}}}));
+        std::vector<lc1::Waypoint>{{.position = {-8, 0, 0}}, {.position = {-12, 0, 0}}}};
+    member.set_controller(&member_ai);
     auto *const member_controller = member.controller();
     party.command(leader, member, lc1::CompanionOrder::Follow);
     check(member.controller() == member_controller &&
@@ -391,7 +393,7 @@ void recruitment_dialog()
                                     .party = &owner,
                                     .level = 1,
                                     .equipment = {},
-                                    .weapon = {}};
+                                    .main_hand = nullptr};
     };
     lc1::Character player{world, {.position = world.spawn()}, config(1, "Player", party)};
     lc1::Character npc{world, {.position = world.spawn()}, config(2, "Recruit", party)};
@@ -416,13 +418,16 @@ void recruitment_dialog()
     rejects([&] { party.restore_roster(nullptr, {}, {}); },
             "assembly cannot overwrite a live roster");
     rejects([&] { party.change_leader(characters, npc.id()); }, "a captive cannot become leader");
-    for (auto *character : {&outsider, &reordered_recruit})
-        character->set_controller(
+    std::vector<std::unique_ptr<lc1::CharacterController>> controllers;
+    for (auto *character : {&outsider, &reordered_recruit}) {
+        auto &controller = controllers.emplace_back(
             std::make_unique<lc1::AiCharacterController>(dialogs, characters));
+        character->set_controller(controller.get());
+    }
     other.restore_roster(&stranger, {&outsider, &reordered_recruit}, {&captive});
-    npc.set_controller(std::make_unique<lc1::AiCharacterController>(
-        dialogs, character_lookup({&player}), std::array{&player},
-        std::vector<lc1::Waypoint>{{.position = world.spawn()}}));
+    lc1::AiCharacterController npc_ai{dialogs, character_lookup({&player}), std::array{&player},
+                                      std::vector<lc1::Waypoint>{{.position = world.spawn()}}};
+    npc.set_controller(&npc_ai);
 
     // Exercise authored transitions and reordered choices before changing party state.
     auto script = lc1::DialogScript::load("runtime/dialogs/recruit.yaml");
@@ -677,11 +682,17 @@ void pose_and_movement()
     walker.walk(0.1F, world, {0, 0, -1}, true);
     check(near(walker.position().y, 0), "running cannot make the ground character fly");
 
-    lc1::Character configured{
-        world, {.position = {0, 0, 0}}, {}, {.eye_height = 1.2F, .walk_speed = 2.0F}};
+    lc1::Character configured{world, {.position = {0, 0, 0}}, {.level = 10}, {.eye_height = 1.2F}};
     configured.walk(0.1F, world, {0, 0, -0.5F}, false);
-    check(near(configured.position(), {0, 0, -0.1F}) && near(configured.eye_position().y, 1.2F),
-          "each character has its own dimensions and movement settings");
+    float const expected_walk_speed = 4.5F + std::log(2.0F);
+    check(near(configured.position(), {0, 0, -expected_walk_speed * 0.05F}) &&
+              near(configured.eye_position().y, 1.2F),
+          "walking speed derives from agility while body controls eye height");
+    auto const walking_position = configured.position();
+    configured.walk(0.1F, world, {0, 0, -1}, true);
+    check(near(configured.position(),
+               walking_position + glm::vec3{0, 0, -(expected_walk_speed + 4.5F) * 0.1F}),
+          "running adds its speed bonus to agility-derived walking speed");
 
     auto const before = character.position();
     rejects([&] { character.move(world, {0, 1, 0}); }, "ground move rejects vertical displacement");
@@ -921,7 +932,8 @@ void bound_player_controller()
     lc1::PlayerCharacterInput frame{.keyboard_enabled = true};
     lc1::Character player{world, {.position = world.spawn()}, {}};
     auto controls = lc1::PlayerCharacterController::read_input(input, frame);
-    player.set_controller(std::make_unique<lc1::PlayerCharacterController>(controls));
+    lc1::PlayerCharacterController player_controller{controls};
+    player.set_controller(&player_controller);
     auto *const controller = player.controller();
 
     devices.on_key(lc1::Key::W, true);
@@ -952,6 +964,16 @@ void bound_player_controller()
     controls = lc1::PlayerCharacterController::read_input(input, frame);
     player.update(0.1F, world);
     check(near(player.position(), before_release), "bound action releases stop movement");
+
+    controls.movement = {0, -1};
+    player.set_controller(nullptr);
+    player.update(0.1F, world);
+    check(!player.controller() && near(player.position(), before_release),
+          "detaching a borrowed controller leaves the character without movement input");
+    player.set_controller(&player_controller);
+    player.update(0.1F, world);
+    check(player.controller() == controller && !near(player.position(), before_release),
+          "the caller-owned controller remains usable after detaching and rebinding");
 }
 
 void intent_rules()
@@ -962,7 +984,7 @@ void intent_rules()
     // Character, not the controller, chooses the speed that belongs to a sprint request.
     auto sprinter = make_character();
     apply_character_intent(sprinter, 0.1F, world, {.move = {0, -1}, .sprint = true});
-    check(near(sprinter.position(), world.spawn() + glm::vec3{0, 0, -1.8F}),
+    check(near(sprinter.position(), world.spawn() + glm::vec3{0, 0, -0.9F}),
           "sprint intent uses the character's run speed");
 
     // The same jump request is accepted only by the grounded state rule in Character.
@@ -1012,7 +1034,8 @@ void controller_intent_boundary()
                                    {.position = world.spawn() + glm::vec3{4, 0, 0}}}};
     player.move(world, {1, 0, 0});
     auto const before = npc.position();
-    auto intent = controller.update(0.1F, npc);
+    controller.possess(npc);
+    auto intent = controller.decide(0.1F);
     check(npc.position() == before, "an AI decision does not mutate the character");
     check(intent.swing_weapon, "the patrol can request a swing near its supplied player");
     check(intent.move != glm::vec2{} && intent.face_movement,
@@ -1032,28 +1055,29 @@ void patrol_swing_requests()
         dialogs, character_lookup({&player}), std::array{&player},
         std::vector<lc1::Waypoint>{{.position = world.spawn()},
                                    {.position = world.spawn() + glm::vec3{4, 0, 0}}}};
-    check(moving.update(0.1F, npc).swing_weapon, "a nearby player requests a swing");
-    check(moving.update(0.1F, npc).swing_weapon,
+    moving.possess(npc);
+    check(moving.decide(0.1F).swing_weapon, "a nearby player requests a swing");
+    check(moving.decide(0.1F).swing_weapon,
           "remaining nearby continues requesting swings for Character to resolve");
     player.move(world, {4, 0, 0});
-    check(!moving.update(0.1F, npc).swing_weapon, "leaving range does not request a swing");
+    check(!moving.decide(0.1F).swing_weapon, "leaving range does not request a swing");
     player.move(world, {-4, 0, 0});
-    check(moving.update(0.1F, npc).swing_weapon, "reentering range requests a new swing");
+    check(moving.decide(0.1F).swing_weapon, "reentering range requests a new swing");
     lc1::AiCharacterController stationary{
         dialogs, character_lookup({&player}), std::array{&player},
         std::vector<lc1::Waypoint>{{.position = world.spawn(), .wait_seconds = 2}}};
-    check(stationary.update(0.1F, npc).swing_weapon, "single waypoint patrols can request a swing");
+    stationary.possess(npc);
+    check(stationary.decide(0.1F).swing_weapon, "single waypoint patrols can request a swing");
     lc1::AiCharacterController waiting{
         dialogs, character_lookup({&player}), std::array{&player},
         std::vector<lc1::Waypoint>{{.position = world.spawn()},
                                    {.position = world.spawn(), .wait_seconds = 2}}};
-    check(waiting.update(0.1F, npc).swing_weapon,
-          "arriving at a waypoint does not suppress a swing");
+    waiting.possess(npc);
+    check(waiting.decide(0.1F).swing_weapon, "arriving at a waypoint does not suppress a swing");
     player.move(world, {4, 0, 0});
-    waiting.update(0.1F, npc);
+    waiting.decide(0.1F);
     player.move(world, {-4, 0, 0});
-    check(waiting.update(0.1F, npc).swing_weapon,
-          "waiting at a waypoint does not suppress a swing");
+    check(waiting.decide(0.1F).swing_weapon, "waiting at a waypoint does not suppress a swing");
 }
 
 std::vector<lc1::Vertex> triangle()

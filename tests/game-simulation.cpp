@@ -1,5 +1,6 @@
 #include "lc1/game/session/game-simulation.hpp"
 #include "lc1/error.hpp"
+#include "lc1/game/resources/catalog.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -43,7 +44,7 @@ class Checkpoint {
             }
         for (auto &character : data.characters)
             if (character.keyid == data.session.players.front().character)
-                character.weapon[lc1::WeaponType::MeleeWeapon] = 1;
+                character.main_hand = 1001;
         lc1::Save::write(directory, data);
     }
 
@@ -129,8 +130,8 @@ void fixed_rate_and_messages()
           "published state acknowledges the input sequence and its simulation tick");
     lc1::GameWorld reference{save, "dialogs/catalog.yaml"};
     lc1::PlayerControls controls;
-    reference.player(lc1::PlayerId{1})
-        .set_controller(std::make_unique<lc1::PlayerCharacterController>(controls));
+    lc1::PlayerCharacterController player_controller{controls};
+    reference.player(lc1::PlayerId{1}).set_controller(&player_controller);
     for (std::uint64_t tick = 1; tick <= moving->tick; ++tick) {
         if (tick == started.tick)
             controls = input;
@@ -260,6 +261,46 @@ void independent_players()
     check(saved.session.players.size() == 2, "host checkpoint includes both players");
 }
 
+void equipment_and_tool_messages()
+{
+    using namespace lc1;
+    Checkpoint checkpoint;
+    auto data = Save{checkpoint.directory}.data();
+    auto const id = data.session.players.front().character;
+    for (auto &character : data.characters)
+        if (character.keyid == id)
+            character.main_hand = 0;
+    for (auto &state : data.states)
+        if (state.keyid == id)
+            state.bag = {{game::flashlight.keyid, 1}};
+    Save::write(checkpoint.directory, data);
+    GameSimulation simulation{Save{checkpoint.directory}, "dialogs/catalog.yaml"};
+    auto connection = simulation.connect(PlayerId{1});
+    connection.submit(
+        {.equipment = EquipmentRequest{CharacterId{id}, game::flashlight.keyid, true}});
+    auto const released = connection.submit({});
+    auto const equipped = wait_for(simulation, [&](auto const &state) {
+        return state.players.at(PlayerId{1}).input_sequence >= released.sequence;
+    });
+    check(equipped->player(PlayerId{1}).main_hand &&
+              equipped->player(PlayerId{1}).main_hand->keyid() == game::flashlight.keyid,
+          "equipment request survives a release frame before its simulation tick");
+    connection.submit({.swing_weapon = true});
+    auto const clicked = connection.submit({});
+    auto const lit = wait_for(simulation, [&](auto const &state) {
+        return state.players.at(PlayerId{1}).input_sequence >= clicked.sequence;
+    });
+    auto const later =
+        wait_for(simulation, [&](auto const &state) { return state.tick >= lit->tick + 2; });
+    check(lit->player(PlayerId{1}).flashlight_on && later->player(PlayerId{1}).flashlight_on,
+          "left-click tool use survives release and is consumed once");
+    auto const checkpoint_data = simulation.checkpoint().get();
+    auto const saved_player =
+        std::ranges::find(checkpoint_data.states, id, &SerializedCharacterState::keyid);
+    check(saved_player != checkpoint_data.states.end() && saved_player->flashlight_on.value(),
+          "worker checkpoint includes flashlight switch state");
+}
+
 void failure_and_shutdown()
 {
     Checkpoint checkpoint;
@@ -304,6 +345,7 @@ int main()
         fixed_rate_and_messages();
         one_shot_inputs();
         independent_players();
+        equipment_and_tool_messages();
         failure_and_shutdown();
         std::cout << "game simulation tests passed\n";
     }

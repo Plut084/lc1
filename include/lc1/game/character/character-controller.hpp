@@ -10,13 +10,23 @@ class Character;
 class CharacterController {
   public:
     CharacterController() = default;
+
     CharacterController(CharacterController const &) = delete;
     CharacterController(CharacterController &&) = delete;
     CharacterController &operator=(CharacterController const &) = delete;
     CharacterController &operator=(CharacterController &&) = delete;
+
     virtual ~CharacterController();
 
-    virtual CharacterIntent update(float delta_seconds, Character const &character) = 0;
+    // Read-only borrow: the character must outlive this binding.
+    void possess(Character const &character);
+    virtual CharacterIntent decide(float delta_seconds) = 0;
+
+  protected:
+    Character const &character() const;
+
+  private:
+    Character const *character_ = nullptr;
 };
 
 } // namespace lc1

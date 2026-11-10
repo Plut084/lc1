@@ -2,6 +2,7 @@
 
 #include "lc1/game/actions.hpp"
 #include "lc1/game/character/character-controller.hpp"
+#include "lc1/game/character/character-id.hpp"
 
 #include <glm/glm.hpp>
 
@@ -22,6 +23,12 @@ struct PlayerCharacterInput {
     glm::vec3 view_heading{0, 0, -1};
 };
 
+struct EquipmentRequest {
+    CharacterId character;
+    std::uint32_t resource;
+    bool equip = true;
+};
+
 // Device-independent input copied into the simulation at a tick boundary.
 struct PlayerControls {
     PlayerCharacterInput view;
@@ -32,6 +39,7 @@ struct PlayerControls {
     bool nod = false;
     bool interact = false;
     int response_index = -1;
+    std::optional<EquipmentRequest> equipment;
 };
 
 // Turns player actions into a CharacterIntent. It owns device-to-action mapping, mouse
@@ -42,12 +50,12 @@ struct PlayerControls {
 class PlayerCharacterController : public CharacterController {
   public:
     // Required input borrow, owned by the simulation and updated before each tick.
-    PlayerCharacterController(PlayerControls const &input);
+    explicit PlayerCharacterController(PlayerControls const &input);
 
     static PlayerControls read_input(GameInputRouter const &input,
                                      PlayerCharacterInput const &frame);
 
-    CharacterIntent update(float delta_seconds, Character const &character) override;
+    CharacterIntent decide(float delta_seconds) override;
 
     // Pure resolution for the first-person view. `restored_angles` supplies the remembered
     // absolute yaw/pitch after a view switch; std::nullopt derives them from the character.

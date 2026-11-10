@@ -41,10 +41,12 @@ CharacterIntent PlayerCharacterController::first_person(Character const &charact
     glm::vec3 const heading{-std::sin(radians), 0, -std::cos(radians)};
     auto const right = glm::cross(heading, glm::vec3{0, 1, 0});
     auto const direction = right * movement.x + heading * movement.y;
-    return {.move = {direction.x, direction.z},
-            .body_yaw = yaw,
-            .look = glm::vec2{0, pitch},
-            .face_movement = false};
+    return {
+        .move = {direction.x, direction.z},
+        .body_yaw = yaw,
+        .look = glm::vec2{0, pitch},
+        .face_movement = false,
+    };
 }
 
 CharacterIntent PlayerCharacterController::third_person(glm::vec2 movement, glm::vec3 view_heading)
@@ -89,8 +91,9 @@ PlayerControls PlayerCharacterController::read_input(GameInputRouter const &inpu
             .response_index = frame.keyboard_enabled ? response_index(input) : -1};
 }
 
-CharacterIntent PlayerCharacterController::update(float, Character const &character)
+CharacterIntent PlayerCharacterController::decide(float)
 {
+    auto const &character = this->character();
     auto const &[look_delta, keyboard_enabled, mouse_enabled, oblique, view_changed,
                  restored_first_person_angles, view_heading] = input_->view;
     auto const movement = input_->movement;

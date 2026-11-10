@@ -225,7 +225,7 @@ void dangling_world_references_are_rejected()
     ScratchSave duplicate{"duplicate-character"};
     duplicate.patch("characters.yaml", "- keyid: 100028\n  name: Anna\n",
                     "- keyid: 1\n  name: impostor\n  sex: true\n  age: 30\n  party: 1\n"
-                    "  level: 1\n  equipment: []\n  weapon: []\n"
+                    "  level: 1\n  equipment: []\n  main_hand: 0\n"
                     "- keyid: 100028\n  name: Anna\n");
     check_rejected_in(duplicate, "duplicate character keyid 1");
 }
@@ -362,7 +362,7 @@ void checkpoint_round_trip()
     lc1::Save::write(scratch.directory(), data);
 
     auto invalid = data;
-    invalid.version = 6;
+    invalid.version = 7;
     rejects_write([&] { lc1::Save::write(scratch.directory(), invalid); },
                   "unsupported checkpoint version");
     invalid = data;
@@ -458,8 +458,8 @@ void model_configuration_round_trip()
     data.characters.front().model = *character;
     data.weapons.front().model = *weapon;
     for (auto &record : data.characters)
-        record.weapon.clear();
-    data.characters.front().weapon[data.weapons.front().type] = data.weapons.front().keyid;
+        record.main_hand = 0;
+    data.characters.front().main_hand = data.weapons.front().keyid;
     lc1::Save::write(scratch.directory(), data);
     lc1::Save const restored{scratch.directory()};
     check(restored.characters().at(data.characters.front().keyid).model.value() == *character &&
@@ -474,10 +474,12 @@ void model_configuration_round_trip()
     check(world.characters().front()->attack_sequence() == 0,
           "headless characters start without attacks");
 
-    data.characters.back().weapon[data.weapons.front().type] = data.weapons.front().keyid;
-    rejects_write([&] { lc1::Save::write(scratch.directory(), data); },
-                  "equipped by multiple characters");
-    data.characters.back().weapon.clear();
+    data.characters.back().main_hand = data.weapons.front().keyid;
+    lc1::Save::write(scratch.directory(), data);
+    check(lc1::Save{scratch.directory()}.characters().at(data.characters.back().keyid).main_hand ==
+              data.characters.back().main_hand,
+          "multiple characters share a weapon definition with independent placements");
+    data.characters.back().main_hand = 0;
     data.characters.front().model.value().material.value().roughness = -1.0F;
     rejects_write([&] { lc1::Save::write(scratch.directory(), data); }, "invalid PBR");
     check(lc1::Save{scratch.directory()}
@@ -493,10 +495,55 @@ void legacy_checkpoints_are_upgraded()
     auto data = checkpoint_data();
     data.states.front().bag_capacity = 16000;
     data.states.front().bag = {{1, 20}};
+    std::erase_if(data.weapons, [](auto const &weapon) { return weapon.keyid == 1005; });
     lc1::Save::write(scratch.directory(), data);
     auto stream = std::ifstream{scratch.directory() / "checkpoint.yaml"};
     std::string modern{std::istreambuf_iterator<char>{stream}, {}};
     stream.close();
+    // Encode the old two-slot schema and its independent id namespaces.
+    std::istringstream current{modern};
+    modern.clear();
+    std::string section;
+    for (std::string line; std::getline(current, line);) {
+        if (!line.empty() && line.front() != ' ')
+            section = line;
+        if (auto const pos = line.find("main_hand:"); pos != std::string::npos) {
+            auto const id = std::stoul(line.substr(pos + 10));
+            auto const indent = line.substr(0, pos);
+            modern += indent + "weapon:";
+            if (!id)
+                modern += " []\n";
+            else
+                modern += "\n" + indent + "  - [" +
+                          (id == 1004 ? "RangedWeapon, 2" : "MeleeWeapon, 1") + "]\n";
+            continue;
+        }
+        if (section == "weapons:" && line.contains("keyid:")) {
+            bool const ranged = line.contains("1004");
+            line.replace(line.find("keyid:") + 6, std::string::npos, ranged ? " 2" : " 1");
+            modern += line + "\n    type: " + (ranged ? "RangedWeapon" : "MeleeWeapon") + "\n";
+            continue;
+        }
+        if (section == "equipments:" && line.contains("keyid:")) {
+            auto const pos = line.find("keyid:") + 6;
+            auto const id = std::stoul(line.substr(pos));
+            line.replace(pos, std::string::npos, " " + std::to_string(id - 3));
+        }
+        for (auto const &[from, to] :
+             std::array{std::pair{"[Head, 4]", "[Head, 1]"}, std::pair{"[Body, 5]", "[Body, 2]"},
+                        std::pair{"[Foot, 6]", "[Foot, 3]"}})
+            if (auto const pos = line.find(from); pos != std::string::npos)
+                line.replace(pos, std::string_view{from}.size(), to);
+        modern += line + "\n";
+    }
+    auto v5 = modern;
+    v5.replace(v5.find("version: 6"), std::string_view{"version: 6"}.size(), "version: 5");
+    scratch.write("checkpoint.yaml", v5);
+    auto const migrated_v5 = lc1::Save{scratch.directory()}.data();
+    check(migrated_v5.version == 6 && migrated_v5.equipments.front().keyid == 4 &&
+              migrated_v5.weapons.front().keyid == 1001 &&
+              migrated_v5.states.front().bag.front().keyid == 1,
+          "version 5 migrates wearables without converting Moneta backpack stacks");
     auto const session_start = modern.find("session:\n");
     auto session_end = modern.find('\n', session_start) + 1;
     while (session_end < modern.size() && modern[session_end] == ' ')
@@ -505,10 +552,10 @@ void legacy_checkpoints_are_upgraded()
                    std::format("session:\n  player: {}\n  example: {}\n",
                                data.session.players.front().character, data.session.example));
     auto v4 = modern;
-    v4.replace(v4.find("version: 5"), std::string_view{"version: 5"}.size(), "version: 4");
+    v4.replace(v4.find("version: 6"), std::string_view{"version: 6"}.size(), "version: 4");
     scratch.write("checkpoint.yaml", v4);
     auto const migrated_v4 = lc1::Save{scratch.directory()}.data();
-    check(migrated_v4.version == 5 && migrated_v4.session.players.front().keyid == 1 &&
+    check(migrated_v4.version == 6 && migrated_v4.session.players.front().keyid == 1 &&
               migrated_v4.session.players.front().character ==
                   data.session.players.front().character &&
               migrated_v4.states.front().bag_capacity == data.states.front().bag_capacity &&
@@ -538,17 +585,17 @@ void legacy_checkpoints_are_upgraded()
             legacy += line + "\n";
     }
     stream.close();
-    auto const version = legacy.find("version: 5");
-    check(version != std::string::npos, "checkpoint writer emits version 5");
-    legacy.replace(version, std::string_view{"version: 5"}.size(), "version: 1");
+    auto const version = legacy.find("version: 6");
+    check(version != std::string::npos, "checkpoint writer emits version 6");
+    legacy.replace(version, std::string_view{"version: 6"}.size(), "version: 1");
     scratch.write("checkpoint.yaml", legacy);
     auto const upgraded = lc1::Save{scratch.directory()}.data();
-    check(upgraded.version == 5 &&
+    check(upgraded.version == 6 &&
               upgraded.states.front().companion_order == lc1::CompanionOrder::None &&
               upgraded.states.at(1).patrol,
           "version 1 checkpoints preserve patrol and gain no implicit follow orders");
     lc1::Save::write(scratch.directory(), upgraded);
-    check(lc1::Save{scratch.directory()}.data().version == 5,
+    check(lc1::Save{scratch.directory()}.data().version == 6,
           "upgraded saves can be written and reloaded");
     check(upgraded.continent == lc1::ContinentIdentity{"present", 1},
           "legacy checkpoints select present continent revision 1");
@@ -568,7 +615,7 @@ void legacy_checkpoints_are_upgraded()
     v3 += "continent:\n  id: prototype\n  version: 1\n";
     scratch.write("checkpoint.yaml", v3);
     auto const upgraded_v3 = lc1::Save{scratch.directory()}.data();
-    check(upgraded_v3.version == 5 && upgraded_v3.continent.id == "prototype" &&
+    check(upgraded_v3.version == 6 && upgraded_v3.continent.id == "prototype" &&
               std::ranges::all_of(upgraded_v3.states,
                                   [](auto const &state) {
                                       return state.bag.empty() && state.bag_capacity == 10000;
@@ -622,8 +669,8 @@ void inconsistent_world_records_are_rejected()
     equipment.patch("equipments.yaml", "type: Head", "type: Body");
     check_rejected_in(equipment, "does not match its slot");
     ScratchSave weapon{"weapon-slot"};
-    weapon.patch("weapons.yaml", "type: MeleeWeapon", "type: RangedWeapon");
-    check_rejected_in(weapon, "does not match its slot");
+    weapon.patch("weapons.yaml", "keyid: 1001", "keyid: 999999");
+    check_rejected_in(weapon, "unknown resource");
 }
 
 } // namespace

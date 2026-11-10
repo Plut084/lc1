@@ -29,7 +29,7 @@ class AiCharacterController : public CharacterController {
                                    std::vector<Waypoint> path, float arrival_radius = 0.5F);
     void set_order(CompanionOrder order);
 
-    CharacterIntent update(float delta_seconds, Character const &character) override;
+    CharacterIntent decide(float delta_seconds) override;
     bool patrolling() const;
     std::optional<CompanionOrder> companion_order() const;
 

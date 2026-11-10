@@ -52,8 +52,9 @@ void AiCharacterController::set_order(CompanionOrder order)
         state_ = state;
 }
 
-CharacterIntent AiCharacterController::update(float delta_seconds, Character const &character)
+CharacterIntent AiCharacterController::decide(float delta_seconds)
 {
+    auto const &character = this->character();
     auto const *dialog = dialogs_->find(character);
     if (dialog) {
         if (state_ != State::Dialog)
@@ -164,7 +165,7 @@ CharacterIntent AiCharacterController::companion_update(float delta_seconds,
     direction.y = 0.0F;
     float const distance = glm::length(direction);
     float const stop_distance = std::max(2.0F, character.half_width() + leader->half_width());
-    if (distance <= stop_distance || character.body().walk_speed <= 0.0F)
+    if (distance <= stop_distance || character.config().walk_speed() <= 0.0F)
         return intent;
 
     auto const heading = direction / distance;
@@ -175,7 +176,7 @@ CharacterIntent AiCharacterController::companion_update(float delta_seconds,
         return intent;
 
     float const step_seconds =
-        std::min(delta_seconds, (distance - stop_distance) / character.body().walk_speed);
+        std::min(delta_seconds, (distance - stop_distance) / character.config().walk_speed());
     float const scale = std::clamp(step_seconds / delta_seconds, 0.0F, 1.0F);
     intent.move = glm::vec2{heading.x, heading.z} * scale;
     intent.face_movement = true;

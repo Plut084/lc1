@@ -72,8 +72,8 @@ void GameSession::update(float delta_seconds, InputState const &input_state)
         keyboard_enabled && input_router_.pressed(GameAction::SaveGame);
 
     player_view_.prepare_input(input_state.cursor_delta(), keyboard_enabled, mouse_enabled);
-    connection_.submit(
-        PlayerCharacterController::read_input(input_router_, player_view_.character_input()));
+    auto controls =
+        PlayerCharacterController::read_input(input_router_, player_view_.character_input());
     if (mouse_enabled)
         player_view_.update_pointer(delta_seconds, input_state, window_->window_size(),
                                     window_->hovered() && !window_->cursor_captured());
@@ -120,13 +120,19 @@ void GameSession::update(float delta_seconds, InputState const &input_state)
             .extent = window_->framebuffer_extent(),
             .lighting_name = world_presentation_.lighting_name(),
             .exposure = world_presentation_.output().exposure,
+            .time_of_day = world_presentation_.time_of_day(),
+            .time_rate = world_presentation_.time_rate(),
             .showcase_animated = world_presentation_.showcase_animated(),
             .interaction_target = snapshot_.players.at(connection_.player_id()).interaction_target,
         },
         music_);
+    controls.equipment = ui_actions.equipment;
+    connection_.submit(std::move(controls));
     if (ui_actions.start)
         ui_.start_game();
     quit_requested_ |= ui_actions.quit;
+    if (ui_actions.time_rate)
+        world_presentation_.set_time_rate(*ui_actions.time_rate);
     if (ui_actions.volume)
         world_presentation_.set_volume(*ui_actions.volume);
 

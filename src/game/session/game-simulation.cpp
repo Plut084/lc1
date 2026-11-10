@@ -65,6 +65,8 @@ InputStamp GameSimulation::submit(PlayerId id, PlayerControls input)
         input.swing_weapon |= previous.swing_weapon;
         input.nod |= previous.nod;
         input.interact |= previous.interact;
+        if (!input.equipment)
+            input.equipment = previous.equipment;
         if (input.response_index < 0)
             input.response_index = previous.response_index;
         if (!input.view.view_changed) {

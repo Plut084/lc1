@@ -2,6 +2,7 @@
 
 #include "lc1/game/character/bag.hpp"
 #include "lc1/game/character/character-pose.hpp"
+#include "lc1/game/character/combat.hpp"
 #include "lc1/game/character/equipment.hpp"
 #include "lc1/game/character/model-config.hpp"
 #include "lc1/game/character/weapon.hpp"
@@ -26,6 +27,11 @@ struct CharacterSnapshot {
     std::optional<ModelConfig> weapon_model;
     std::uint64_t attack_sequence;
     std::uint64_t nod_sequence;
+    std::uint64_t hit_sequence = 0;
+    float health = 0;
+    float max_health = 0;
+    bool dead = false;
+    float reaction_time = combat::death_duration;
     // Full world speech; each observer decides whether to show it overhead or in the HUD.
     std::string speech;
     std::optional<std::uint32_t> dialog_partner;
@@ -34,8 +40,9 @@ struct CharacterSnapshot {
     std::uint32_t party_id;
     CompanionOrder companion_order;
     std::map<EquipmentType, Equipment> equipment;
-    std::map<WeaponType, Weapon> weapon;
+    std::optional<WeaponDefinition> main_hand;
     game::Bag bag{0};
+    bool flashlight_on = false;
 };
 
 struct DialogSnapshot {
@@ -62,6 +69,8 @@ struct WorldSnapshot {
     std::vector<CharacterSnapshot> characters;
     std::vector<Party> parties;
     std::map<PlayerId, PlayerSnapshot> players;
+    std::map<std::uint32_t, Equipment> equipments;
+    std::map<std::uint32_t, WeaponDefinition> weapons;
 
     CharacterSnapshot const &character(CharacterId id) const;
     CharacterSnapshot const &player(PlayerId id) const;

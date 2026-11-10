@@ -9,6 +9,7 @@
 #include "lc1/text/text-layout.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <format>
 #include <imgui.h>
 #include <ranges>
@@ -132,7 +133,8 @@ void character_stats(CharacterSnapshot const &person, ImVec2 size)
         float armor = 0;
         for (auto const &[type, equipment] : person.equipment)
             armor += equipment.property().armor;
-        ImGui::TextUnformatted("Health: --");
+        ImGui::Text("Health: %.0f / %.0f%s", person.health, person.max_health,
+                    person.dead ? " (Dead)" : "");
         ImGui::Text("Armor: %.1f", armor);
         ImGui::TextUnformatted("Strength: --    Agility: --");
         ImGui::Spacing();
@@ -145,71 +147,127 @@ void character_stats(CharacterSnapshot const &person, ImVec2 size)
     ImGui::EndChild();
 }
 
-std::vector<game::ResourceStack> inventory_items(game::Bag const &bag, int category)
+std::vector<game::ResourceStack> inventory_items(game::Bag const &bag, int category,
+                                                 std::vector<std::uint32_t> const &order)
 {
     std::vector<game::ResourceStack> items;
     for (auto const &[keyid, quantity] : bag.quantities()) {
         auto const *resource = game::find_resource(keyid);
-        if (category == 0 || static_cast<int>(resource->category) == category - 1)
+        bool const equipment = resource->category == game::ResourceCategory::Equipment;
+        if (category == 0 || (category == 1 && equipment) || (category == 2 && !equipment))
             items.push_back({keyid, quantity});
     }
-    std::ranges::sort(items, {}, &game::ResourceStack::keyid);
+    std::ranges::sort(items, [&](auto const &left, auto const &right) {
+        auto const l = std::ranges::find(order, left.keyid);
+        auto const r = std::ranges::find(order, right.keyid);
+        if (l != r && (l != order.end() || r != order.end()))
+            return l < r;
+        auto const *a = game::find_resource(left.keyid);
+        auto const *b = game::find_resource(right.keyid);
+        if (a->category != b->category)
+            return a->category < b->category;
+        if (a->weight != b->weight)
+            return a->weight < b->weight;
+        return left.keyid < right.keyid;
+    });
     return items;
 }
 
 game::Resource const *inventory_panel(CharacterSnapshot const &person, ImVec2 size, int &category,
-                                      std::optional<std::uint32_t> &resource_id)
+                                      std::optional<std::uint32_t> &resource_id,
+                                      std::vector<std::uint32_t> &order)
 {
-    game::Resource const *selected = nullptr;
     auto const &bag = person.bag;
+    auto const *selected =
+        resource_id && bag.quantity_of(*resource_id) ? game::find_resource(*resource_id) : nullptr;
     if (ImGui::BeginChild("Inventory panel", size, ImGuiChildFlags_Borders)) {
         panel_heading("INVENTORY");
-        float const footer =
-            ImGui::GetFrameHeightWithSpacing() * 2 + ImGui::GetStyle().ItemSpacing.y;
-        if (ImGui::BeginChild("Categories", {78, -footer})) {
-            constexpr std::array names{"All", "Currency", "Materials", "Equipment"};
-            for (int i = 0; i < static_cast<int>(names.size()); ++i)
-                if (ImGui::Selectable(names[i], category == i, 0, {0, 32}))
-                    category = i;
+        auto const used = bag.total_weight();
+        auto const capacity = bag.max_weight();
+        auto const weight = std::format("{:.2f} / {:.2f} kg", used / 1000.0, capacity / 1000.0);
+        ImGui::ProgressBar(capacity ? static_cast<float>(used) / capacity : 0.0F, {-1, 0},
+                           weight.c_str());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Backpack capacity. Changing backpacks is not available yet.");
+        constexpr std::array names{"All", "Equipment", "Items"};
+        for (int i = 0; i < static_cast<int>(names.size()); ++i) {
+            if (i)
+                ImGui::SameLine();
+            if (ImGui::Selectable(names[i], category == i, 0,
+                                  {std::max(1.0F, (size.x - 56) / 3), 26})) {
+                category = i;
+                selected = nullptr;
+                order.clear();
+            }
         }
-        ImGui::EndChild();
-        ImGui::SameLine();
-        auto const items = inventory_items(bag, category);
-        auto chosen = std::ranges::find_if(
-            items, [&](auto const &item) { return resource_id == item.keyid; });
-        if (chosen != items.end())
-            selected = game::find_resource(chosen->keyid);
-        else if (!items.empty())
-            selected = game::find_resource(items.front().keyid);
-        if (ImGui::BeginChild("Items", {0, -footer})) {
+        auto const items = inventory_items(bag, category, order);
+        float const footer = ImGui::GetFrameHeightWithSpacing();
+        if (ImGui::BeginChild("Items", {0, -footer}, ImGuiChildFlags_None,
+                              ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
             for (auto const &item : items) {
                 auto const *resource = game::find_resource(item.keyid);
                 ImGui::PushID(static_cast<int>(item.keyid));
-                auto const label =
-                    std::format("{}\nx{}   {:.2f} kg", resource->name, item.quantity,
-                                static_cast<double>(item.quantity) * resource->weight / 1000.0);
-                if (ImGui::Selectable(label.c_str(), selected == resource, 0, {0, 54}))
+                auto const position = ImGui::GetCursorScreenPos();
+                if (ImGui::Selectable("##item", selected == resource, 0, {0, 54}))
                     selected = resource;
+                if (ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("INVENTORY_ORDER", &item.keyid, sizeof(item.keyid));
+                    ImGui::TextUnformatted(resource->name.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::BeginDragDropTarget()) {
+                    if (auto const *payload = ImGui::AcceptDragDropPayload("INVENTORY_ORDER")) {
+                        auto const source = *static_cast<std::uint32_t const *>(payload->Data);
+                        if (source != item.keyid &&
+                            std::ranges::find(items, source, &game::ResourceStack::keyid) !=
+                                items.end()) {
+                            order.clear();
+                            for (auto const &entry : items)
+                                if (entry.keyid != source) {
+                                    if (entry.keyid == item.keyid)
+                                        order.push_back(source);
+                                    order.push_back(entry.keyid);
+                                }
+                        }
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                bool show_details = false;
                 if (ImGui::BeginPopupContextItem("Item actions")) {
-                    if (ImGui::MenuItem("Details"))
-                        selected = resource;
+                    show_details = ImGui::MenuItem("Details");
                     ImGui::BeginDisabled();
                     ImGui::MenuItem("Discard");
                     ImGui::EndDisabled();
-                    ImGui::TextDisabled("Item disposal is not available yet.");
+                    ImGui::TextDisabled("World item drops are not available yet.");
                     ImGui::EndPopup();
                 }
+                if (show_details)
+                    ImGui::OpenPopup("Item details");
+                if (ImGui::BeginPopup("Item details")) {
+                    ImGui::TextUnformatted(resource->name.c_str());
+                    ImGui::Separator();
+                    ImGui::Text("Unit weight: %.2f kg", resource->weight / 1000.0);
+                    ImGui::Text("Quantity: %u", item.quantity);
+                    ImGui::Text("Total weight: %.2f kg",
+                                item.quantity * (resource->weight / 1000.0));
+                    ImGui::EndPopup();
+                }
+                auto *draw = ImGui::GetWindowDrawList();
+                draw->AddRectFilled({position.x + 5, position.y + 7},
+                                    {position.x + 39, position.y + 41},
+                                    IM_COL32(155, 159, 155, 255), 4);
+                draw->AddText({position.x + 48, position.y + 5}, ImGui::GetColorU32(ImGuiCol_Text),
+                              resource->name.c_str());
+                auto const detail = std::format("x{}   {:.2f} kg", item.quantity,
+                                                item.quantity * (resource->weight / 1000.0));
+                draw->AddText({position.x + 48, position.y + 28}, ImGui::GetColorU32(ImGuiCol_Text),
+                              detail.c_str());
                 ImGui::PopID();
             }
             if (items.empty())
                 ImGui::TextWrapped("No items in this category.");
         }
         ImGui::EndChild();
-        auto const used = bag.total_weight();
-        auto const capacity = bag.max_weight();
-        auto const weight = std::format("{:.2f} / {:.2f} kg", used / 1000.0, capacity / 1000.0);
-        ImGui::ProgressBar(capacity ? static_cast<float>(used) / capacity : 0.0F, {-1, 0},
-                           weight.c_str());
         unavailable_button("Transfer", "Inventory transfers are not available yet.");
     }
     ImGui::EndChild();
@@ -248,8 +306,13 @@ void character_preview(CharacterSnapshot const &person, ImVec2 size)
 }
 
 void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resource const *resource,
-                       int &slot)
+                       int &slot, float &slot_position, float &slot_target, GameUiInfo const &info,
+                       GameUiActions &actions)
 {
+    auto const armor =
+        resource ? info.world.equipments.find(resource->keyid) : info.world.equipments.end();
+    auto const weapon =
+        resource ? info.world.weapons.find(resource->keyid) : info.world.weapons.end();
     if (ImGui::BeginChild("Equipment details", size, ImGuiChildFlags_Borders)) {
         panel_heading("EQUIPMENT");
         float const gap = ImGui::GetStyle().ItemSpacing.x;
@@ -258,65 +321,138 @@ void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resou
             std::max(100.0F, ImGui::GetContentRegionAvail().x - slots_width - gap);
         float const content_height = std::max(160.0F, ImGui::GetContentRegionAvail().y -
                                                           ImGui::GetFrameHeightWithSpacing() * 2);
-        constexpr std::array slot_names{"Head", "Body", "Feet", "Melee", "Ranged"};
+        constexpr std::array slot_names{"Head", "Body", "Feet", "Main hand"};
         // Draw slots first so a click updates both detail cards in the same frame.
         auto const start = ImGui::GetCursorPos();
         ImGui::SetCursorPosX(start.x + cards_width + gap);
         if (ImGui::BeginChild("Slots", {slots_width, content_height})) {
             ImGui::TextDisabled("SLOTS");
-            for (int i = 0; i < static_cast<int>(slot_names.size()); ++i)
-                if (ImGui::Selectable(slot_names[i], slot == i, 0, {0, 45}))
-                    slot = i;
+            // Keep positions unwrapped so crossing Head/Ranged follows the same short slide.
+            slot_position += (slot_target - slot_position) *
+                             (1.0F - std::exp(-14.0F * ImGui::GetIO().DeltaTime));
+            if (std::abs(slot_target - slot_position) < 0.001F)
+                slot_position = slot_target;
+            float const step = 58 + ImGui::GetStyle().ItemSpacing.y;
+            if (ImGui::BeginChild("Slot wheel", {0, step * 3}, ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_NoScrollbar |
+                                      ImGuiWindowFlags_NoScrollWithMouse)) {
+                auto const origin = ImGui::GetCursorPos();
+                int const center = static_cast<int>(std::floor(slot_position));
+                int const count = static_cast<int>(slot_names.size());
+                for (int position = center - 2; position <= center + 3; ++position) {
+                    int const i = (position % count + count) % count;
+                    float const y = origin.y + (position - slot_position + 1) * step;
+                    if (y + 58 <= origin.y || y >= origin.y + step * 3)
+                        continue;
+                    ImGui::SetCursorPos({origin.x, y});
+                    ImGui::PushID(position);
+                    if (ImGui::Selectable(slot_names[i], slot == i, 0, {0, 58})) {
+                        slot = i;
+                        slot_target = static_cast<float>(position);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
         }
         ImGui::EndChild();
         ImGui::SetCursorPos(start);
         if (ImGui::BeginChild("Item cards", {cards_width, content_height})) {
             float const card_height =
                 std::max(70.0F, (ImGui::GetContentRegionAvail().y - gap) * 0.5F);
-            if (ImGui::BeginChild("Equipped item", {0, card_height}, ImGuiChildFlags_Borders)) {
-                ImGui::TextColored(accent, "CURRENT / %s", slot_names[slot]);
-                auto const &config = person;
-                if (slot < 3) {
-                    constexpr std::array types{EquipmentType::Head, EquipmentType::Body,
-                                               EquipmentType::Foot};
-                    auto const found = config.equipment.find(types[slot]);
-                    if (found != config.equipment.end()) {
-                        ImGui::Text("Equipment #%u", found->second.keyid());
-                        ImGui::Text("Armor: %.1f", found->second.property().armor);
+            constexpr std::array equipment_types{EquipmentType::Head, EquipmentType::Body,
+                                                 EquipmentType::Foot};
+            bool const has_current =
+                slot >= 0 && (slot < 3 ? person.equipment.contains(equipment_types[slot])
+                                       : person.main_hand.has_value());
+            if (has_current) {
+                if (ImGui::BeginChild("Equipped item", {0, card_height}, ImGuiChildFlags_Borders)) {
+                    ImGui::TextColored(accent, "CURRENT / %s", slot_names[slot]);
+                    auto const &config = person;
+                    if (slot < 3) {
+                        constexpr std::array types{EquipmentType::Head, EquipmentType::Body,
+                                                   EquipmentType::Foot};
+                        auto const found = config.equipment.find(types[slot]);
+                        if (found != config.equipment.end()) {
+                            ImGui::TextUnformatted(
+                                game::find_resource(found->second.keyid())->name.c_str());
+                            ImGui::Text("Armor: %.1f", found->second.property().armor);
+                        }
+                        else
+                            ImGui::TextDisabled("Empty slot");
                     }
-                    else
-                        ImGui::TextDisabled("Empty slot");
-                }
-                else {
-                    auto const type =
-                        slot == 3 ? WeaponType::MeleeWeapon : WeaponType::RangedWeapon;
-                    auto const found = config.weapon.find(type);
-                    if (found != config.weapon.end()) {
-                        ImGui::Text("Weapon #%u", found->second.keyid());
-                        ImGui::Text("Attack: %.1f", found->second.property().attack);
-                        ImGui::Text("Range: %.1f m", found->second.property().range);
+                    else {
+                        if (config.main_hand) {
+                            auto const &weapon = *config.main_hand;
+                            ImGui::TextUnformatted(
+                                game::find_resource(weapon.keyid())->name.c_str());
+                            if (weapon.kind() == WeaponKind::Tool)
+                                ImGui::TextUnformatted(person.flashlight_on ? "Light: on"
+                                                                            : "Light: off");
+                            else {
+                                ImGui::Text("Attack: %.1f", weapon.property().attack);
+                                ImGui::Text("Range: %.1f m", weapon.property().range);
+                            }
+                        }
                     }
-                    else
-                        ImGui::TextDisabled("Empty slot");
                 }
+                ImGui::EndChild();
             }
-            ImGui::EndChild();
-            if (ImGui::BeginChild("Selected item", {0, 0}, ImGuiChildFlags_Borders)) {
-                ImGui::TextColored(accent, "SELECTED ITEM");
-                if (resource) {
+            if (resource && resource->category == game::ResourceCategory::Equipment) {
+                if (ImGui::BeginChild("Selected equipment", {0, 0}, ImGuiChildFlags_Borders)) {
+                    ImGui::TextColored(accent, "SELECTED EQUIPMENT");
                     ImGui::TextWrapped("%s", resource->name.c_str());
-                    ImGui::TextUnformatted(
-                        std::format("Category: {}", static_cast<int>(resource->category)).c_str());
+                    if (armor != info.world.equipments.end()) {
+                        ImGui::Text("Slot: %s",
+                                    std::string{to_string(armor->second.type())}.c_str());
+                        ImGui::Text("Armor: %.1f", armor->second.property().armor);
+                    }
+                    if (weapon != info.world.weapons.end()) {
+                        ImGui::TextUnformatted("Slot: Main hand");
+                        if (weapon->second.action() == WeaponAction::ToggleLight)
+                            ImGui::TextUnformatted("Left click: toggle light");
+                        else {
+                            ImGui::Text("Attack: %.1f", weapon->second.property().attack);
+                            ImGui::Text("Range: %.1f m", weapon->second.property().range);
+                        }
+                    }
                     ImGui::Text("Unit weight: %.2f kg", resource->weight / 1000.0);
                     ImGui::Text("Quantity: %u", person.bag.quantity_of(resource->keyid));
                 }
-                else
-                    ImGui::TextWrapped("Select an inventory item to inspect it.");
+                ImGui::EndChild();
             }
-            ImGui::EndChild();
         }
         ImGui::EndChild();
-        unavailable_button("Equip", "Resource items are not linked to wearable equipment yet.");
+        bool controllable = person.keyid == info.player.value;
+        for (auto const &party : info.world.parties)
+            if (party.leader() == info.player && party.has_member(CharacterId{person.keyid}))
+                controllable = std::ranges::none_of(info.world.players, [&](auto const &entry) {
+                    return entry.second.character_id == CharacterId{person.keyid};
+                });
+        controllable = controllable && !person.dead && !info.world.character(info.player).dead;
+        ImGui::BeginDisabled(!controllable || (armor == info.world.equipments.end() &&
+                                               weapon == info.world.weapons.end()));
+        if (ImGui::Button("Equip"))
+            actions.equipment = EquipmentRequest{CharacterId{person.keyid}, resource->keyid, true};
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        std::optional<std::uint32_t> current;
+        constexpr std::array types{EquipmentType::Head, EquipmentType::Body, EquipmentType::Foot};
+        if (slot >= 0 && slot < 3) {
+            if (auto const found = person.equipment.find(types[slot]);
+                found != person.equipment.end())
+                current = found->second.keyid();
+        }
+        else if (slot == 3 && person.main_hand)
+            current = person.main_hand->keyid();
+        bool const fits = current && game::find_resource(*current)->weight <=
+                                         person.bag.max_weight() - person.bag.total_weight();
+        ImGui::BeginDisabled(!controllable || !fits);
+        if (ImGui::Button("Unequip"))
+            actions.equipment = EquipmentRequest{CharacterId{person.keyid}, *current, false};
+        ImGui::EndDisabled();
+        if (current && !fits && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Not enough backpack capacity.");
         ImGui::SameLine();
         unavailable_button("Save preset", "Equipment presets are not available yet.");
         unavailable_button("Apply preset", "Equipment presets are not available yet.");
@@ -343,6 +479,19 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
     ImGui::TextUnformatted(std::format("FPS: {}", ImGui::GetIO().Framerate).c_str());
     ImGui::TextUnformatted(std::format("Lighting: {}", info.lighting_name).c_str());
     ImGui::Text("Exposure: %.2f", info.exposure);
+    auto const minutes = static_cast<int>(info.time_of_day * 60.0);
+    ImGui::Text("Time: %02d:%02d", minutes / 60, minutes % 60);
+    ImGui::TextUnformatted("Time rate");
+    ImGui::SameLine();
+    float rate = info.time_rate;
+    ImGui::SetNextItemWidth(90.0F);
+    bool changed = ImGui::InputFloat("##time-rate-input", &rate, 0, 0, "%.2f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(180.0F);
+    changed |= ImGui::SliderFloat("##time-rate-slider", &rate, 0.01F, 100.0F, "%.2fx",
+                                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+    if (changed && std::isfinite(rate))
+        actions.time_rate = std::clamp(rate, 0.01F, 100.0F);
     if (ImGui::Button("Save game (F6)"))
         open_save(info.current_save);
     if (ImGui::Button("Load game")) {
@@ -435,7 +584,7 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
     }
 
     if (state_ == State::InGame && player_info_opened_)
-        player_info(info);
+        player_info(info, actions);
 
     return actions;
 }
@@ -511,7 +660,7 @@ void GameUi::toggle_player_info()
         player_info_opened_ = !player_info_opened_;
 }
 
-void GameUi::player_info(GameUiInfo const &info)
+void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
 {
     auto const *viewport = ImGui::GetMainViewport();
     ImVec2 const max_size{std::max(1.0F, viewport->WorkSize.x - 24.0F),
@@ -539,17 +688,36 @@ void GameUi::player_info(GameUiInfo const &info)
         float const right = available.x - gap * 2 - left - middle;
         float const top = std::clamp(available.y * 0.29F, 150.0F, 210.0F);
         float const bottom = std::max(240.0F, available.y - top - ImGui::GetStyle().ItemSpacing.y);
+        auto const previous_character = selected_character_;
         auto const *person = party_info(info, {left, top}, selected_party_, selected_character_);
+        if (previous_character != selected_character_) {
+            selected_resource_.reset();
+            inventory_order_.clear();
+            selected_slot_ = -1;
+            slot_position_ = slot_target_ = 0;
+        }
         ImGui::SameLine();
         character_details(*person, {middle, top});
         ImGui::SameLine();
         character_stats(*person, {right, top});
-        auto const *resource =
-            inventory_panel(*person, {left, bottom}, inventory_category_, selected_resource_);
+        auto const previous_resource = selected_resource_;
+        auto const *resource = inventory_panel(*person, {left, bottom}, inventory_category_,
+                                               selected_resource_, inventory_order_);
+        if (resource && previous_resource != selected_resource_) {
+            if (auto const found = info.world.equipments.find(resource->keyid);
+                found != info.world.equipments.end())
+                selected_slot_ = static_cast<int>(found->second.type());
+            else if (auto const found = info.world.weapons.find(resource->keyid);
+                     found != info.world.weapons.end())
+                selected_slot_ = 3;
+            if (selected_slot_ >= 0)
+                slot_target_ = static_cast<float>(selected_slot_);
+        }
         ImGui::SameLine();
         character_preview(*person, {middle, bottom});
         ImGui::SameLine();
-        equipment_details(*person, {right, bottom}, resource, selected_slot_);
+        equipment_details(*person, {right, bottom}, resource, selected_slot_, slot_position_,
+                          slot_target_, info, actions);
     }
     ImGui::End();
     ImGui::PopStyleColor(3);

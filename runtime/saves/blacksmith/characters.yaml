@@ -5,9 +5,8 @@
   party: 1
   level: 1
   equipment:
-  - [Head, 1]
-  weapon:
-  - [MeleeWeapon, 1001]
+  - [Head, 4]
+  main_hand: 1001
   model:
     path: lc-res/Modular Village/Prop_Barrel_1.obj
     nodes:
@@ -72,9 +71,8 @@
   party: 1
   level: 1
   equipment:
-  - [Head, 1]
-  weapon:
-  - [MeleeWeapon, 1002]
+  - [Head, 4]
+  main_hand: 1002
   model: &npc_model
     nodes:
     - name: Body
@@ -106,9 +104,8 @@
   party: 1
   level: 1
   equipment:
-  - [Head, 1]
-  weapon:
-  - [MeleeWeapon, 1003]
+  - [Head, 4]
+  main_hand: 1003
   model: *npc_model
 - keyid: 4
   name: Blacksmith
@@ -117,5 +114,5 @@
   party: 2
   level: 1
   equipment: []
-  weapon: []
+  main_hand: 0
   model: *npc_model

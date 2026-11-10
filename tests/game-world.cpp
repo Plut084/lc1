@@ -7,6 +7,7 @@
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/player/player-view.hpp"
 #include "lc1/game/resources/catalog.hpp"
+#include "lc1/game/resources/crafting.hpp"
 #include "lc1/game/world/world-snapshot.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -44,8 +46,10 @@ struct TestInteraction {
 
 void update_world(lc1::GameWorld &world, float delta_seconds, TestInteraction const &input)
 {
-    world.player(lc1::PlayerId{1})
-        .set_controller(std::make_unique<TestCharacterController>(input.player_intent));
+    TestCharacterController controller{input.player_intent};
+    auto &player = world.player(lc1::PlayerId{1});
+    RestoreCharacterController restore{player, player.controller()};
+    player.set_controller(&controller);
     world.update(delta_seconds, {{lc1::PlayerId{1},
                                   {.view = {.keyboard_enabled = input.player_input_enabled},
                                    .interact = input.interact,
@@ -103,6 +107,162 @@ lc1::Character const &find(lc1::GameWorld const &world, std::uint32_t id)
         characters, [id](auto const *character) { return character->config().keyid == id; });
     check(result != characters.end(), "character exists in runtime roster");
     return **result;
+}
+
+void inventory_equipment_and_flashlight()
+{
+    using namespace lc1;
+    using namespace lc1::game;
+    Checkpoint checkpoint;
+    GameWorld world{Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto &player = world.player(PlayerId{1});
+    auto &bag = player.bag();
+    check(dynamic_cast<MeleeWeapon const *>(world.weapons().at(sword.keyid).get()) &&
+              dynamic_cast<RangedWeapon const *>(world.weapons().at(bow.keyid).get()) &&
+              dynamic_cast<Flashlight const *>(world.weapons().at(flashlight.keyid).get()),
+          "save discriminators create their concrete weapon definitions");
+    auto request = [&](std::uint32_t id, bool equip, CharacterId target) {
+        world.update(0, {{PlayerId{1}, {.equipment = EquipmentRequest{target, id, equip}}}});
+    };
+    for (auto const &input : iron_helmet_recipe().inputs)
+        check(bag.add(*input.resource, input.quantity), "prepare crafting materials");
+    check(craft(bag, iron_helmet_recipe()), "forge a wearable helmet");
+    request(iron_helmet.keyid, true, player.id());
+    check(player.config().equipment.at(EquipmentType::Head)->keyid() == iron_helmet.keyid &&
+              bag.quantity_of(iron_helmet.keyid) == 0,
+          "crafted resource moves into the head slot");
+    world.update(0, {});
+    check(bag.quantity_of(iron_helmet.keyid) == 0, "equipment request is consumed once");
+    Save::write(checkpoint.directory(), world.snapshot());
+    GameWorld restored{Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(restored.player(PlayerId{1}).config().equipment.at(EquipmentType::Head)->keyid() ==
+              iron_helmet.keyid,
+          "equipped crafted helmet survives checkpoint assembly");
+    check(bag.add(wood, 10), "fill backpack while helmet is equipped");
+    request(iron_helmet.keyid, false, player.id());
+    check(player.config().equipment.contains(EquipmentType::Head) &&
+              bag.quantity_of(iron_helmet.keyid) == 0,
+          "failed unequip preserves worn item and inventory");
+    check(bag.remove(wood, 10), "make room for unequipping");
+    request(iron_helmet.keyid, false, player.id());
+    request(iron_helmet.keyid, false, player.id());
+    check(!player.config().equipment.contains(EquipmentType::Head) &&
+              bag.quantity_of(iron_helmet.keyid) == 1,
+          "unequipping returns exactly one item");
+    request(iron_helmet.keyid, true, CharacterId{100024});
+    check(bag.quantity_of(iron_helmet.keyid) == 1,
+          "cannot equip an unrelated character from this backpack");
+    request(moneta.keyid, true, player.id());
+    request(999999, true, player.id());
+    check(!player.config().equipment.contains(EquipmentType::Head),
+          "ordinary and unknown resources cannot be equipped");
+    check(bag.remove(iron_helmet, 1) && bag.add(sword, 1) && bag.add(flashlight, 1),
+          "prepare hand items");
+    request(sword.keyid, true, player.id());
+    check(bag.add(wood, 9), "fill pack before replacing heavy weapon with lighter tool");
+    request(flashlight.keyid, true, player.id());
+    check(player.config().main_hand->keyid() == sword.keyid &&
+              bag.quantity_of(flashlight.keyid) == 1 && bag.quantity_of(sword.keyid) == 0,
+          "failed swap cannot lose or duplicate either hand item");
+    check(bag.remove(wood, 9), "make room for old weapon");
+    request(flashlight.keyid, true, player.id());
+    check(player.config().main_hand->kind() == WeaponKind::Tool &&
+              bag.quantity_of(sword.keyid) == 1 && bag.quantity_of(flashlight.keyid) == 0 &&
+              !player.flashlight_on(),
+          "flashlight occupies the one main-hand slot, initially off");
+    auto const attacks = player.attack_sequence();
+    world.update(0, {{PlayerId{1}, {.swing_weapon = true}}});
+    check(player.flashlight_on() && player.attack_sequence() == attacks,
+          "left click toggles tool without a melee attack");
+    world.update(0, {});
+    check(player.flashlight_on(), "held tick does not repeatedly toggle the light");
+    Save::write(checkpoint.directory(), world.snapshot());
+    GameWorld lit{Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(lit.player(PlayerId{1}).flashlight_on() &&
+              capture_world(lit).player(PlayerId{1}).flashlight_on,
+          "checkpoint restores equipped flashlight and its switch");
+    world.update(0, {{PlayerId{1}, {.swing_weapon = true}}});
+    check(!player.flashlight_on(), "second left click turns the flashlight off");
+    world.update(0, {{PlayerId{1}, {.swing_weapon = true}}});
+    request(flashlight.keyid, false, player.id());
+    check(!player.config().main_hand && !player.flashlight_on() &&
+              bag.quantity_of(flashlight.keyid) == 1,
+          "unequipping the flashlight returns it and removes its light");
+}
+
+void melee_damage_and_checkpoint()
+{
+    Checkpoint checkpoint;
+    auto data = lc1::Save{checkpoint.directory()}.data();
+    data.session.example = 0;
+    auto &weapon = *std::ranges::find(data.weapons, 1001U, &lc1::SerializedWeapon::keyid);
+    weapon.attack = 10;
+    weapon.range = 1.5F;
+    weapon.model = lc1::ModelConfig{};
+    auto &player_config =
+        *std::ranges::find(data.characters, 1U, &lc1::SerializedCharacterConfig::keyid);
+    player_config.main_hand = 1001;
+    auto &target_state =
+        *std::ranges::find(data.states, 100025U, &lc1::SerializedCharacterState::keyid);
+    target_state.z = 63;
+    lc1::Save::write(checkpoint.directory(), data);
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto &target = world.character(lc1::CharacterId{100025});
+    float const maximum = target.config().max_health();
+    update_world(world, 0, {.player_intent = {.swing_weapon = true}});
+    auto const before = lc1::capture_world(world);
+    world.update(0.1F, {});
+    check(target.config().health() == maximum, "world attack windup causes no damage");
+    world.update(0.2F, {});
+    auto after = lc1::capture_world(world);
+    auto const &hit = after.character(target.id());
+    check(hit.health == maximum - 10 && hit.hit_sequence == 1 && !hit.dead,
+          "world resolves melee damage into a health and reaction snapshot");
+    check(before.character(target.id()).health == maximum,
+          "damage does not mutate an already published snapshot");
+    check(!world.dialogs().can_start(world.player(lc1::PlayerId{1}), target),
+          "hit stun prevents conversations");
+    lc1::Save::write(checkpoint.directory(), world.snapshot());
+    lc1::GameWorld injured{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(injured.character(target.id()).config().health() == maximum - 10,
+          "checkpoint round trip preserves partial damage");
+    target.take_damage(maximum);
+    world.update(0.7F, {});
+    lc1::Save::write(checkpoint.directory(), world.snapshot());
+    lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto const dead = lc1::capture_world(restored).character(target.id());
+    check(dead.dead && dead.health == 0 && dead.reaction_time == 0.6F,
+          "loading a dead character restores the final fallen pose");
+    check(!restored.dialogs().can_start(restored.player(lc1::PlayerId{1}),
+                                        restored.character(target.id())),
+          "a corpse cannot enter a conversation after loading");
+    // Legacy version-5 checkpoints omitted health_lost: only that new field is optional.
+    auto const path = checkpoint.directory() / "checkpoint.yaml";
+    std::ifstream input{path};
+    std::string legacy;
+    for (std::string line; std::getline(input, line);)
+        if (line.find("health_lost:") == std::string::npos)
+            legacy += line + '\n';
+    input.close();
+    {
+        std::ofstream output{path};
+        output << legacy;
+    }
+    lc1::GameWorld old_save{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(old_save.character(target.id()).config().health() == maximum,
+          "old checkpoints default to full health");
+    data = world.snapshot();
+    auto &state =
+        *std::ranges::find(data.states, target.id().value, &lc1::SerializedCharacterState::keyid);
+    state.health_lost = std::numeric_limits<float>::quiet_NaN();
+    bool rejected = false;
+    try {
+        lc1::Save::write(checkpoint.directory(), data);
+    }
+    catch (lc1::Error const &) {
+        rejected = true;
+    }
+    check(rejected, "invalid saved health is rejected before writing");
 }
 
 void independent_interactions()
@@ -367,21 +527,21 @@ void scenario_inventory()
     lc1::Save const seed{"saves/01"};
     lc1::GameWorld world{seed, "dialogs/catalog.yaml"};
     auto &bag = world.player(lc1::PlayerId{1}).bag();
-    check(bag.quantity_of(lc1::game::wood.keyid) == 2 && bag.total_weight() == 8100,
+    check(bag.quantity_of(lc1::game::wood.keyid) == 2 && bag.total_weight() == 8600,
           "temporary demonstration setup supplies a bounded initial inventory");
     update_world(world, 0, {});
     update_world(world, 1.0F, {});
-    check(bag.total_weight() == 8100, "simulation does not refill demonstration supplies");
+    check(bag.total_weight() == 8600, "simulation does not refill demonstration supplies");
     check(bag.remove(lc1::game::wood, 1), "consume initial supplies");
     Checkpoint checkpoint;
     lc1::Save::write(checkpoint.directory(), world.snapshot());
     lc1::Save const saved{checkpoint.directory()};
     lc1::GameWorld restored{saved, "dialogs/catalog.yaml"};
     check(restored.player(lc1::PlayerId{1}).bag().quantity_of(lc1::game::wood.keyid) == 1 &&
-              restored.player(lc1::PlayerId{1}).bag().total_weight() == 7100,
+              restored.player(lc1::PlayerId{1}).bag().total_weight() == 7600,
           "checkpoint restores consumed inventory without applying initial supplies again");
     world.load(saved);
-    check(world.player(lc1::PlayerId{1}).bag().total_weight() == 7100,
+    check(world.player(lc1::PlayerId{1}).bag().total_weight() == 7600,
           "in-place reload also restores inventory exactly");
 }
 
@@ -428,7 +588,7 @@ void world_applies_control()
         {.player_intent = {
              .move = {1, 0}, .body_yaw = 45, .look = glm::vec2{0, 10}, .face_movement = false}});
     check(std::abs(world.player(lc1::PlayerId{1}).position().x - before.x -
-                   world.player(lc1::PlayerId{1}).body().walk_speed * 0.5F) < 0.001F,
+                   world.player(lc1::PlayerId{1}).config().walk_speed() * 0.5F) < 0.001F,
           "world applies movement with the full elapsed time");
     check(world.player(lc1::PlayerId{1}).body_yaw() == 45 &&
               world.player(lc1::PlayerId{1}).look_pitch() == 10,
@@ -466,8 +626,8 @@ void control_physics_camera_order()
     input.update(devices);
     view.update_view_mode(input, true, world.player(lc1::PlayerId{1}));
     lc1::PlayerControls controls;
-    world.player(lc1::PlayerId{1})
-        .set_controller(std::make_unique<lc1::PlayerCharacterController>(controls));
+    lc1::PlayerCharacterController player_controller{controls};
+    world.player(lc1::PlayerId{1}).set_controller(&player_controller);
     view.prepare_input({}, true, true);
     check(world.player(lc1::PlayerId{1}).position() == before_control &&
               world.player(lc1::PlayerId{1}).on_ground(),
@@ -498,6 +658,8 @@ void control_physics_camera_order()
 int main()
 {
     try {
+        inventory_equipment_and_flashlight();
+        melee_damage_and_checkpoint();
         control_physics_camera_order();
         independent_interactions();
         player_party_membership();

@@ -12,5 +12,6 @@ inline lc1::CharacterIntent resolve_player_input(lc1::PlayerView &view,
     auto controls = lc1::PlayerCharacterController::read_input(input, view.character_input());
     lc1::PlayerCharacterController controller{controls};
     lc1::CharacterController &base = controller;
-    return base.update(0, character);
+    base.possess(character);
+    return base.decide(0);
 }

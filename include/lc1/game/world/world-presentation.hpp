@@ -60,6 +60,10 @@ class WorldPresentation {
     std::string_view lighting_name() const;
 
     bool showcase_animated() const;
+    double time_of_day() const;
+    float time_rate() const;
+    // Finite multiplier in [0.01, 100], validated by the UI.
+    void set_time_rate(float rate);
 
     std::uint32_t object_capacity() const;
 
@@ -77,6 +81,12 @@ class WorldPresentation {
     PlayerId observer_;
     std::size_t observed_model_index_ = 0;
 
+    struct WeaponModel {
+        scene::SceneModel *model;
+        std::optional<std::size_t> attack_animation;
+        WeaponAction action;
+    };
+
     struct CharacterModels {
         std::uint32_t keyid;
         scene::SceneModel *character;
@@ -86,6 +96,13 @@ class WorldPresentation {
         std::uint64_t attack_sequence;
         std::optional<std::size_t> nod_animation;
         std::uint64_t nod_sequence;
+        std::uint64_t hit_sequence = 0;
+        bool dead = false;
+        std::map<std::uint32_t, WeaponModel> weapons;
+        scene::SceneLight *flashlight = nullptr;
+        bool uses_flashlight = false;
+        scene::SceneModel *helmet = nullptr;
+        std::optional<std::size_t> head_mount;
     };
 
     std::vector<CharacterModels> character_models_;
@@ -110,8 +127,10 @@ class WorldPresentation {
     // Required scene-owned borrows, valid until scene_ is destroyed.
     std::vector<scene::SceneModel *> showcase_models_;
     std::vector<scene::SceneLight *> lights_;
-    scene::SceneLight *flashlight_ = nullptr;
 
+    scene::GpuModel helmet_model_;
+    MaterialInfo helmet_material_{
+        .parameters = {.metallic_factor = 1.0F, .roughness_factor = 0.35F}};
     std::optional<std::size_t> eyes_node_index_;
     // Declared after assets: scene instances borrow their meshes and materials.
     scene::Scene scene_;
@@ -119,6 +138,9 @@ class WorldPresentation {
     std::size_t lighting_mode_ = 0;
     bool showcase_animated_ = true;
     float showcase_time_ = 0.0F;
+    double time_of_day_ = 9.0; // Hours, wrapped to [0, 24).
+    float time_rate_ = 1.0F;
+    scene::SceneLight *sun_ = nullptr; // Scene-owned, valid until scene_ is destroyed.
     audio::AudioContext audio_context_;
     audio::Listener audio_listener_{audio_context_};
 };

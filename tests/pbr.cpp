@@ -551,8 +551,7 @@ void player_models_test(lc1::Device const &device)
     lc1::Save const data{std::filesystem::path{__FILE__}.parent_path().parent_path() /
                          "runtime/saves/01"};
     auto const &character = data.characters().at(data.player(lc1::PlayerId{1})).model.value();
-    auto const weapon_id =
-        data.characters().at(data.player(lc1::PlayerId{1})).weapon.at(lc1::WeaponType::MeleeWeapon);
+    auto const weapon_id = data.characters().at(data.player(lc1::PlayerId{1})).main_hand;
     auto const &weapon_config = data.weapons().at(weapon_id).model.value();
     lc1::scene::GpuModel barrel{
         device, lc1::load_configured_model(character, "runtime/assets", lc1::CharacterBody{})};
@@ -631,8 +630,8 @@ void player_models_test(lc1::Device const &device)
         swing_intent.swing_weapon = true;
         for (auto *bearer : world.characters()) {
             apply_character_intent(*bearer, 0, world.continent(), swing_intent);
-            auto const slot = bearer->config().weapon.find(lc1::WeaponType::MeleeWeapon);
-            if (slot == bearer->config().weapon.end())
+            auto const *weapon = bearer->config().main_hand;
+            if (!weapon)
                 continue;
             state = lc1::capture_world(world);
             presentation.update(0, {});
@@ -660,8 +659,9 @@ void player_models_test(lc1::Device const &device)
                 world.dialogs(),
                 [&world](lc1::CharacterId id) -> lc1::Character & { return world.character(id); },
                 std::array{bearer}, std::vector<lc1::Waypoint>{{.position = bearer->position()}}};
+            ai.possess(*bearer);
             for (int frame = 0; frame < 10; ++frame) {
-                auto const request = ai.update(0.02F, *bearer);
+                auto const request = ai.decide(0.02F);
                 check(request.swing_weapon, "nearby AI keeps requesting swings while stationary");
                 apply_character_intent(*bearer, 0.02F, world.continent(), request);
                 state = lc1::capture_world(world);
@@ -680,8 +680,8 @@ void player_models_test(lc1::Device const &device)
               "another player's nod sequence starts and advances its character animation");
         std::vector<lc1::scene::SceneModel const *> weapon_models;
         for (auto const *bearer : world.characters()) {
-            auto const slot = bearer->config().weapon.find(lc1::WeaponType::MeleeWeapon);
-            if (slot == bearer->config().weapon.end())
+            auto const *weapon = bearer->config().main_hand;
+            if (!weapon)
                 continue;
             auto const *model = presentation.weapon_model(bearer->config().keyid);
             check(model && !std::ranges::contains(weapon_models, model),
@@ -707,8 +707,8 @@ void player_models_test(lc1::Device const &device)
         for (auto const *bearer : world.characters()) {
             if (bearer == &world.player(lc1::PlayerId{1}))
                 continue;
-            auto const slot = bearer->config().weapon.find(lc1::WeaponType::MeleeWeapon);
-            if (slot == bearer->config().weapon.end())
+            auto const *weapon = bearer->config().main_hand;
+            if (!weapon)
                 continue;
             lc1::scene::Scene isolated;
             isolated.add_model(presentation.character_model(bearer->config().keyid));
@@ -732,6 +732,61 @@ void player_models_test(lc1::Device const &device)
             save(armed,
                  std::format("artifacts/character-{}-weapon.ppm", bearer->config().keyid).c_str());
         }
+        auto &victim = world.character(lc1::CharacterId{2});
+        victim.set_controller(nullptr);
+        victim.update(0.7F, world.continent());
+        state = lc1::capture_world(world);
+        presentation.update(0, {});
+        camera.set_position(victim.position() + glm::vec3{3, 2.5F, -4});
+        camera.look_at(victim.position() + glm::vec3{0, 0.8F, -0.4F});
+        auto capture_victim = [&] {
+            lc1::scene::Scene isolated;
+            isolated.add_model(presentation.character_model(victim.id().value));
+            if (auto const *weapon = presentation.weapon_model(victim.id().value))
+                isolated.add_model(*weapon);
+            isolated.add_light(lc1::scene::to_light(
+                lc1::scene::DirectionalLight{.base = {.color = {1, 0.95F, 0.9F}, .intensity = 3},
+                                             .direction = glm::normalize(glm::vec3{-1, -1, 1})}));
+            return capture(device, renderer, configured_frame, camera, isolated,
+                           {.width = 800, .height = 600});
+        };
+        auto const standing = capture_victim();
+        save(standing, "artifacts/combat-standing.ppm");
+        victim.take_damage(10);
+        victim.update(0.15F, world.continent());
+        state = lc1::capture_world(world);
+        presentation.update(0, {});
+        auto const recoil = capture_victim();
+        save(recoil, "artifacts/combat-hit.ppm");
+        std::size_t reaction_pixels = 0;
+        for (std::size_t pixel = 0; pixel < recoil.output.size(); pixel += 4)
+            if (recoil.output[pixel] != standing.output[pixel] ||
+                recoil.output[pixel + 1] != standing.output[pixel + 1] ||
+                recoil.output[pixel + 2] != standing.output[pixel + 2])
+                ++reaction_pixels;
+        check(reaction_pixels > 100, "production hit state visibly animates the character");
+        victim.take_damage(victim.config().max_health());
+        victim.update(0.3F, world.continent());
+        state = lc1::capture_world(world);
+        presentation.update(0, {});
+        save(capture_victim(), "artifacts/combat-falling.ppm");
+        victim.update(0.3F, world.continent());
+        state = lc1::capture_world(world);
+        presentation.update(0, {});
+        auto const corpse = capture_victim();
+        save(corpse, "artifacts/combat-dead.ppm");
+        reaction_pixels = 0;
+        for (std::size_t pixel = 0; pixel < corpse.output.size(); pixel += 4)
+            if (corpse.output[pixel] != standing.output[pixel] ||
+                corpse.output[pixel + 1] != standing.output[pixel + 1] ||
+                corpse.output[pixel + 2] != standing.output[pixel + 2])
+                ++reaction_pixels;
+        check(reaction_pixels > 100, "production death state visibly leaves a fallen character");
+        auto const fallen = presentation.character_model(victim.id().value).world_transform;
+        presentation.update(1, {});
+        check(fallen == presentation.character_model(victim.id().value).world_transform &&
+                  !presentation.character_model(victim.id().value).pose.playback(),
+              "death holds the fallen pose and stops idle and nod animations");
         camera.set_position(world.player(lc1::PlayerId{1}).position() + glm::vec3{3, 2.5F, -4});
         camera.look_at(world.player(lc1::PlayerId{1}).position() + glm::vec3{0.1F, 1, -0.3F});
         capture(device, renderer, configured_frame, camera, presentation.scene(),

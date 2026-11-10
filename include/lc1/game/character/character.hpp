@@ -5,6 +5,7 @@
 #include "lc1/game/character/character-controller.hpp"
 #include "lc1/game/character/character-id.hpp"
 #include "lc1/game/character/character-intent.hpp"
+#include "lc1/game/character/combat.hpp"
 #include "lc1/game/character/equipment.hpp"
 #include "lc1/game/character/weapon.hpp"
 #include "lc1/game/party/companion-order.hpp"
@@ -16,7 +17,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace lc1 {
 
@@ -46,12 +49,22 @@ struct CharacterConfig {
     int level;
 
     std::map<EquipmentType, Equipment *> equipment;
-    std::map<WeaponType, Weapon *> weapon;
+    Weapon *main_hand = nullptr;
     ModelConfig model;
 
-    float health();
-    float strenth();
-    float agility();
+    float health_lost = 0;
+
+    float max_health() const { return 1.0F * static_cast<float>(level) + 100.F; }
+
+    float health() const { return max_health() - health_lost; }
+
+    float strenth() const { return 0.1F * static_cast<float>(level); }
+
+    float agility() const { return 0.1F * static_cast<float>(level); }
+
+    float walk_speed() const { return 4.5F + glm::log(1.0F + agility()); }
+
+    float run_speed() const { return walk_speed() + 4.5F; }
 };
 
 // One upright, ground-level character, independent of input devices and cameras.
@@ -127,7 +140,8 @@ class Character {
     CharacterController const *controller() const;
     AiCharacterController *ai_controller();
     AiCharacterController const *ai_controller() const;
-    void set_controller(std::unique_ptr<CharacterController> controller);
+    // Borrows controller; it must remain alive while attached. nullptr detaches.
+    void set_controller(CharacterController *controller);
 
     Interactable *interactable();
     void set_interactable(std::unique_ptr<Interactable> interactable);
@@ -137,10 +151,32 @@ class Character {
     game::Bag &bag();
     game::Bag const &bag() const;
 
+    // Definitions borrow the world's immutable tables, which outlive this character.
+    bool equip(game::Resource const &resource, Equipment &equipment);
+    bool equip(game::Resource const &resource, Weapon &weapon);
+    bool unequip(EquipmentType slot);
+    bool unequip_weapon();
+
+    bool flashlight_on() const;
+    void set_flashlight_on(bool on);
+
+    void take_damage(float amount);
+    bool dead() const;
+    float reaction_time() const;
+    std::uint64_t hit_sequence() const;
+
+    // Called once after all characters move; consumes this tick's melee sweep.
+    void resolve_attack(std::span<Character *const> targets, Continent const &continent);
+
   private:
     // Resolves the requested actions before physics. Called only by update().
     void apply_intent(float delta_seconds, CharacterIntent const &intent);
     glm::vec3 walking_velocity(glm::vec3 direction, bool running, bool face_movement);
+
+    friend class MeleeWeapon;
+    friend class Flashlight;
+    void begin_melee_attack(WeaponProperty property);
+    void toggle_flashlight();
 
     // Party updates both sides of membership together during recruitment.
     friend class Party;
@@ -152,15 +188,32 @@ class Character {
     CharacterBody body_;
     game::Bag bag_;
 
+    bool flashlight_on_ = false;
     float look_yaw_ = 0.0F;
     float look_pitch_ = 0.0F;
     scene::Transform transform_;
     CharacterMotion motion_;
-    std::unique_ptr<CharacterController> controller_;
+    CharacterController *controller_ = nullptr;
     std::unique_ptr<Interactable> interactable_;
 
     bool ambient_requests_blocked_ = false;
     float weapon_attack_cooldown_ = 0;
+    float attack_elapsed_ = combat::swing_duration;
+    float reaction_time_ = combat::death_duration;
+    std::uint64_t hit_sequence_ = 0;
+    WeaponProperty attack_property_{};
+    std::vector<CharacterId> attack_victims_;
+
+    struct AttackSweep {
+        float begin;
+        float end;
+        glm::vec3 from;
+        glm::vec3 to;
+        float from_yaw;
+        float to_yaw;
+    };
+
+    std::optional<AttackSweep> attack_sweep_;
 };
 
 } // namespace lc1

@@ -81,6 +81,10 @@ class GameWorld {
 
     SerializedWorld snapshot() const;
 
+    auto const &equipments() const { return equipments_; }
+
+    auto const &weapons() const { return weapons_; }
+
   private:
     void build_world(Save const &save);
     void link_party_members(Save const &save);
@@ -99,6 +103,8 @@ class GameWorld {
     std::vector<Character const *> visible_characters_;
     // Stable map nodes own the values borrowed by player controllers.
     std::map<PlayerId, WorldPlayer> players_;
+    // Destroy controllers before the characters, dialogs and player controls they borrow.
+    std::vector<std::unique_ptr<CharacterController>> controllers_;
     Character *example_ = nullptr;
 };
 

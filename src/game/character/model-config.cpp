@@ -156,7 +156,8 @@ scene::Model load_configured_model(ModelConfig const &config,
                                    std::filesystem::path const &asset_root,
                                    CharacterBody const &body)
 {
-    auto const imported = config.path.value().empty()
+    auto const imported = config.path.value() == "builtin:flashlight" ? make_flashlight_model()
+                          : config.path.value().empty()
                               ? make_character_model(body)
                               : scene::Model::load_from_file(asset_root / config.path.value());
     std::vector<scene::Mesh> meshes;

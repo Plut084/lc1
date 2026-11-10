@@ -1,6 +1,5 @@
 - keyid: 1001
   name: sword
-  type: MeleeWeapon
   attack: 10
   range: 1
   model: &longsword_model
@@ -33,13 +32,21 @@
       base_color_texture: textures/prototype-white.png
 - keyid: 1002
   name: sword
-  type: MeleeWeapon
   attack: 10
   range: 1
   model: *longsword_model
 - keyid: 1003
   name: sword
-  type: MeleeWeapon
   attack: 10
   range: 1
   model: *longsword_model
+
+- keyid: 1005
+  attack: 0
+  range: 20
+  action: ToggleLight
+  model:
+    path: builtin:flashlight
+    material:
+      metallic: 0.7
+      roughness: 0.3

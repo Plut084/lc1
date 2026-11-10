@@ -6,6 +6,82 @@
 #include <utility>
 
 namespace lc1 {
+scene::Model make_flashlight_model()
+{
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    constexpr unsigned sides = 16;
+    constexpr float radius = 0.045F;
+    constexpr float length = 0.24F;
+    for (unsigned i = 0; i < sides; ++i) {
+        float const a = glm::two_pi<float>() * static_cast<float>(i) / sides;
+        float const b = glm::two_pi<float>() * static_cast<float>(i + 1) / sides;
+        glm::vec3 const n0{std::cos(a), std::sin(a), 0};
+        glm::vec3 const n1{std::cos(b), std::sin(b), 0};
+        auto const base = static_cast<std::uint32_t>(vertices.size());
+        for (auto const position :
+             std::array{n0 * radius, n1 * radius, n1 * radius + glm::vec3{0, 0, -length},
+                        n0 * radius + glm::vec3{0, 0, -length}})
+            vertices.push_back({.position = position,
+                                .normal = glm::normalize(glm::vec3{position.x, position.y, 0}),
+                                .color = {0.12F, 0.14F, 0.16F},
+                                .uv = {0.5F, 0.5F}});
+        for (auto const index : {0U, 2U, 1U, 0U, 3U, 2U})
+            indices.push_back(base + index);
+        for (bool front : {false, true}) {
+            auto const cap = static_cast<std::uint32_t>(vertices.size());
+            glm::vec3 const offset{0, 0, front ? -length : 0};
+            glm::vec3 const normal{0, 0, front ? -1 : 1};
+            glm::vec3 const color = front ? glm::vec3{0.95F, 0.95F, 0.75F} : glm::vec3{0.12F};
+            for (auto const position :
+                 std::array{offset, offset + n0 * radius, offset + n1 * radius})
+                vertices.push_back(
+                    {.position = position, .normal = normal, .color = color, .uv = {0.5F, 0.5F}});
+            indices.insert(indices.end(), {cap, cap + (front ? 2U : 1U), cap + (front ? 1U : 2U)});
+        }
+    }
+    return scene::Model{std::move(vertices), std::move(indices)};
+}
+
+// Unit-radius iron helmet: flared brim, straight band and a low polygon dome.
+scene::Model make_helmet_model()
+{
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    constexpr unsigned sides = 24;
+    constexpr std::array profile{glm::vec2{1.18F, 0.0F},  glm::vec2{1.18F, 0.06F},
+                                 glm::vec2{1.0F, 0.10F},  glm::vec2{1.0F, 0.35F},
+                                 glm::vec2{0.87F, 0.70F}, glm::vec2{0.5F, 0.98F},
+                                 glm::vec2{0.0F, 1.08F}};
+    for (std::size_t ring = 1; ring < profile.size(); ++ring) {
+        for (unsigned side = 0; side < sides; ++side) {
+            float const a = glm::two_pi<float>() * static_cast<float>(side) / sides;
+            float const b = glm::two_pi<float>() * static_cast<float>(side + 1) / sides;
+            auto const lower = profile[ring - 1];
+            auto const upper = profile[ring];
+            std::array const points{
+                glm::vec3{lower.x * std::cos(a), lower.y, lower.x * std::sin(a)},
+                glm::vec3{upper.x * std::cos(a), upper.y, upper.x * std::sin(a)},
+                glm::vec3{upper.x * std::cos(b), upper.y, upper.x * std::sin(b)},
+                glm::vec3{lower.x * std::cos(b), lower.y, lower.x * std::sin(b)}};
+            auto const normal =
+                glm::normalize(glm::cross(points[1] - points[0], points[3] - points[0]));
+            auto const base = static_cast<std::uint32_t>(vertices.size());
+            for (auto const point : points)
+                vertices.push_back({.position = point,
+                                    .normal = normal,
+                                    .color = {0.42F, 0.46F, 0.5F},
+                                    .uv = {0.5F, 0.5F}});
+            if (ring == profile.size() - 1)
+                indices.insert(indices.end(), {base, base + 1, base + 3});
+            else
+                for (auto const index : {0U, 1U, 2U, 0U, 2U, 3U})
+                    indices.push_back(base + index);
+        }
+    }
+    return scene::Model{std::move(vertices), std::move(indices)};
+}
+
 // The placeholder mesh and collision body use the same dimensions.
 scene::Model make_character_model(CharacterBody const &body)
 {
@@ -69,4 +145,18 @@ scene::Model make_character_model(CharacterBody const &body)
     return scene::Model{std::move(meshes), std::move(nodes), {std::move(idle), std::move(nod)}};
 }
 
+} // namespace lc1
+
+namespace lc1 {
+glm::mat4 character_reaction_transform(bool dead, float elapsed, CharacterBody const &body)
+{
+    float const progress =
+        glm::clamp(elapsed / (dead ? combat::death_duration : combat::hit_duration), 0.0F, 1.0F);
+    float const amount = dead ? progress * progress * (3.0F - 2.0F * progress)
+                              : std::sin(progress * glm::pi<float>());
+    float const angle = glm::radians(dead ? -90.0F : 12.0F) * amount;
+    auto const lift =
+        glm::translate(glm::mat4{1}, glm::vec3{0, body.half_width * std::abs(std::sin(angle)), 0});
+    return lift * glm::rotate(glm::mat4{1}, angle, glm::vec3{1, 0, 0});
+}
 } // namespace lc1

@@ -14,13 +14,14 @@
 |---|---|
 | 世界位置与身体朝向 | `Character` 内部的 `transform_`，只保存一份 |
 | 相对身体的观察角度 | `Character` |
-| 身体宽高、眼睛高度、行走和奔跑速度 | 每个角色的 `CharacterBody` |
+| 身体宽高、眼睛高度 | 每个角色的 `CharacterBody` |
+| 行走和奔跑速度 | `CharacterConfig::walk_speed()` / `run_speed()`，由敏捷计算 |
 | 模型原点、单位、坐标轴的校正 | `ModelDefinition` 的根节点变换，随实例姿态参与绘制 |
 | CPU 顶点和索引 | `Model` |
 | GPU 顶点、索引和 BLAS | `WorldPresentation` 拥有的 `GpuModel`；NPC 共用占位资源，玩家和武器各自加载 |
 | 绘制资源引用 | `WorldPresentation` 生成的 `DrawItem`，借用资源 |
 | 玩家输入和控制决策 | `PlayerCharacterController` 解释输入并产生 `CharacterIntent`；角色不包含 `GameInputRouter`、`Window` 或相机 |
-| 动作请求、期望速度与朝向 | `Character::update(delta, continent, intent)` 及其 gameplay 规则 |
+| 动作请求、期望速度与朝向 | `Character::update(delta, continent)` 及其 gameplay 规则 |
 | 竖直速度、接地与碰撞求解 | 角色独占的 `CharacterMotion`，借用角色位置完成本次计算 |
 | AI 巡逻目标与等待 | `AiCharacterController` 的巡逻模式，只通过 `CharacterIntent` 影响角色 |
 | 队员跟随/等待 | `AiCharacterController` 的 `CompanionOrder` 模式，由队伍校验权限并下达命令 |
@@ -76,10 +77,11 @@ character.move(continent, {0.0F, 0.0F, -0.5F});
 `move(continent, displacement)` 接受以米为单位的 `vec3` 世界位移，当前要求 y 为零。
 它借用大陆的碰撞查询，让身体沿障碍滑动，并把结果写回同一份世界位置。
 
-`walk(delta_seconds, continent, direction, running)` 根据角色速度计算位移。方向投影到
+`walk(delta_seconds, continent, direction, running)` 根据角色配置中的速度计算位移。
+行走速度为 `4.5 + log(1 + agility())`，奔跑速度再加 `4.5`（单位米/秒）；AI 跟随的停步距离计算使用同一行走速度。方向投影到
 XZ 平面，长度超过 1 时归一化，保留较小输入的模拟量强度，使用完整的非负有限时间计算位移。第一人称控制器使用 `heading()`，因此抬头不会减慢行走。
 
-`update(delta_seconds, continent, intent)` 是控制器意图进入角色状态的唯一路径，并把
+`update(delta_seconds, continent)` 从控制器取得意图后应用角色规则，是意图进入角色状态的唯一路径，并把
 “应用 intent”与“推进物理”合并为一次状态更新。它先校验时间，私有 `apply_intent()`
 校验完整 intent，再应用身体 yaw/朝向、观察目标和跳跃请求，不执行位移。
 随后角色根据移动方向、奔跑和转身策略计算水平期望速度，交给 `CharacterMotion::update()`。
@@ -157,7 +159,12 @@ Follow/Wait 通过现有 AI 的 `set_order()` 切换，跟随时从队伍读取�
 M 切换只改变视角状态，身体/观察角由下一个模拟 tick 的 intent 更新；
 切换帧丢弃观察位移。主线程从已完成 tick 的快照跟随角色，不直接修改模拟中的玩家。
 `GameWorld::update()` 对所有角色统一调用 `Character::update(elapsed, continent)`；
-角色通过 `CharacterController::update()` 取得 intent，执行角色规则和物理。
+角色通过 `CharacterController::decide(delta_seconds)` 取得 intent，执行角色规则和物理。
+控制器通过 `controller.possess(character)` 绑定只读角色借用，随后调用 `decide(delta_seconds)`，不再逐帧传入角色。
+`GameWorld` 统一拥有控制器，`Character` 仅保存可空的非拥有指针。
+`Character::set_controller(pointer)` 完成绑定，传入 `nullptr` 可解除角色的控制器借用，不销毁控制器；
+调用方保证控制器在附着期间有效。独立使用的控制器需先显式绑定，角色必须在控制器使用该绑定期间有效。
+世界重新加载或销毁时，先释放控制器，再释放它们借用的角色、对话系统和玩家控制值。
 没有控制器时使用空 intent，物理仍然推进；测试通过绑定控制器提供动作。
 固定 tick、输入合并和线程生命周期以[代码边界](code-layout.md#固定步长模拟与线程交换)为准。
 
@@ -178,12 +185,43 @@ Scene 拥有每个角色的 `ModelInstance`，借用共享 `ModelDefinition` 中
 `WorldPresentation` 装配模型、设置初始待机动画并提交世界变换，Scene 负责推进动画、挂点查询与绘制展开。
 NPC 循环播放头部左右转动的 `Idle`，玩家默认保持静止，按 F2 经角色 intent 增加 `nod_sequence`，所有观察者播放一次 `Nod`（再次按下从头播放）：
 前 1.2 秒向下点头两次（25°），随后保持直立，片段总长 3 秒且不循环。均为刚性节点动画；角色世界姿态仍只属于 `Character`。
-这不是骨骼蒙皮，尚未实现行走/攻击动画选择、动画混合、root motion、死亡或布娃娃。
+受击和死亡使用表现层的整模型刚性动画，见下文；尚未实现骨骼蒙皮、行走动画选择、动画混合、root motion 或布娃娃。
 占位模型的 `Eyes` 是 `Head` 下的无网格挂点，默认世界位置等于脚底加身体配置的眼睛高度。
 第一人称相机读取本帧动画后的挂点世界变换；位置和观察方向都跟随挂点，鼠标观察角在身体局部空间叠加到挂点旋转。
 斜视角忽略眼睛挂点。`Character::eye_position()` 仍是玩法层的配置高度查询，未被动画改写；
 不提供挂点的 `PlayerView` 调用方继续使用这一回退值。
 占位几何由 `make_character_model(CharacterBody)` 构造，默认姿态尺寸与身体配置一致。
+
+## 近战命中、受击与死亡
+
+`Character` 保存攻击时间、该刀命中的角色 ID、血量损失和受击时间；不读取模型实例。
+`GameWorld::update()` 在所有角色移动后，按稳定 keyid 顺序调用 `resolve_attack()` 消费本 tick 的攻击轨迹，
+再处理交互和对话。同 tick 中先结算的命中可以打断后续角色的攻击。
+
+当前为纵向劈砍：0–0.12 秒蓄力，0.12–0.28 秒有效，0.28–0.55 秒收招，攻击冷却 2 秒。
+时间常量统一在 `character/combat.hpp`。剑刃是从角色胸前出发、长度等于 `WeaponProperty::range` 的线段，
+按默认持握倾角及 `Swing` 的 70° 到 −75° 旋转扫过身体前方；这是独立于可见网格的玩法碰撞体，
+不逐三角形碰撞，也不从渲染挂点回读。自定义武器模型／动画目前仍使用这一默认攻击形状。
+每 tick 对整个有效时间区间细分，角步长不超过 2°、起点位移步长不超过 2.5 cm；
+身体 AABB 扩张 3 cm 刃厚半径及半步最大位移，覆盖相邻采样之间的轨迹，边缘判定略保守。
+角色本 tick 的位置和朝向沿轨迹插值，目标身体采用本 tick 最终位置；当前 60 Hz 模拟不实现目标运动连续碰撞。
+同一刀对每个目标最多结算一次，可命中多个目标。允许同队误伤，不按队伍或阵营过滤，只排除攻击者自身和尸体。实体体块在剑刃与目标之间时阻挡命中，
+非实体装饰不阻挡；目前不做攻击轨迹与高度场的遮挡检测。
+
+伤害直接取武器 `attack`，尚未加入护甲减伤、暴击或击退。
+`take_damage()` 拒绝负数和非有限值，零伤害无效果，实际伤害最多扣至零；
+每次有效受击增加 `hit_sequence`，清除未结算攻击并重置受击时间。
+存活角色受击后硬直 0.3 秒，期间不接受控制器的移动、转身、跳跃和攻击；重力继续推进。
+零血量即死亡，不另外维护可与血量矛盾的死亡标记；死亡永久停止控制器意图，仍保留重力。
+受击或死亡中断对话，硬直中和死亡角色不能开始新对话。
+
+快照复制血量、最大血量、受击序号、死亡状态与反应时间，人物属性面板读取真实血量。
+`WorldPresentation` 将 `character_reaction_transform()` 叠加到角色的绘制世界矩阵：
+受击用 0.3 秒后仰并回正，死亡用 0.6 秒向前倒地、抬升半宽以贴近平地，结束后保持最后姿势。
+这些是适配当前木桶／方块模型的程序化刚性动画，不需要外部骨骼片段。
+死亡时停止原有待机和点头，受击与死亡均停止武器动作；武器和眼睛继续跟随最终挂点。
+动画不会改写玩法坐标，尸体仍沿用直立地形碰撞体；斜坡贴合和布娃娃尚未实现。
+血量随 checkpoint 保存，旧进度缺少血量字段时默认为满血；已死亡角色读档后直接显示最终倒地姿势。
 
 ## 本地模型试用
 
@@ -197,8 +235,8 @@ NPC 循环播放头部左右转动的 `Idle`，玩家默认保持静止，按 F2
 武器使用本地 `weapon_set_kingdom.blend` 中 pfunked 的 `KingdomLongsword`，
 经 `scripts/export-kingdom-longsword.py` 提取为同目录的 `KingdomLongsword.obj`。
 导出仅包含静态网格；`weapons.yaml` 中的模型节点定义局部旋转、缩放和握柄对齐，材质与挥动动画也由 YAML 指定。
-Scene 独立拥有武器实例，表现层按角色 ID 保存关联；`Weapon` 不保存实例借用。没有装备或没有模型配置时不创建武器实例。
-玩家和 NPC 使用同一套装配与更新逻辑，远程武器尚未接入持握显示。
+Scene 独立拥有武器实例，表现层按角色 ID 保存关联；`Weapon` 不保存实例借用。会话构造时为有模型的武器定义预留显示实例，只有当前主手对应的实例可见。
+玩家和 NPC 使用同一套装配与更新逻辑，主手显示不再按近战／远程分类分槽。
 `WorldPresentation` 拥有 GPU 资源，并在角色动画和世界矩阵更新后，将各自角色模型的持握挂点世界矩阵提交给武器；
 武器不改变 Character 的位置、碰撞或眼睛挂点。
 玩家鼠标左键按下生成 `CharacterIntent::swing_weapon`，AI 控制器也可填写同一请求。
@@ -207,7 +245,7 @@ Scene 独立拥有武器实例，表现层按角色 ID 保存关联；`Weapon` �
 没有显示模型或动作片段时不播放。Scene 每个渲染帧统一推进动画时间并采样姿态。
 默认 `Swing` 长 0.55 秒，包含蓄力、向前挥动和回位；Character 按 2 秒冷却接受新请求。
 冷却随模拟时间推进，无请求时也计时，冷却期间的连续请求不会重置动画。
-角色和武器各自的 YAML 选择外观；尚无命中、伤害或连击。
+角色和武器各自的 YAML 选择外观；近战命中与伤害由模拟层处理，尚无连击。
 字段、默认值和旧存档兼容行为见[模型配置](save-data.md#角色与武器的-model)。
 角色与武器没有 `model()` 接口；模型查询属于 `WorldPresentation`，Scene 所有权与借用生命周期见[资源文档](resources.md#持久渲染场景)。
 
@@ -225,6 +263,8 @@ CPU 测试使用仓库内的 YAML 和独立几何夹具验证局部变换、挂�
 
 ## 验证
 
+`lc1_combat_tests` 覆盖伤害边界、硬直、攻击时段、长 tick 扫掠、重复命中抑制、朝向／距离／高度、墙体遮挡及受击／倒地姿态。
+`lc1_game_world_tests` 验证命中到快照、受伤／死亡存档往返、旧存档默认值和死亡对话限制。
 `lc1_character_tests` 覆盖角色初始状态、身体与观察的区别、碰撞滑动、实例世界矩阵、
 配置和无效输入、第一人称倒退/侧移、切换控制器、`CharacterIntent` 的冲刺速度/跳跃限制/
 环境请求规则、AI 决策不改角色、跟随控制器的停止距离，以及节点校正矩阵、共享几何不变性和镜像行列式。
@@ -251,3 +291,9 @@ UI 可以换算 kg 显示；列表只读真实背包，按编号从内置目录�
 存在，之后可以假定解析成功。名称由 `Resource` 的 `std::string` 拥有，内置定义使用 `inline const`，
 配方仍借用这些进程期常量。
 资源分类仍为枚举，配方用对应定义构造；列表显示定义名称，按 ID 排序。未引入 YAML 资源加载或新存档格式。
+
+## 装备与手持物品
+
+角色借用世界拥有的只读防具与武器定义；防具保留按部位索引的槽位，武器只有 `main_hand` 一个指针。
+角色通过抽象 `Weapon::use()` 调用当前主手，派生类选择使用行为；角色保存冷却、攻击进度及开关状态。
+穿戴事务、资源身份与手电筒规则见 [资源与穿戴](design/resources.md)。

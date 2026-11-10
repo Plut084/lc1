@@ -226,3 +226,37 @@ glm::vec3 WorldCollision::move(glm::vec3 feet, glm::vec2 displacement, float hal
 }
 
 } // namespace lc1
+
+namespace lc1 {
+std::optional<float> segment_box_fraction(glm::vec3 from, glm::vec3 to, glm::vec3 min,
+                                          glm::vec3 max)
+{
+    auto const delta = to - from;
+    float enter = 0;
+    float leave = 1;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (delta[axis] == 0) {
+            if (from[axis] < min[axis] || from[axis] > max[axis])
+                return std::nullopt;
+        }
+        else {
+            float const a = (min[axis] - from[axis]) / delta[axis];
+            float const b = (max[axis] - from[axis]) / delta[axis];
+            enter = std::max(enter, std::min(a, b));
+            leave = std::min(leave, std::max(a, b));
+            if (enter > leave)
+                return std::nullopt;
+        }
+    }
+    return enter;
+}
+
+bool WorldCollision::segment_blocked(glm::vec3 from, glm::vec3 to, float radius) const
+{
+    for (auto const &block : continent_->blocks())
+        if (block.solid && segment_box_fraction(from, to, block.min - glm::vec3{radius},
+                                                block.max + glm::vec3{radius}))
+            return true;
+    return false;
+}
+} // namespace lc1

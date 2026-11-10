@@ -29,17 +29,17 @@ struct SerializedFaction {
 };
 
 struct SerializedEquipment {
-    std::uint32_t keyid;
+    std::uint32_t keyid; // Same identity as Resource, not an instance id.
     EquipmentType type;
     float armor;
 };
 
 struct SerializedWeapon {
-    std::uint32_t keyid;
-    WeaponType type;
+    std::uint32_t keyid; // Same identity as Resource, not an instance id.
     float attack;
     float range;
     rfl::DefaultVal<ModelConfig> model;
+    rfl::DefaultVal<WeaponAction> action{WeaponAction::MeleeAttack};
 };
 
 struct SerializedParty {
@@ -72,7 +72,7 @@ struct SerializedCharacterConfig {
     // An enum cannot be a YAML mapping key, so reflect-cpp writes each map as a sequence
     // of [key, value] pairs: "- [Head, 10]".
     std::map<EquipmentType, std::uint32_t> equipment;
-    std::map<WeaponType, std::uint32_t> weapon;
+    std::uint32_t main_hand = 0; // 0 means empty.
     rfl::DefaultVal<ModelConfig> model;
 };
 
@@ -93,11 +93,13 @@ struct SerializedCharacterState {
     CompanionOrder companion_order = CompanionOrder::None;
     std::uint32_t bag_capacity = 10000; // Grams.
     std::vector<SerializedResourceStack> bag = {};
+    rfl::DefaultVal<float> health_lost{0.0F};
+    rfl::DefaultVal<bool> flashlight_on{false};
 };
 
 // One complete checkpoint: membership and character records are committed together.
 struct SerializedWorld {
-    std::uint32_t version = 5;
+    std::uint32_t version = 6;
     ContinentIdentity continent{"present", 1};
     SerializedSession session;
     std::vector<SerializedFaction> factions;

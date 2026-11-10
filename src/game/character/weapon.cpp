@@ -1,45 +1,64 @@
 #include "lc1/game/character/weapon.hpp"
+#include "lc1/game/character/character.hpp"
 
+#include "lc1/error.hpp"
+#include <cmath>
 #include <utility>
 
 namespace lc1 {
 
-std::string_view to_string(WeaponType type)
+WeaponDefinition::WeaponDefinition(std::uint32_t keyid, WeaponProperty property,
+                                   ModelConfig model_config, WeaponAction action)
+    : keyid_(keyid), property_(property), model_config_(std::move(model_config)), action_(action)
 {
-    switch (type) {
-    case WeaponType::MeleeWeapon:
-        return "MeleeWeapon";
-    case WeaponType::RangedWeapon:
-        return "RangedWeapon";
-    default:
-        return "Unknown";
-    }
+    if (!std::isfinite(property.attack) || property.attack < 0 || !std::isfinite(property.range) ||
+        property.range <= 0)
+        fail("weapon attack must be nonnegative and range positive, both finite");
 }
 
-Weapon::Weapon(std::uint32_t keyid, WeaponType type, WeaponProperty property,
-               ModelConfig model_config)
-    : keyid_(keyid), type_(type), property_(property), model_config_(std::move(model_config))
-{
-}
-
-std::uint32_t Weapon::keyid() const
+std::uint32_t WeaponDefinition::keyid() const
 {
     return keyid_;
 }
 
-WeaponType Weapon::type() const
-{
-    return type_;
-}
-
-WeaponProperty Weapon::property() const
+WeaponProperty WeaponDefinition::property() const
 {
     return property_;
 }
 
-ModelConfig const &Weapon::model_config() const
+ModelConfig const &WeaponDefinition::model_config() const
 {
     return model_config_;
+}
+
+MeleeWeapon::MeleeWeapon(std::uint32_t keyid, WeaponProperty property, ModelConfig model_config)
+    : Weapon(keyid, property, std::move(model_config), WeaponAction::MeleeAttack)
+{
+}
+
+void MeleeWeapon::use(Character &user) const
+{
+    user.begin_melee_attack(property());
+}
+
+RangedWeapon::RangedWeapon(std::uint32_t keyid, WeaponProperty property, ModelConfig model_config)
+    : Weapon(keyid, property, std::move(model_config), WeaponAction::RangedAttack)
+{
+}
+
+void RangedWeapon::use(Character &) const
+{
+    // Projectile firing is not implemented; preserve the existing ranged behavior.
+}
+
+Flashlight::Flashlight(std::uint32_t keyid, WeaponProperty property, ModelConfig model_config)
+    : Weapon(keyid, property, std::move(model_config), WeaponAction::ToggleLight)
+{
+}
+
+void Flashlight::use(Character &user) const
+{
+    user.toggle_flashlight();
 }
 
 } // namespace lc1

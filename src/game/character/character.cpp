@@ -7,6 +7,7 @@
 #include "lc1/game/party/faction.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/physics/world-collision.hpp"
+#include "lc1/game/resources/catalog.hpp"
 #include "lc1/game/world/interactable.hpp"
 
 #include <algorithm>
@@ -36,10 +37,9 @@ CharacterBody validated_body(CharacterBody body)
 {
     if (!std::isfinite(body.half_width) || body.half_width <= 0.0F || !std::isfinite(body.height) ||
         body.height <= 0.0F || !std::isfinite(body.eye_height) || body.eye_height < 0.0F ||
-        body.eye_height > body.height || !std::isfinite(body.walk_speed) ||
-        body.walk_speed < 0.0F || !std::isfinite(body.run_speed) || body.run_speed < 0.0F ||
-        !std::isfinite(body.step_height) || body.step_height < 0.0F ||
-        !std::isfinite(body.ground_snap_distance) || body.ground_snap_distance < 0.0F)
+        body.eye_height > body.height || !std::isfinite(body.step_height) ||
+        body.step_height < 0.0F || !std::isfinite(body.ground_snap_distance) ||
+        body.ground_snap_distance < 0.0F)
         fail("invalid character body");
 
     return body;
@@ -64,6 +64,9 @@ Character::Character(Continent const &continent, scene::Transform transform, Cha
       transform_(validated_transform(continent, transform, body_)),
       motion_(WorldCollision{continent}, body_, transform_.position, motion_settings)
 {
+    if (!std::isfinite(config_.health_lost) || config_.health_lost < 0 ||
+        config_.max_health() <= 0 || config_.health_lost > config_.max_health())
+        fail("invalid character health");
     set_body_yaw(transform_.rotation.y);
 }
 
@@ -106,11 +109,24 @@ void Character::apply_intent(float delta_seconds, CharacterIntent const &intent)
         ++nod_sequence_;
 
     weapon_attack_cooldown_ = std::max(0.0F, weapon_attack_cooldown_ - delta_seconds);
-    if (intent.swing_weapon && weapon_attack_cooldown_ <= 0) {
-        weapon_attack_cooldown_ = 2;
-        if (config_.weapon.contains(WeaponType::MeleeWeapon))
-            ++attack_sequence_;
-    }
+    if (intent.swing_weapon && config_.main_hand)
+        config_.main_hand->use(*this);
+}
+
+void Character::begin_melee_attack(WeaponProperty property)
+{
+    if (weapon_attack_cooldown_ > 0)
+        return;
+    weapon_attack_cooldown_ = combat::cooldown;
+    ++attack_sequence_;
+    attack_elapsed_ = 0;
+    attack_property_ = property;
+    attack_victims_.clear();
+}
+
+void Character::toggle_flashlight()
+{
+    flashlight_on_ = !flashlight_on_;
 }
 
 CompanionOrder Character::companion_order() const
@@ -121,16 +137,33 @@ CompanionOrder Character::companion_order() const
 
 bool Character::accepts_ambient_requests() const
 {
-    return on_ground() && !ambient_requests_blocked_;
+    return !dead() && reaction_time_ >= combat::hit_duration &&
+           attack_elapsed_ >= combat::swing_duration && on_ground() && !ambient_requests_blocked_;
 }
 
 void Character::update(float delta_seconds, Continent const &continent)
 {
-    auto const intent = controller_ ? controller_->update(delta_seconds, *this) : CharacterIntent{};
+    if (!std::isfinite(delta_seconds) || delta_seconds < 0)
+        fail("invalid character update time");
+    attack_sweep_.reset();
+    auto const from = position();
+    float from_yaw = body_yaw();
+    bool const blocked = dead() || reaction_time_ < combat::hit_duration;
+    reaction_time_ = std::min(combat::death_duration, reaction_time_ + delta_seconds);
+    auto const intent =
+        !blocked && controller_ ? controller_->decide(delta_seconds) : CharacterIntent{};
+    auto const sequence = attack_sequence_;
     apply_intent(delta_seconds, intent);
+    if (sequence != attack_sequence_)
+        from_yaw = body_yaw();
     auto const velocity =
         walking_velocity({intent.move.x, 0.0F, intent.move.y}, intent.sprint, intent.face_movement);
     motion_.update(delta_seconds, WorldCollision{continent}, body_, transform_.position, velocity);
+    float const begin = attack_elapsed_;
+    attack_elapsed_ = std::min(combat::swing_duration, attack_elapsed_ + delta_seconds);
+    if (!blocked && begin < combat::active_end && attack_elapsed_ > combat::windup)
+        attack_sweep_ =
+            AttackSweep{begin, begin + delta_seconds, from, position(), from_yaw, body_yaw()};
 }
 
 glm::vec3 Character::walking_velocity(glm::vec3 direction, bool running, bool face_movement)
@@ -146,7 +179,7 @@ glm::vec3 Character::walking_velocity(glm::vec3 direction, bool running, bool fa
     if (face_movement)
         set_body_yaw(glm::degrees(std::atan2(-direction.x, -direction.z)));
 
-    float const speed = running ? body_.run_speed : body_.walk_speed;
+    float const speed = running ? config_.run_speed() : config_.walk_speed();
     return direction * speed;
 }
 
@@ -272,27 +305,29 @@ bool Character::on_ground() const
 
 CharacterController *Character::controller()
 {
-    return controller_.get();
+    return controller_;
 }
 
 CharacterController const *Character::controller() const
 {
-    return controller_.get();
+    return controller_;
 }
 
 AiCharacterController *Character::ai_controller()
 {
-    return dynamic_cast<AiCharacterController *>(controller_.get());
+    return dynamic_cast<AiCharacterController *>(controller_);
 }
 
 AiCharacterController const *Character::ai_controller() const
 {
-    return dynamic_cast<AiCharacterController const *>(controller_.get());
+    return dynamic_cast<AiCharacterController const *>(controller_);
 }
 
-void Character::set_controller(std::unique_ptr<CharacterController> controller)
+void Character::set_controller(CharacterController *controller)
 {
-    controller_ = std::move(controller);
+    if (controller)
+        controller->possess(*this);
+    controller_ = controller;
 }
 
 Interactable *Character::interactable()
@@ -303,6 +338,97 @@ Interactable *Character::interactable()
 game::Bag const &Character::bag() const
 {
     return bag_;
+}
+
+bool Character::equip(game::Resource const &resource, Equipment &equipment)
+{
+    if (resource.keyid != equipment.keyid())
+        fail("equipment definition does not match resource {}", resource.keyid);
+    if (dead())
+        return false;
+    auto candidate = bag_;
+    if (!candidate.remove(resource, 1))
+        return false;
+    auto const previous = config_.equipment.find(equipment.type());
+    if (previous != config_.equipment.end() &&
+        !candidate.add(*game::find_resource(previous->second->keyid()), 1))
+        return false;
+    // Allocate a new slot before committing the inventory.
+    config_.equipment.insert_or_assign(equipment.type(), &equipment);
+    bag_ = std::move(candidate);
+    return true;
+}
+
+bool Character::equip(game::Resource const &resource, Weapon &weapon)
+{
+    if (resource.keyid != weapon.keyid())
+        fail("weapon definition does not match resource {}", resource.keyid);
+    if (dead())
+        return false;
+    auto candidate = bag_;
+    if (!candidate.remove(resource, 1) ||
+        (config_.main_hand && !candidate.add(*game::find_resource(config_.main_hand->keyid()), 1)))
+        return false;
+    bag_ = std::move(candidate);
+    config_.main_hand = &weapon;
+    flashlight_on_ = false;
+    attack_sweep_.reset();
+    attack_elapsed_ = combat::swing_duration;
+    return true;
+}
+
+bool Character::unequip(EquipmentType slot)
+{
+    if (dead())
+        return false;
+    auto const found = config_.equipment.find(slot);
+    if (found == config_.equipment.end())
+        return false;
+    auto candidate = bag_;
+    if (!candidate.add(*game::find_resource(found->second->keyid()), 1))
+        return false;
+    bag_ = std::move(candidate);
+    config_.equipment.erase(found);
+    return true;
+}
+
+bool Character::unequip_weapon()
+{
+    if (dead() || !config_.main_hand)
+        return false;
+    auto candidate = bag_;
+    if (!candidate.add(*game::find_resource(config_.main_hand->keyid()), 1))
+        return false;
+    bag_ = std::move(candidate);
+    config_.main_hand = nullptr;
+    flashlight_on_ = false;
+    attack_sweep_.reset();
+    attack_elapsed_ = combat::swing_duration;
+    return true;
+}
+
+bool Character::flashlight_on() const
+{
+    return !dead() && flashlight_on_ && config_.main_hand &&
+           config_.main_hand->action() == WeaponAction::ToggleLight;
+}
+
+void Character::set_flashlight_on(bool on)
+{
+    flashlight_on_ = on;
+}
+
+void Character::take_damage(float amount)
+{
+    if (!std::isfinite(amount) || amount < 0)
+        fail("damage must be finite and nonnegative");
+    if (dead() || amount == 0)
+        return;
+    config_.health_lost += std::min(amount, config_.health());
+    ++hit_sequence_;
+    reaction_time_ = 0;
+    attack_elapsed_ = combat::swing_duration;
+    attack_sweep_.reset();
 }
 
 game::Bag &Character::bag()
@@ -320,11 +446,76 @@ std::uint64_t Character::attack_sequence() const
     return attack_sequence_;
 }
 
-} // namespace lc1
-
-namespace lc1 {
 CharacterId Character::id() const
 {
     return CharacterId{config_.keyid};
+}
+
+} // namespace lc1
+
+namespace lc1 {
+bool Character::dead() const
+{
+    return config_.health() == 0;
+}
+
+float Character::reaction_time() const
+{
+    return reaction_time_;
+}
+
+std::uint64_t Character::hit_sequence() const
+{
+    return hit_sequence_;
+}
+
+void Character::resolve_attack(std::span<Character *const> targets, Continent const &continent)
+{
+    auto const pending = std::exchange(attack_sweep_, std::nullopt);
+    if (!pending || dead())
+        return;
+    auto const &sweep = *pending;
+    float const start = std::max(sweep.begin, combat::windup);
+    float const finish = std::min(sweep.end, combat::active_end);
+    float const first = (start - sweep.begin) / (sweep.end - sweep.begin);
+    float const last = (finish - sweep.begin) / (sweep.end - sweep.begin);
+    float const yaw_delta = std::remainder(sweep.to_yaw - sweep.from_yaw, 360.0F);
+    // Subdivide the complete active interval, including ticks spanning the whole attack.
+    // Expand by the maximum half-step travel so a fast blade cannot pass between samples.
+    float const angle = (finish - start) * (145.0F / (combat::active_end - combat::windup)) +
+                        std::abs(yaw_delta) * (last - first);
+    float const travel = glm::length(sweep.to - sweep.from) * (last - first);
+    auto const steps = static_cast<std::size_t>(
+        std::max(1.0F, std::ceil(std::max(angle / 2.0F, travel / 0.025F))));
+    float const radius = 0.03F + (travel + attack_property_.range * glm::radians(angle)) /
+                                     (2.0F * static_cast<float>(steps));
+    WorldCollision const collision{continent};
+    for (std::size_t step = 0; step <= steps; ++step) {
+        float const progress = static_cast<float>(step) / static_cast<float>(steps);
+        float const time = glm::mix(start, finish, progress);
+        float const alpha = glm::mix(first, last, progress);
+        auto const origin =
+            glm::mix(sweep.from, sweep.to, alpha) + glm::vec3{0, body_.height * (1.05F / 1.8F), 0};
+        auto const heading = horizontal_direction(sweep.from_yaw + yaw_delta * alpha);
+        // Matches the default Swing's 70 -> -75 degrees and the -45 degree grip.
+        float const pitch = glm::radians(
+            25.0F - (time - combat::windup) * (145.0F / (combat::active_end - combat::windup)));
+        auto const tip = origin + attack_property_.range * (glm::vec3{0, std::cos(pitch), 0} -
+                                                            heading * std::sin(pitch));
+        for (auto *target : targets) {
+            if (target == this || target->dead() ||
+                std::ranges::contains(attack_victims_, target->id()))
+                continue;
+            auto const feet = target->position();
+            auto const extent = glm::vec3{target->half_width(), 0, target->half_width()};
+            auto const hit = segment_box_fraction(
+                origin, tip, feet - extent - glm::vec3{radius},
+                feet + extent + glm::vec3{0, target->height(), 0} + glm::vec3{radius});
+            if (!hit || collision.segment_blocked(origin, glm::mix(origin, tip, *hit), radius))
+                continue;
+            attack_victims_.push_back(target->id());
+            target->take_damage(attack_property_.attack);
+        }
+    }
 }
 } // namespace lc1

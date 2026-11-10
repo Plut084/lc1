@@ -280,6 +280,30 @@ void mesh_expansion_and_character_content()
         "the shared idle clip changes the head pose");
 }
 
+void flashlight_content()
+{
+    lc1::ModelConfig config;
+    config.path = "builtin:flashlight";
+    auto const model = lc1::load_configured_model(config, "/nonexistent", lc1::CharacterBody{});
+    check(model.mesh_count() == 1 && !model.vertices().empty(),
+          "flashlight geometry needs no external asset");
+    for (auto const &vertex : model.vertices())
+        check(std::isfinite(vertex.position.x) && std::isfinite(vertex.position.y) &&
+                  std::isfinite(vertex.position.z) &&
+                  std::abs(glm::length(vertex.normal) - 1.0F) < 0.001F,
+              "flashlight vertices have finite positions and unit normals");
+    auto const vertices = model.vertices();
+    auto const indices = model.indices();
+    for (std::size_t i = 0; i < indices.size(); i += 3) {
+        auto const &a = vertices[indices[i]];
+        auto const &b = vertices[indices[i + 1]];
+        auto const &c = vertices[indices[i + 2]];
+        check(glm::dot(glm::cross(b.position - a.position, c.position - a.position),
+                       a.normal + b.normal + c.normal) > 0,
+              "flashlight triangles face outward");
+    }
+}
+
 void player_nod_clip()
 {
     auto const model = lc1::make_character_model(lc1::CharacterBody{});
@@ -406,6 +430,7 @@ int main()
         invalid_data_and_atomic_updates();
         mesh_expansion_and_character_content();
         definition_outlives_geometry();
+        flashlight_content();
         player_nod_clip();
         imported_player_and_weapon();
         std::cout << "Model animation tests passed\n";

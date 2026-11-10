@@ -1,0 +1,15 @@
+# 武器属于装备；range单位为米。
+- id: 1101
+  name: 铁剑
+  type: equipment
+  icon: sword_iron
+  weight: 1200.0
+  description: 常见的单手铁剑。
+  model: 3002
+  max_stack: 1
+  discardable: true
+  transferable: true
+  slot: melee
+  required_strength: 3
+  attack: 10.0
+  range: 1.5

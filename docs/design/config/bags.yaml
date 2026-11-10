@@ -1,0 +1,15 @@
+# 背包id独立于物品id；容量统一由basicbag.yaml与人物力量决定。
+- id: 1
+  name: 普通行囊
+  special_buff: null
+  overweight_buff: 2001
+  model: null # 背包模型尚未实现，使用图标
+  icon: bag_common
+  description: 普通的布制行囊。
+- id: 2
+  name: 轻行行囊
+  special_buff: null
+  overweight_buff: 2001
+  model: null
+  icon: bag_light
+  description: 便于行动的行囊，便于整理和携带。

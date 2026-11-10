@@ -1,0 +1,14 @@
+# 装备、武器、道具三表的物品id不得重复。重量单位为g。
+- id: 1001
+  name: 铁制头盔
+  type: equipment
+  icon: helmet_iron
+  weight: 600.0
+  description: 提供少量防护的铁制头盔。
+  model: 3001
+  max_stack: 1
+  discardable: true
+  transferable: true
+  slot: head
+  required_strength: 2
+  armor: 1.0

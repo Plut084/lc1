@@ -1,0 +1,16 @@
+# 首版拟定通用规则；不配置本表时采用这些默认值。
+open_key: B
+pickup_key: F
+tabs: [all, equipment, normal] # 全部、装备、道具
+sort: [type_ascending, unit_weight_ascending] # 种类顺序按tabs，重量由轻到重；相同时保留原顺序
+max_entries: null # 不限制列表条数
+capacity:
+  base_weight: 10000.0 # g
+  weight_per_strength: 1000.0 # 每点力量增加的容量，g
+  include_equipped: false # 已穿戴装备不计入背包重量
+pickup_distance: 2.0 # 米；不得隔墙拾取
+transfer_distance: 5.0 # 米；同场景、无阻挡
+pickup_policy: partial # 尽量拾取，剩余留在原处
+grant_policy: all_or_nothing # 整批发放，不足则全部不执行
+transfer_policy: all_or_nothing # 整批转移，不足则全部不执行
+world_drop_lifetime_seconds: null # 不按时间自动清除

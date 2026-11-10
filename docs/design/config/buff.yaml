@@ -1,0 +1,14 @@
+# duration_seconds为空表示由来源状态维持，为0表示立即结算。
+# 一个记录可包含多个效果，用于同时描述背包特性和超重状态。
+- id: 2001
+  name: 超重减速
+  duration_seconds: null
+  effects:
+    - type: move_speed_multiplier
+      value: 0.7 # 移动速度变为原来的70%；仅超重期间生效
+- id: 2101
+  name: 恢复生命
+  duration_seconds: 0
+  effects:
+    - type: restore_health
+      value: 30.0 # 不超过生命上限

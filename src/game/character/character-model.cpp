@@ -64,14 +64,29 @@ scene::Model make_helmet_model()
                 glm::vec3{upper.x * std::cos(a), upper.y, upper.x * std::sin(a)},
                 glm::vec3{upper.x * std::cos(b), upper.y, upper.x * std::sin(b)},
                 glm::vec3{lower.x * std::cos(b), lower.y, lower.x * std::sin(b)}};
-            auto const normal =
-                glm::normalize(glm::cross(points[1] - points[0], points[3] - points[0]));
+            std::array<glm::vec2, 2> profile_normals;
+            for (unsigned endpoint = 0; endpoint < 2; ++endpoint) {
+                auto const index = ring - 1 + endpoint;
+                auto slope = upper - lower;
+                // Smooth the dome across rings, but keep brim/band creases sharp.
+                if (index >= 3 && ring >= 4) {
+                    if (index == profile.size() - 1) {
+                        profile_normals[endpoint] = {0, 1};
+                        continue;
+                    }
+                    slope = profile[index + 1] - profile[index - 1];
+                }
+                profile_normals[endpoint] = glm::normalize(glm::vec2{slope.y, -slope.x});
+            }
             auto const base = static_cast<std::uint32_t>(vertices.size());
-            for (auto const point : points)
-                vertices.push_back({.position = point,
-                                    .normal = normal,
+            for (unsigned corner = 0; corner < points.size(); ++corner) {
+                auto const n = profile_normals[corner == 1 || corner == 2 ? 1 : 0];
+                auto const angle = corner < 2 ? a : b;
+                vertices.push_back({.position = points[corner],
+                                    .normal = {n.x * std::cos(angle), n.y, n.x * std::sin(angle)},
                                     .color = {0.42F, 0.46F, 0.5F},
                                     .uv = {0.5F, 0.5F}});
+            }
             if (ring == profile.size() - 1)
                 indices.insert(indices.end(), {base, base + 1, base + 3});
             else

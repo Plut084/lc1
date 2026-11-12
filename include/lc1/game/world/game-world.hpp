@@ -40,7 +40,8 @@ struct WorldPlayer {
 // Not an authoritative server or a network replica. The roster is fixed between loads.
 class GameWorld {
   public:
-    explicit GameWorld(Save const &save, std::filesystem::path const &dialog_catalog);
+    explicit GameWorld(Save const &save, std::filesystem::path const &dialog_catalog,
+                       std::filesystem::path const &asset_root = "runtime/assets");
 
     GameWorld(GameWorld const &) = delete;
     GameWorld &operator=(GameWorld const &) = delete;
@@ -56,6 +57,7 @@ class GameWorld {
 
     Character &player(PlayerId id);
     Character const &player(PlayerId id) const;
+    bool transfer_control(PlayerId id, CharacterId target);
 
     std::map<PlayerId, WorldPlayer> const &players() const;
 
@@ -91,6 +93,7 @@ class GameWorld {
     Character *character_by_id(std::uint32_t keyid, std::string_view what) const;
     Character *find_interaction_target(Character &actor) const;
 
+    std::filesystem::path asset_root_;
     WorldSetup setup_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Faction>> factions_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Equipment>> equipments_;

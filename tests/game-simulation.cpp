@@ -180,8 +180,8 @@ void one_shot_inputs()
         return state.players.at(lc1::PlayerId{1}).input_sequence == pressed.sequence;
     });
     check(applied->player(lc1::PlayerId{1}).attack_sequence == 1 &&
-              applied->player(lc1::PlayerId{1}).pose.position().y > 0,
-          "headless jump and weapon requests are accepted at the tick boundary");
+              std::abs(applied->player(lc1::PlayerId{1}).pose.position().y) < 0.001F,
+          "an attack takes priority over a simultaneous jump at the tick boundary");
     check(std::abs(applied->player(lc1::PlayerId{1}).pose.body_yaw() + 1) < 0.001F,
           "mouse displacement is applied once, independently of the tick rate");
     auto const landed =
@@ -191,6 +191,16 @@ void one_shot_inputs()
               landed->player(lc1::PlayerId{1}).pose.body_yaw() ==
                   applied->player(lc1::PlayerId{1}).pose.body_yaw(),
           "jump, attack and mouse deltas do not repeat while the last input is held");
+
+    lc1::PlayerControls jump;
+    jump.view.keyboard_enabled = true;
+    jump.jump = true;
+    auto const jump_stamp = connection.submit(jump);
+    auto const jumping = wait_for(simulation, [&](auto const &state) {
+        return state.players.at(lc1::PlayerId{1}).input_sequence == jump_stamp.sequence;
+    });
+    check(jumping->player(lc1::PlayerId{1}).pose.position().y > 0,
+          "jumping is accepted again after attack recovery");
 
     // A burst of render frames can release a key before the worker consumes its press.
     input.view.look_delta = {};
@@ -259,6 +269,34 @@ void independent_players()
     second.submit({});
     auto const saved = simulation.checkpoint().get();
     check(saved.session.players.size() == 2, "host checkpoint includes both players");
+}
+
+void control_transfer_requests_are_consumed_once()
+{
+    Checkpoint checkpoint;
+    lc1::GameSimulation simulation{lc1::Save{checkpoint.directory}, "dialogs/catalog.yaml"};
+    auto connection = simulation.connect(lc1::PlayerId{1});
+    auto const original = simulation.snapshot()->players.at(lc1::PlayerId{1}).character_id;
+    auto const second = lc1::CharacterId{2};
+    auto const third = lc1::CharacterId{100024};
+    connection.transfer_control(second);
+    auto const first_change = wait_for(simulation, [&](auto const &state) {
+        return state.players.at(lc1::PlayerId{1}).character_id == second;
+    });
+    connection.transfer_control(third);
+    auto const next_change = wait_for(simulation, [&](auto const &state) {
+        return state.tick > first_change->tick &&
+               state.players.at(lc1::PlayerId{1}).character_id == third;
+    });
+    auto const following_tick = wait_for(
+        simulation, [&](auto const &state) { return state.tick >= next_change->tick + 1; });
+    check(following_tick->players.at(lc1::PlayerId{1}).character_id == third,
+          "a consumed transfer request does not return on the next tick");
+    auto const settled = wait_for(
+        simulation, [&](auto const &state) { return state.tick >= next_change->tick + 6; });
+    check(settled->players.at(lc1::PlayerId{1}).character_id == third &&
+              settled->players.at(lc1::PlayerId{1}).character_id != original,
+          "successive control transfers do not replay an earlier request");
 }
 
 void equipment_and_tool_messages()
@@ -345,6 +383,7 @@ int main()
         fixed_rate_and_messages();
         one_shot_inputs();
         independent_players();
+        control_transfer_requests_are_consumed_once();
         equipment_and_tool_messages();
         failure_and_shutdown();
         std::cout << "game simulation tests passed\n";

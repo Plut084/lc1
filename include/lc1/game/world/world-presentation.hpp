@@ -11,12 +11,15 @@
 #include "lc1/vk/render/output-settings.hpp"
 #include "lc1/vk/resources/gpu-font.hpp"
 
+#include <array>
+
 namespace lc1 {
 
 struct WorldPresentationInput {
     bool cycle_lighting = false;
     bool toggle_showcase_motion = false;
     int exposure_steps = 0;
+    bool first_person = false;
 };
 
 struct GameLocation {
@@ -77,12 +80,12 @@ class WorldPresentation {
   private:
     void update_lighting();
     void update_instances();
+    void update_particles(float delta_seconds);
 
     // Main-thread snapshot and immutable continent borrows; both outlive this presentation.
     WorldSnapshot const *world_;
     Continent const *continent_;
     PlayerId observer_;
-    std::size_t observed_model_index_ = 0;
 
     struct WeaponModel {
         scene::SceneModel *model;
@@ -102,15 +105,32 @@ class WorldPresentation {
         std::uint64_t hit_sequence = 0;
         bool dead = false;
         std::map<std::uint32_t, WeaponModel> weapons;
-        scene::SceneLight *flashlight = nullptr;
+        scene::SceneLight *hand_light = nullptr;
         bool uses_flashlight = false;
+
+        struct FlameParticle {
+            glm::vec3 position;
+            glm::vec3 velocity;
+            float age;
+            float lifetime;
+            float variation;
+            bool spark;
+        };
+
+        std::vector<FlameParticle> particles;
+        glm::vec3 previous_tip{};
+        float emission = 0;
+        std::uint32_t particle_sequence = 0;
+        bool burning = false;
         scene::SceneModel *helmet = nullptr;
         std::optional<std::size_t> head_mount;
+        std::optional<std::size_t> eyes_mount;
+        glm::mat4 eyes_offset{1};
         std::optional<std::size_t> idle_animation;
         std::optional<std::size_t> move_animation;
+        std::optional<std::size_t> run_animation;
         std::optional<std::size_t> body_attack_animation;
         std::optional<std::size_t> death_animation;
-        glm::vec3 previous_position{};
     };
 
     std::vector<CharacterModels> character_models_;
@@ -136,14 +156,15 @@ class WorldPresentation {
     std::vector<scene::SceneModel *> showcase_models_;
     std::vector<scene::SceneLight *> lights_;
 
+    float flame_time_ = 0;
     scene::GpuModel helmet_model_;
     MaterialInfo helmet_material_{
         .parameters = {.metallic_factor = 1.0F, .roughness_factor = 0.35F}};
-    std::optional<std::size_t> eyes_node_index_;
     // Declared after assets: scene instances borrow their meshes and materials.
     scene::Scene scene_;
     OutputSettings output_;
     std::size_t lighting_mode_ = 0;
+    bool first_person_ = false;
     bool showcase_animated_ = true;
     float showcase_time_ = 0.0F;
     double time_of_day_ = 9.0; // Hours, wrapped to [0, 24).

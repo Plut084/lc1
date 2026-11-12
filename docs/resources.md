@@ -58,7 +58,11 @@ Scene 不拥有 GPU 资产，也不认识角色等玩法类型。
 并在攻击序号变化时播放武器动作。Scene 继续独占实例，GPU 资源与材质仍由表现层拥有。
 角色名单和物品定义在表现层存活期间保持不变；主手关联可随快照切换，重新加载通过替换完整会话完成。
 Scene 的 `SceneModel` 拥有 `ModelInstance`（节点姿态和播放状态），借用完整的 `GpuModel` 和材质，由同一资产初始化姿态并取得 GPU 网格，
-并保存游戏层提交的世界矩阵与可见性、阴影／深度偏移标记。上述借用在条目删除前必须存活且不移动。
+并保存游戏层提交的世界矩阵与可见性、阴影／深度偏移标记。
+`visible` 控制整个实例是否提交；`view_visible`、`use_view_indices` 与节点掩码只控制相机光栅绘制，仍提交完整投影几何。
+蒙皮的可选 `view_index_count` 表示身体索引前缀；DrawItem 的同名字段为空时绘制全部，为零时只保留阴影/GI。
+索引范围在资产构造与渲染输入入口校验；颜色和阴影接收面光栅通道读取相同前缀，TLAS/BLAS 和 DDGI 使用完整索引。
+切换相机可见性会使阴影时间历史失效，帧容量不变。上述借用在条目删除前必须存活且不移动。
 每次世界更新后，表现层提交角色最终世界矩阵，Scene 通过 `update_animations()` 推进所有模型动画，
 通过 `SceneModel::node_world_matrix()` 查询最终挂点，在 `draws()` 中展开模型节点。
 角色变换仍是 GameWorld 的权威状态，Scene 中的世界矩阵只是单向提交的表现副本，不能反向修改玩法位置。
@@ -121,6 +125,10 @@ OBJ、程序化顶点/索引构造生成一个引用网格 0 的单位根节点�
 占位角色的 `Eyes` 节点挂在头部下；表现层保存挂点索引，在动画更新后向 Scene 查询，
 把眼睛世界变换（位置与旋转）交给第一人称相机。
 
+glTF 导入只读取几何、层级、蒙皮与动画，不自动导入材质绑定。默认 `GltfMaterialPolicy::WarnIfPresent`
+在源文件带材质时提示调用方绑定绘制材质；已由 `ModelConfig.material` 提供外部材质的角色/武器加载路径
+显式使用 `UseExternal`，不再对此预期行为报警。该选项不跳过几何、蒙皮、扩展或贴图加载校验。
+
 当前 `WorldPresentation` 按角色与武器的 YAML 模型配置加载 GPU 资源；相同配置共享资源与材质，
 占位几何另外按身体尺寸区分，贴图按规范路径和色彩空间共享。
 刚性模型的 CPU 几何在 GpuModel 构造返回前释放；蒙皮资产保留绑定姿态几何和权重；
@@ -172,6 +180,18 @@ Scene 的 DrawItem 保存本帧变形顶点的不可变快照。Renderer 在各�
 保留骨架、权重与待机、跑步、攻击、死亡、玩笑五段动画并原样提取底色贴图。
 透明护盾和使用零缩放切换可见性的其他片段属于尚未实现的特效路径，不纳入人物变体；原文件不修改。
 `runtime/saves/01` 和 `blacksmith` 中 lc 使用该变体；已有 checkpoint 保留自己的外观配置，不自动迁移。
+
+yyx 使用 `models/yone/封魔剑魂.glb`。`python scripts/prepare-yone.py yone` 从 `models/yone/source.glb`
+生成模型及 `textures/yone/base-color.png`，将原文件的四张底色图拼为一张图集并改写各网格的 UV，
+以适配当前单模型单材质绑定。原文件的节点、骨骼和动画保持不变；已有 checkpoint 仍保留自己的外观配置。
+铁匠使用 `models/western-yone/西部魔影_炽天使_永恩.glb`。`python scripts/prepare-yone.py western-yone`
+从同目录的 `source.glb` 生成模型及 `textures/western-yone/base-color.png`，并只保留兼容可逆变换约束的
+待机、行走、攻击、死亡与玩笑动画。两份原始 GLB 都已从 `unused/` 移入对应的模型目录。
+
+北极星使者_彗使用 `models/winterblessed-hwei/北极星使者_彗.glb`。`python scripts/prepare-winterblessed-hwei.py` 从同目录的
+`source.glb` 提取两张内嵌贴图，分别缩放至 1024×1024 后合成为 `textures/winterblessed-hwei/base-color.png`。
+子网格共享 UV accessor，按各子网格索引引用的顶点仅改写一次 UV，映射至对应图集区域；模型保留原始动画，种子存档的
+3 号角色使用 `Idle1_Base`、`RunSlow`、`RunFast`、`Attack1_A`、`Death` 和 `Joke`。
 
 CPU 导入测试覆盖权重混合、逆绑定矩阵、网格局部空间、独立实例和非法绑定；
 可额外执行 `lc1_model_loading_tests <rumble.glb>` 逐段采样真实资源。

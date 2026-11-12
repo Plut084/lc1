@@ -24,8 +24,9 @@ void insert_unique(Map &map, std::uint32_t keyid, Value value, std::string_view 
 
 } // namespace
 
-GameWorld::GameWorld(Save const &save, std::filesystem::path const &dialog_catalog)
-    : setup_(demo::world_setup(save.continent())), dialogs_(dialog_catalog)
+GameWorld::GameWorld(Save const &save, std::filesystem::path const &dialog_catalog,
+                     std::filesystem::path const &asset_root)
+    : asset_root_(asset_root), setup_(demo::world_setup(save.continent())), dialogs_(dialog_catalog)
 {
     load(save);
 }
@@ -69,7 +70,7 @@ void GameWorld::load(Save const &save)
     }
     if (save.has_example()) {
         example_ = character_by_id(save.example(), "AI example");
-        if (setup_.example_patrol &&
+        if (example_->controller() == nullptr && setup_.example_patrol &&
             (save.states().empty() || save.states().at(save.example()).patrol)) {
             auto waypoints = setup_.example_patrol->route;
             if (waypoints.empty())
@@ -129,7 +130,12 @@ void GameWorld::build_world(Save const &save)
     for (auto const &entry : save.weapons()) {
         auto const &record = entry.second;
         std::unique_ptr<Weapon> weapon;
-        WeaponProperty const property{.attack = record.attack, .range = record.range};
+        auto const duration = configured_animation_duration(
+            record.model.value(), record.model.value().action_animation.value(), asset_root_);
+        WeaponProperty const property{.attack = record.attack,
+                                      .range = record.range,
+                                      .attack_duration =
+                                          duration > 0 ? duration : combat::swing_duration};
         // Decode the saved discriminator once; use() dispatches through the definition.
         switch (record.action.value()) {
         case WeaponAction::MeleeAttack:
@@ -137,6 +143,9 @@ void GameWorld::build_world(Save const &save)
             break;
         case WeaponAction::RangedAttack:
             weapon = std::make_unique<RangedWeapon>(record.keyid, property, record.model.value());
+            break;
+        case WeaponAction::Torch:
+            weapon = std::make_unique<Torch>(record.keyid, property, record.model.value());
             break;
         case WeaponAction::ToggleLight:
             weapon = std::make_unique<Flashlight>(record.keyid, property, record.model.value());
@@ -166,6 +175,8 @@ void GameWorld::build_world(Save const &save)
             .equipment = {},
             .main_hand = nullptr,
             .model = record.model.value(),
+            .attack_animation_duration = configured_animation_duration(
+                record.model.value(), record.model.value().attack_animation.value(), asset_root_),
         };
         for (auto const &slot : record.equipment)
             config.equipment[slot.first] = equipments_.at(slot.second).get();
@@ -429,6 +440,27 @@ Character &GameWorld::player(PlayerId id)
 Character const &GameWorld::player(PlayerId id) const
 {
     return *players_.at(id).character;
+}
+
+bool GameWorld::transfer_control(PlayerId id, CharacterId target)
+{
+    auto &player = players_.at(id);
+    auto found = characters_.find(target.value);
+    if (found == characters_.end() || found->second->dead() ||
+        std::ranges::any_of(players_, [&](auto const &entry) {
+            return entry.first != id && entry.second.character == found->second.get();
+        }))
+        return false;
+    auto *next = found->second.get();
+    if (next == player.character)
+        return true;
+    auto *controller = player.character->controller();
+    player.character->set_controller(next->controller());
+    next->set_controller(controller);
+    player.character = next;
+    player.controls = {};
+    player.interaction_target = nullptr;
+    return true;
 }
 
 std::map<PlayerId, WorldPlayer> const &GameWorld::players() const

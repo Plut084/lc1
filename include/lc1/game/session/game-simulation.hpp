@@ -24,7 +24,8 @@ class GameSimulation {
     static constexpr std::uint32_t tick_rate = 60;
     static constexpr float step_seconds = 1.0F / tick_rate;
 
-    explicit GameSimulation(Save const &save, std::filesystem::path const &dialog_catalog);
+    explicit GameSimulation(Save const &save, std::filesystem::path const &dialog_catalog,
+                            std::filesystem::path const &asset_root = "runtime/assets");
 
     GameSimulation(GameSimulation const &) = delete;
     GameSimulation &operator=(GameSimulation const &) = delete;
@@ -36,6 +37,7 @@ class GameSimulation {
     class Connection {
       public:
         InputStamp submit(PlayerControls input) const;
+        void transfer_control(CharacterId target) const;
         PlayerId player_id() const;
 
       private:
@@ -55,6 +57,7 @@ class GameSimulation {
 
   private:
     InputStamp submit(PlayerId id, PlayerControls input);
+    void transfer_control(PlayerId id, CharacterId target);
     void run(std::stop_token stop);
 
     struct PlayerInput {
@@ -68,6 +71,7 @@ class GameSimulation {
     mutable std::mutex mutex_;
     std::condition_variable_any wake_;
     std::map<PlayerId, PlayerInput> inputs_;
+    std::map<PlayerId, CharacterId> transfer_requests_;
     std::uint64_t tick_ = 0;
     std::vector<std::promise<SerializedWorld>> checkpoint_requests_;
     std::shared_ptr<WorldSnapshot const> snapshot_;

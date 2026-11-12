@@ -10,10 +10,12 @@ compile_commands.json
 .idea/
 *.user
 
-# Huge files assets
-runtime/assets/
+# Local save checkpoints
 runtime/saves/*/checkpoint.yaml
 runtime/saves/*/checkpoint.yaml.tmp
 
 # AI
 .claude/
+
+# Local assets that are not referenced by the game or asset-generation scripts.
+runtime/assets/unused/

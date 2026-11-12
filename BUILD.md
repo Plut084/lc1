@@ -48,18 +48,24 @@ have a `default` profile:
 conan profile detect
 ```
 
-External resources under `runtime/assets/` are not included in the repository.
-Place the required assets there. For compilation or CPU tests, an empty directory
-satisfies the asset copy step; it does not supply the assets needed to run the game.
-The seed lc character uses the supplied Rumble model. After placing
-`银河魔装机神_兰博.glb` under `runtime/assets/lc-res/`, run
-`python scripts/prepare-rumble.py` once to generate its runtime variant and body atlas.
-The original file is preserved; generated assets remain under the ignored asset directory.
+Active files under `runtime/assets/` and documentation images are versioned with Git LFS. Install
+Git LFS before cloning, then initialize it and download resources in an existing checkout:
 
 ```sh
-mkdir -p runtime/assets
+git lfs install
+git lfs pull
 make
 ```
+
+A checkout made with LFS smudging disabled contains text pointers instead of usable
+resources; run `git lfs pull` before building or running the game. See
+[resource versioning](docs/resources.md#资源版本管理git-lfs) for the tracking policy.
+Runtime resources are grouped under `models/`, `textures/`, and `fonts/`.
+Unreferenced local resources live under `runtime/assets/unused/`, which is ignored
+by Git and excluded from build output. Builds recreate only the generated assets
+directory so removed resources cannot remain as stale copies.
+The prepared Rumble variant and atlas are included. After changing `models/rumble/source.glb`,
+run `python scripts/prepare-rumble.py` and commit the updated generated assets together.
 
 `make` defaults to `PLATFORM=linux-x86_64`, `BUILD_TYPE=Debug`, and `JOBS=8`.
 It installs dependencies and configures CMake when preparing a build tree, then
@@ -208,10 +214,11 @@ The detected compiler must be MSVC and provide the C++23 features used by the pr
 other versions have not been validated by the Windows CI configuration. If you change
 toolchains, update your profile to match the active toolchain and move the old
 build tree aside before reinstalling dependencies.
-Supply assets separately; the empty directory below only satisfies the build step.
+Install Git LFS and retrieve the versioned assets before configuring.
 
 ```bat
-if not exist runtime\assets mkdir runtime\assets
+git lfs install
+git lfs pull
 conan install . -pr:a default -pr:a ./profiles/windows --build=missing -s:h build_type=Debug -s:b build_type=Release
 cmake --preset windows-x86_64-debug
 cmake --build --preset windows-x86_64-debug

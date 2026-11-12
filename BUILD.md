@@ -51,6 +51,10 @@ conan profile detect
 External resources under `runtime/assets/` are not included in the repository.
 Place the required assets there. For compilation or CPU tests, an empty directory
 satisfies the asset copy step; it does not supply the assets needed to run the game.
+The seed lc character uses the supplied Rumble model. After placing
+`银河魔装机神_兰博.glb` under `runtime/assets/lc-res/`, run
+`python scripts/prepare-rumble.py` once to generate its runtime variant and body atlas.
+The original file is preserved; generated assets remain under the ignored asset directory.
 
 ```sh
 mkdir -p runtime/assets
@@ -295,6 +299,9 @@ do not include launching the game or validating GPU rendering.
   `<print>`, executable `-static`, and KTX 4.4.2's missing `astcenc-avx2-static`
   companion archive from the same package. Link flags belong in CMake; profile
   `*_FLAGS_INIT` changes do not update an existing cache. TinyGLTF filenames use UTF-8.
-- MinGW project C++ targets use `-Wa,-mbig-obj` in CMake so template-heavy Debug
-  objects can exceed the ordinary COFF section limit. The separate reflect-cpp
-  dependency receives the same option through `profiles/mingw64`.
+- Windows project C++ targets use large COFF objects: `/bigobj` for MSVC and
+  clang-cl, `-Wa,-mbig-obj` for MinGW. CMake probes and applies the appropriate
+  option before declaring targets, including libraries, the application, and tests.
+  This avoids C1128 / section-limit failures in template-heavy Debug objects such
+  as `save.cpp`. The separate MinGW reflect-cpp dependency receives its option
+  through `profiles/mingw64`.

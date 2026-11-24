@@ -320,6 +320,9 @@ void checkpoint_round_trip()
     example.patrol = false;
     auto &recruit =
         *std::ranges::find(data.characters, 100025, &lc1::SerializedCharacterConfig::keyid);
+    recruit.base_walk_speed = 8;
+    recruit.run_speed_bonus = 6;
+    recruit.jump_height = 2;
     recruit.party = 1;
     recruit.name = "Recruit \u4f19\u4f34";
     auto &destination = *std::ranges::find(data.parties, 1, &lc1::SerializedParty::keyid);
@@ -330,6 +333,9 @@ void checkpoint_round_trip()
     lc1::Save const saved{scratch.directory()};
     check(saved.characters().at(100025).party == 1 &&
               saved.characters().at(100025).name == recruit.name &&
+              saved.characters().at(100025).base_walk_speed.value() == 8 &&
+              saved.characters().at(100025).run_speed_bonus.value() == 6 &&
+              saved.characters().at(100025).jump_height.value() == 2 &&
               std::ranges::contains(saved.parties().at(1).members, 100025U) &&
               !std::ranges::contains(saved.parties().at(3).members, 100025U),
           "replacement checkpoint restores both sides of recruitment and UTF-8 names");
@@ -453,10 +459,19 @@ void model_configuration_round_trip()
     auto const root = std::filesystem::path{__FILE__}.parent_path() / "fixtures";
     std::ifstream character_stream{root / "character-model.yaml"};
     std::ifstream weapon_stream{root / "weapon-model.yaml"};
-    auto const character = rfl::yaml::read<lc1::ModelConfig, rfl::NoOptionals>(character_stream);
+    auto character = rfl::yaml::read<lc1::ModelConfig, rfl::NoOptionals>(character_stream);
     auto const weapon = rfl::yaml::read<lc1::ModelConfig, rfl::NoOptionals>(weapon_stream);
     check(character && weapon, "model fixtures decode");
+    check(character->animation_name(lc1::CharacterAnimation::Action) == "Nod" &&
+              character->animation_name(lc1::CharacterAnimation::Sprint).empty(),
+          "legacy action binding is available and missing sprint stays unbound");
+    character->animation_bindings.value() = {{"Walk", "Idle"}, {"Idle", "Idle"}};
+    check(character->animation_name(lc1::CharacterAnimation::Walk) == "Idle" &&
+              character->animation_name(lc1::CharacterAnimation::Idle) == "Idle" &&
+              character->animation_name(lc1::CharacterAnimation::Action) == "Nod",
+          "explicit bindings can reuse asset clips and coexist with legacy slots");
     data.characters.front().model = *character;
+    data.characters.front().jump_height = 2;
     data.weapons.front().model = *weapon;
     for (auto &record : data.characters)
         record.main_hand = 0;
@@ -469,6 +484,9 @@ void model_configuration_round_trip()
     lc1::GameWorld const world{restored,
                                root.parent_path().parent_path() / "runtime/dialogs/catalog.yaml"};
     auto const snapshot = world.snapshot();
+    check(world.characters().front()->jump_height() == 2 &&
+              snapshot.characters.front().jump_height.value() == 2,
+          "configured jump height reaches runtime physics and survives snapshot capture");
     check(snapshot.characters.front().model.value() == *character &&
               snapshot.weapons.front().model.value() == *weapon,
           "runtime objects retain model configuration for saving without a device");
@@ -481,6 +499,9 @@ void model_configuration_round_trip()
               data.characters.back().main_hand,
           "multiple characters share a weapon definition with independent placements");
     data.characters.back().main_hand = 0;
+    data.characters.front().model.value().animation_bindings.value()["UnknownAction"] = "Idle";
+    rejects_write([&] { lc1::Save::write(scratch.directory(), data); }, "animation binding");
+    data.characters.front().model.value().animation_bindings.value().erase("UnknownAction");
     data.characters.front().model.value().material.value().roughness = -1.0F;
     rejects_write([&] { lc1::Save::write(scratch.directory(), data); }, "invalid PBR");
     check(lc1::Save{scratch.directory()}

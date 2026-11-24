@@ -5,6 +5,7 @@
 #include "lc1/vk/presentation/swapchain-policy.hpp"
 #include "lc1/vk/render/render-graph.hpp"
 
+#include <bit>
 #include <imgui.h>
 #include <imgui_freetype.h>
 #include <imgui_impl_glfw.h>
@@ -14,9 +15,53 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <string_view>
 
 namespace lc1::app {
 namespace {
+
+class Parser {
+  public:
+    static ApplicationConfig parse(int argc, char const *const *argv)
+    {
+        ApplicationConfig config;
+#ifdef NDEBUG
+        config.enable_validation = false;
+#endif
+        for (int index = 1; index < argc; ++index) {
+            std::string_view const option = argv[index];
+            if (option == "--no-validation") {
+                config.enable_validation = false;
+                continue;
+            }
+            if (option != "--asset-root" && option != "--save-root" && option != "--player-id" &&
+                option != "--device")
+                fail("unknown argument: {}", option);
+
+            if (++index == argc)
+                fail("{} requires a value", option);
+            std::string_view const value = argv[index];
+            if (value.empty() || value.starts_with("--"))
+                fail("{} requires a value", option);
+
+            if (option == "--asset-root")
+                config.asset_root = value;
+            else if (option == "--save-root")
+                config.save_root = value;
+            else if (option == "--device")
+                config.device_filter = value;
+            else {
+                auto const [end, error] = std::from_chars(value.data(), value.data() + value.size(),
+                                                          config.local_player.value);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    config.local_player.value == 0)
+                    fail("{} must be a nonzero player id", option);
+            }
+        }
+        return config;
+    }
+};
 
 constexpr double event_wait_timeout_seconds = 0.1;
 
@@ -70,11 +115,8 @@ struct PickedDevice {
 };
 
 PickedDevice pick_physical_device(std::vector<vk::raii::PhysicalDevice> &devices,
-                                  vk::SurfaceKHR surface)
+                                  vk::SurfaceKHR surface, std::string_view device_filter)
 {
-    char const *const want = std::getenv("LC1_DEVICE");
-    bool const filtered = want != nullptr && *want != '\0';
-
     PickedDevice best{.device = nullptr, .queue_family = 0};
     int best_score = -1; // negative means nothing has been picked yet
 
@@ -90,7 +132,7 @@ PickedDevice pick_physical_device(std::vector<vk::raii::PhysicalDevice> &devices
             continue;
         if (props.apiVersion < vk::ApiVersion14)
             continue;
-        if (filtered && std::strstr(props.deviceName, want) == nullptr)
+        if (!std::string_view{props.deviceName.data()}.contains(device_filter))
             continue;
 
         auto const family = find_graphics_present_family(device, surface);
@@ -107,8 +149,8 @@ PickedDevice pick_physical_device(std::vector<vk::raii::PhysicalDevice> &devices
     // best_score, not the handle, says whether anything was picked: a raii
     // wrapper offers no null-handle comparison.
     if (best_score < 0) {
-        if (filtered) {
-            fail("LC1_DEVICE=\"{}\" matched no usable device", want);
+        if (!device_filter.empty()) {
+            fail("--device \"{}\" matched no usable device", device_filter);
         }
         fail("no suitable Vulkan 1.4 device found (need a non-CPU device with "
              "ray query, acceleration structures, buffer device address, all requested features, "
@@ -117,7 +159,7 @@ PickedDevice pick_physical_device(std::vector<vk::raii::PhysicalDevice> &devices
     return best;
 }
 
-Device make_device(Instance const &instance, Surface const &surface)
+Device make_device(Instance const &instance, Surface const &surface, std::string_view device_filter)
 {
     DeviceRequirements requirements{
         .vulkan_version = vk::ApiVersion14,
@@ -161,7 +203,7 @@ Device make_device(Instance const &instance, Surface const &surface)
         for (auto const &reason : reasons)
             spdlog::info("\t- {}", reason);
     }
-    auto picked = pick_physical_device(devices, surface.raii());
+    auto picked = pick_physical_device(devices, surface.raii(), device_filter);
     return Device{instance, std::move(*picked.device), picked.queue_family, requirements};
 }
 
@@ -191,24 +233,27 @@ PFN_vkVoidFunction load_imgui_vulkan_function(char const *name, void *user_data)
 
 } // namespace
 
-Application::Application(ApplicationConfig config)
-    : config_(std::move(config)), window_{1280, 720, "lc1"},
+Application::Application(int argc, char const *const *argv)
+    : config_(Parser::parse(argc, argv)), window_{1280, 720, "lc1"},
       instance_{make_instance(loader_, window_, config_.enable_validation)},
-      surface_{instance_, window_}, device_{make_device(instance_, surface_)},
+      surface_{instance_, window_},
+      device_{make_device(instance_, surface_, config_.device_filter)},
       surface_format_{
-          pick_surface_format(device_.raii_physical().getSurfaceFormatsKHR(surface_.raii()))},
+          pick_surface_format(device_.raii_physical().getSurfaceFormatsKHR(surface_.raii())),
+      },
       renderer_{device_,
                 {surface_format_.format},
                 std::min(device_.max_sample_count(), vk::SampleCountFlagBits::e4)},
+      preview_renderer_{device_, {vk::Format::eR8G8B8A8Unorm}, vk::SampleCountFlagBits::e1},
       simulation_(std::make_unique<GameSimulation>(
           Save{config_.save_root}, config_.dialog_root / "catalog.yaml", config_.asset_root)),
-      game_(std::make_unique<GameSession>(device_, config_.asset_root, *simulation_,
-                                          config_.save_root,
-                                          output_settings(surface_format_.format), &window_,
-                                          config_.local_player, renderer_.cloud_settings(),
-                                          config_.ui_settings_file)),
-      frame_loop_(std::make_unique<FrameLoop<FrameResources>>(device_, [this] {
-          return renderer_.make_frame_resources(game_->world_presentation().object_capacity());
+      game_(std::make_unique<GameSession>(
+          device_, config_.asset_root, *simulation_, config_.save_root,
+          output_settings(surface_format_.format), &window_, config_.local_player,
+          renderer_.cloud_settings(), config_.ui_settings_file)),
+      frame_loop_(std::make_unique<FrameLoop<ApplicationFrame>>(device_, [this] {
+          return ApplicationFrame{
+              renderer_.make_frame_resources(game_->world_presentation().object_capacity()), {}};
       }))
 {
     spdlog::info("[world] WASD: walk, wheel: zoom, Shift: run, Y: camera lock, Space: "
@@ -274,6 +319,15 @@ void Application::init_imgui_vulkan(std::uint32_t min_image_count)
     };
     if (!ImGui_ImplVulkan_Init(&init_info))
         fail("the imgui Vulkan backend could not initialize");
+    if (!preview_image_)
+        preview_image_.emplace(device_, vk::Format::eR8G8B8A8Unorm, vk::Extent2D{512, 768}, 1,
+                               vk::SampleCountFlagBits::e1,
+                               vk::ImageUsageFlagBits::eColorAttachment |
+                                   vk::ImageUsageFlagBits::eSampled,
+                               vk::ImageAspectFlagBits::eColor);
+    // ImGui stores an opaque Vulkan descriptor handle in its 64-bit texture identifier.
+    preview_texture_ = std::bit_cast<std::uint64_t>(ImGui_ImplVulkan_AddTexture(
+        *preview_image_->view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
     imgui_image_count_ = static_cast<std::uint32_t>(swapchain_->images().size());
 }
 
@@ -357,13 +411,13 @@ void Application::load_game(std::filesystem::path const &directory)
     try {
         auto simulation = std::make_unique<GameSimulation>(
             Save{directory}, config_.dialog_root / "catalog.yaml", config_.asset_root);
-        auto next =
-            std::make_unique<GameSession>(device_, config_.asset_root, *simulation, directory,
-                                          game_->world_presentation().output(), &window_,
-                                          config_.local_player, renderer_.cloud_settings(),
-                                          config_.ui_settings_file);
-        auto frames = std::make_unique<FrameLoop<FrameResources>>(device_, [&] {
-            return renderer_.make_frame_resources(next->world_presentation().object_capacity());
+        auto next = std::make_unique<GameSession>(
+            device_, config_.asset_root, *simulation, directory,
+            game_->world_presentation().output(), &window_, config_.local_player,
+            renderer_.cloud_settings(), config_.ui_settings_file);
+        auto frames = std::make_unique<FrameLoop<ApplicationFrame>>(device_, [&] {
+            return ApplicationFrame{
+                renderer_.make_frame_resources(next->world_presentation().object_capacity()), {}};
         });
         auto const extent = window_.framebuffer_extent();
         if (extent.height != 0)
@@ -393,9 +447,10 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
 {
     Stopwatch stopwatch;
     // Construct once; FrameLoop invokes the callback synchronously and never retains it.
-    FrameLoop<FrameResources>::RecordCallback const record = [this](CommandBuffer &command_buffer,
-                                                                    FrameResources &resources,
-                                                                    RenderTarget const &target) {
+    FrameLoop<ApplicationFrame>::RecordCallback const record = [this](CommandBuffer &command_buffer,
+                                                                      ApplicationFrame &frame,
+                                                                      RenderTarget const &target) {
+        auto &resources = frame.world;
         auto const &presentation = game_->world_presentation();
         auto const &camera = game_->player_view().camera();
         // Text items own their strings and remain alive until graph.execute() returns.
@@ -406,6 +461,46 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
                 game_->ui().screen_labels(game_->world(), game_->player_id(), presentation.font(),
                                           window_.framebuffer_extent(), presentation.location()),
         };
+        if (auto const request = game_->ui().character_preview()) {
+            auto preview =
+                request->resource
+                    ? presentation.item_preview(*request->resource, request->yaw, request->zoom)
+                    : presentation.character_preview(request->character, request->yaw,
+                                                     request->zoom);
+            auto &scene = preview.scene;
+            auto const count = static_cast<std::uint32_t>(scene.draw_count());
+            if (!frame.preview || count > frame.preview_capacity) {
+                frame.preview.reset();
+                frame.preview.emplace(preview_renderer_.make_frame_resources(count));
+                frame.preview_capacity = count;
+            }
+            preview_image_->transition_layout(
+                command_buffer.raii(),
+                preview_initialized_ ? vk::ImageLayout::eShaderReadOnlyOptimal
+                                     : vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eColorAttachmentOptimal,
+                preview_initialized_ ? vk::PipelineStageFlagBits2::eFragmentShader
+                                     : vk::PipelineStageFlagBits2::eNone,
+                preview_initialized_ ? vk::AccessFlagBits2::eShaderSampledRead
+                                     : vk::AccessFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                vk::AccessFlagBits2::eColorAttachmentWrite);
+            preview_renderer_.record(command_buffer, *frame.preview,
+                                     {&preview_image_->view(), preview_image_->extent()}, scene,
+                                     preview.camera,
+                                     {.exposure = 1.2F,
+                                      .bloom_strength = 0,
+                                      .encoding = output_settings(surface_format_.format).encoding,
+                                      .transparent_background = true});
+            preview_image_->transition_layout(command_buffer.raii(),
+                                              vk::ImageLayout::eColorAttachmentOptimal,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal,
+                                              vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                              vk::AccessFlagBits2::eColorAttachmentWrite,
+                                              vk::PipelineStageFlagBits2::eFragmentShader,
+                                              vk::AccessFlagBits2::eShaderSampledRead);
+            preview_initialized_ = true;
+        }
         RenderGraph graph;
         renderer_.add_passes(graph, resources, target, presentation.scene(), camera,
                              presentation.output(), text);
@@ -440,10 +535,8 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         graph.execute(command_buffer);
     };
 
-    while (!window_.should_close() && !stop_requested()) {
+    while (!game_->quit_requested() && !stop_requested()) {
         window_.poll_events();
-        if (window_.should_close() || stop_requested())
-            break;
 
         if (auto directory = game_->take_save_request()) {
             save_game(*directory);
@@ -465,7 +558,7 @@ void Application::run_loop(std::function<bool()> const &stop_requested)
         ImGui::NewFrame();
 
         auto const delta_seconds = stopwatch.tick();
-        game_->update(delta_seconds, window_.input());
+        game_->update(delta_seconds, window_.input(), preview_texture_);
         if (game_->quit_requested())
             break;
 

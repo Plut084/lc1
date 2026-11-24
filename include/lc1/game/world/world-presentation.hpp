@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lc1/audio/audio.hpp"
+#include "lc1/game/character/character-model.hpp"
 #include "lc1/game/continent/view.hpp"
 #include "lc1/game/debug/pbr-showcase.hpp"
 #include "lc1/game/world/world-snapshot.hpp"
@@ -12,10 +13,17 @@
 #include "lc1/vk/resources/gpu-font.hpp"
 
 #include <array>
+#include <map>
 
 namespace lc1 {
 
 class DialogCatalog;
+
+struct FogSettings {
+    bool enabled = true;
+    float start = 300;
+    float end = 2000;
+};
 
 struct WorldPresentationInput {
     bool cycle_lighting = false;
@@ -27,6 +35,11 @@ struct WorldPresentationInput {
 struct GameLocation {
     std::string_view region;
     std::string_view place;
+};
+
+struct CharacterPreview {
+    scene::Scene scene;
+    scene::FpsCamera camera;
 };
 
 // Manages GPU resources.
@@ -55,6 +68,9 @@ class WorldPresentation {
     void update_listener(scene::FpsCamera const &camera);
     glm::mat4 observer_eye_transform() const;
     scene::Scene const &scene() const;
+    // Shares GPU assets; returned poses include the selected character and current equipment.
+    CharacterPreview character_preview(CharacterId id, float yaw, float zoom = 1) const;
+    CharacterPreview item_preview(std::uint32_t resource, float yaw, float zoom = 1) const;
     std::vector<WorldTextItem> world_labels(scene::FpsCamera const &camera) const;
 
     OutputSettings const &output() const;
@@ -72,6 +88,7 @@ class WorldPresentation {
     int grass_density() const;
     // UI-validated density level in [0, 8], where 4 is the default.
     void set_grass_density(int density);
+    FogSettings &fog_settings();
 
     std::uint32_t object_capacity() const;
 
@@ -102,7 +119,6 @@ class WorldPresentation {
         std::optional<std::size_t> mount;
         std::optional<std::size_t> attack_animation;
         std::uint64_t attack_sequence;
-        std::optional<std::size_t> nod_animation;
         std::uint64_t nod_sequence;
         std::uint64_t hit_sequence = 0;
         bool dead = false;
@@ -128,11 +144,18 @@ class WorldPresentation {
         std::optional<std::size_t> head_mount;
         std::optional<std::size_t> eyes_mount;
         glm::mat4 eyes_offset{1};
-        std::optional<std::size_t> idle_animation;
-        std::optional<std::size_t> move_animation;
-        std::optional<std::size_t> run_animation;
-        std::optional<std::size_t> body_attack_animation;
-        std::optional<std::size_t> death_animation;
+        std::array<std::optional<std::size_t>, character_animation_count> animations{};
+        std::optional<std::size_t> crouch_animation;
+        std::optional<std::size_t> prone_animation;
+        std::vector<std::pair<std::size_t, scene::NodeTransform>> proportion_pose;
+        std::optional<RemielMotion> remiel_motion;
+
+        std::optional<std::size_t> animation(CharacterAnimation action) const
+        {
+            return animations[static_cast<std::size_t>(action)];
+        }
+
+        std::optional<std::size_t> locomotion(bool moving, bool running) const;
     };
 
     std::vector<CharacterModels> character_models_;
@@ -148,8 +171,12 @@ class WorldPresentation {
         MaterialInfo material;
 
         ModelResources(Device const &device, std::filesystem::path const &asset_root,
-                       ModelConfig const &config, CharacterBody const &body);
+                       ModelConfig const &config, CharacterBody const &body,
+                       MaterialInfo const &material);
     };
+
+    ModelResources &resources_for(Device const &device, std::filesystem::path const &asset_root,
+                                  ModelConfig const &config, CharacterBody const &body);
 
     std::map<std::pair<std::filesystem::path, TextureColorSpace>, std::unique_ptr<GpuTexture>>
         model_textures_;
@@ -162,7 +189,16 @@ class WorldPresentation {
     scene::GpuModel helmet_model_;
     MaterialInfo helmet_material_{
         .parameters = {.metallic_factor = 1.0F, .roughness_factor = 0.35F}};
+
     // Declared after assets: scene instances borrow their meshes and materials.
+    struct PreviewItem {
+        scene::GpuModel model;
+        MaterialInfo material;
+
+        PreviewItem(Device const &device, scene::Model model) : model(device, std::move(model)) {}
+    };
+
+    std::map<std::uint32_t, std::unique_ptr<PreviewItem>> preview_items_;
     scene::Scene scene_;
     OutputSettings output_;
     std::size_t lighting_mode_ = 0;
@@ -172,6 +208,7 @@ class WorldPresentation {
     double time_of_day_ = 9.0; // Hours, wrapped to [0, 24).
     float time_rate_ = 1.0F;
     int grass_density_ = 4;
+    FogSettings fog_settings_;
     std::vector<std::pair<scene::SceneModel *, int>> grass_models_;
     scene::SceneLight *sun_ = nullptr; // Scene-owned, valid until scene_ is destroyed.
     audio::AudioContext audio_context_;

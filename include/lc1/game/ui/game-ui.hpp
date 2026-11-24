@@ -13,24 +13,25 @@
 
 namespace lc1 {
 class MusicBrowser;
+struct FogSettings;
+class PlayerView;
+class WorldPresentation;
 struct GameLocation;
 
-struct GameUiInfo {
+struct GameUiContext {
     WorldSnapshot const &world;
-    CharacterId player;
-    std::vector<Party const *> player_parties; // Parties related to current player
+    PlayerId player_id;
+    WorldPresentation const &presentation;
+    PlayerView const &player_view;
+    Window const &window;
+    MusicBrowser &music;
     std::span<std::string const> saves;
     std::string_view current_save;
-    FrameExtent extent;
-    std::string_view lighting_name;
-    float exposure;
-    double time_of_day;
-    float time_rate;
-    int grass_density;
-    bool showcase_animated;
-    std::string_view interaction_target;
+    float debug_flight_speed = 1;
     // Live renderer configuration; null when the caller does not render clouds.
     CloudSettings *clouds = nullptr;
+    FogSettings *fog = nullptr;
+    std::uint64_t character_preview_texture = 0;
 };
 
 struct GameUiActions {
@@ -42,17 +43,27 @@ struct GameUiActions {
     std::optional<float> volume;
     std::optional<float> time_rate;
     std::optional<int> grass_density;
+    std::optional<float> debug_flight_speed;
     std::optional<EquipmentRequest> equipment;
     std::optional<CharacterId> control_target;
+    std::optional<ProportionsRequest> proportions;
+};
+
+struct CharacterPreviewRequest {
+    CharacterId character;
+    float yaw;
+    float zoom;
+    std::optional<std::uint32_t> resource;
 };
 
 class GameUi {
   public:
-    explicit GameUi(std::filesystem::path settings_file = {});
+    explicit GameUi(std::filesystem::path settings_file);
 
-    GameUiActions update(GameUiInfo const &info, MusicBrowser &music);
+    GameUiActions update(GameUiContext const &context);
 
     bool gameplay_enabled() const;
+    std::optional<CharacterPreviewRequest> character_preview() const;
 
     void open_save(std::string_view name);
 
@@ -76,7 +87,7 @@ class GameUi {
                                               GameLocation location) const;
 
   private:
-    void player_info(GameUiInfo const &info, GameUiActions &actions);
+    void player_info(GameUiContext const &info, GameUiActions &actions);
     void persist_ui_scale() const;
 
     enum class State { MainMenu, InSettings, InGame };
@@ -92,6 +103,11 @@ class GameUi {
     std::optional<std::uint32_t> selected_party_;
     std::optional<CharacterId> selected_character_;
     std::optional<std::uint32_t> selected_resource_;
+    std::array<char, 64> inventory_search_{};
+    std::optional<CharacterPreviewRequest> character_preview_;
+    float preview_yaw_ = -20;
+    float preview_zoom_ = 1;
+    bool preview_item_ = false;
     int inventory_category_ = 0;
     int selected_slot_ = -1;
     float slot_position_ = 0;

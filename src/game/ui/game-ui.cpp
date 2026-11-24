@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -52,18 +53,21 @@ void unavailable_button(char const *label, char const *reason)
         ImGui::SetTooltip("%s", reason);
 }
 
-CharacterSnapshot const *party_info(GameUiInfo const &info, ImVec2 size,
+CharacterSnapshot const *party_info(GameUiContext const &info, ImVec2 size,
                                     std::optional<std::uint32_t> &party_id,
                                     std::optional<CharacterId> &character_id)
 {
-    auto const *player = &info.world.character(info.player);
+    auto const player_id = info.world.players.at(info.player_id).character_id;
+    auto const *player = &info.world.character(player_id);
     auto const *selected = player;
-    auto const &parties = info.player_parties;
+    auto parties = info.world.parties | std::views::filter([player_id](Party const &party) {
+                       return party.leader() == player_id || party.has_member(player_id);
+                   });
     auto current = std::ranges::find_if(
-        parties, [&](auto const *party) { return party_id == party->keyid(); });
+        parties, [&](Party const &party) { return party_id == party.keyid(); });
     if (current == parties.end())
         current = parties.begin();
-    Party const *party = current != parties.end() ? *current : nullptr;
+    Party const *party = current != parties.end() ? &*current : nullptr;
     std::vector<CharacterSnapshot const *> people;
     auto const resolve_selection = [&] {
         people.clear();
@@ -91,10 +95,10 @@ CharacterSnapshot const *party_info(GameUiInfo const &info, ImVec2 size,
         auto const preview = party ? std::format("Party {}", party->keyid()) : "No party";
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::BeginCombo("##party", preview.c_str())) {
-            for (auto const *candidate : parties) {
-                auto const label = std::format("Party {}", candidate->keyid());
-                if (ImGui::Selectable(label.c_str(), candidate == party)) {
-                    party = candidate;
+            for (auto const &candidate : parties) {
+                auto const label = std::format("Party {}", candidate.keyid());
+                if (ImGui::Selectable(label.c_str(), &candidate == party)) {
+                    party = &candidate;
                     character_id.reset();
                 }
             }
@@ -166,6 +170,111 @@ void character_stats(CharacterSnapshot const &person, ImVec2 size)
     ImGui::EndChild();
 }
 
+// Resolution-independent inventory artwork shared by rows, tooltips and detail cards.
+void item_icon(game::Resource const &resource, ImVec2 origin, float size)
+{
+    auto *draw = ImGui::GetWindowDrawList();
+    auto const p = [=](float x, float y) {
+        return ImVec2{origin.x + x * size, origin.y + y * size};
+    };
+    auto const line = [=](float x, float y, float x2, float y2, ImU32 color, float width = 0.035F) {
+        draw->AddLine(p(x, y), p(x2, y2), color, size * width);
+    };
+    constexpr auto steel = IM_COL32(174, 192, 201, 255);
+    constexpr auto edge = IM_COL32(223, 232, 227, 255);
+    constexpr auto leather = IM_COL32(143, 92, 51, 255);
+    constexpr auto gold = IM_COL32(221, 177, 85, 255);
+    draw->AddRectFilled(origin, p(1, 1), IM_COL32(25, 31, 35, 255), size * 0.12F);
+    switch (resource.keyid) {
+    case 1:
+        for (float y : {0.68F, 0.52F, 0.36F}) {
+            draw->AddEllipseFilled(p(0.5F, y), {size * 0.29F, size * 0.14F}, gold);
+            draw->AddEllipse(p(0.5F, y), {size * 0.23F, size * 0.09F}, IM_COL32(130, 88, 31, 255));
+        }
+        break;
+    case 2:
+        for (float y : {0.36F, 0.60F}) {
+            line(0.25F, y + 0.1F, 0.7F, y - 0.05F, leather, 0.22F);
+            draw->AddCircleFilled(p(0.25F, y + 0.1F), size * 0.11F, gold);
+            draw->AddCircle(p(0.25F, y + 0.1F), size * 0.06F, leather);
+        }
+        break;
+    case 3: {
+        std::array points{p(0.17F, 0.65F), p(0.32F, 0.3F), p(0.74F, 0.25F), p(0.86F, 0.56F),
+                          p(0.69F, 0.75F)};
+        draw->AddConvexPolyFilled(points.data(), points.size(), steel);
+        line(0.32F, 0.3F, 0.4F, 0.58F, edge);
+        line(0.4F, 0.58F, 0.86F, 0.56F, edge);
+        break;
+    }
+    case 4:
+        draw->AddCircleFilled(p(0.5F, 0.46F), size * 0.29F, steel);
+        draw->AddRectFilled(p(0.21F, 0.43F), p(0.79F, 0.78F), steel, size * 0.04F);
+        line(0.29F, 0.51F, 0.71F, 0.51F, IM_COL32(30, 37, 42, 255), 0.08F);
+        line(0.5F, 0.24F, 0.5F, 0.71F, edge, 0.05F);
+        break;
+    case 5: {
+        std::array points{p(0.29F, 0.2F), p(0.43F, 0.28F), p(0.57F, 0.28F), p(0.71F, 0.2F),
+                          p(0.8F, 0.43F), p(0.68F, 0.5F),  p(0.71F, 0.8F),  p(0.29F, 0.8F),
+                          p(0.32F, 0.5F), p(0.2F, 0.43F)};
+        draw->AddPolyline(points.data(), points.size(), steel, ImDrawFlags_Closed, size * 0.1F);
+        draw->AddRectFilled(p(0.34F, 0.36F), p(0.66F, 0.77F), steel, size * 0.05F);
+        line(0.5F, 0.35F, 0.5F, 0.73F, edge);
+        break;
+    }
+    case 6:
+        for (float x : {0.22F, 0.54F}) {
+            draw->AddRectFilled(p(x, 0.22F), p(x + 0.18F, 0.7F), leather, size * 0.03F);
+            draw->AddRectFilled(p(x, 0.61F), p(x + 0.27F, 0.8F), leather, size * 0.05F);
+            line(x, 0.31F, x + 0.18F, 0.31F, gold);
+        }
+        break;
+    case 1004:
+        draw->PathArcTo(p(0.28F, 0.5F), size * 0.34F, -1.3F, 1.3F);
+        draw->PathStroke(leather, 0, size * 0.055F);
+        line(0.37F, 0.17F, 0.37F, 0.83F, edge, 0.018F);
+        line(0.23F, 0.5F, 0.8F, 0.5F, steel, 0.02F);
+        draw->AddTriangleFilled(p(0.86F, 0.5F), p(0.73F, 0.44F), p(0.73F, 0.56F), steel);
+        break;
+    case 1005:
+        line(0.3F, 0.76F, 0.6F, 0.38F, steel, 0.18F);
+        line(0.52F, 0.32F, 0.73F, 0.47F, gold, 0.16F);
+        line(0.68F, 0.24F, 0.78F, 0.12F, gold, 0.025F);
+        break;
+    case 1006:
+        line(0.37F, 0.84F, 0.58F, 0.38F, leather, 0.11F);
+        draw->AddTriangleFilled(p(0.42F, 0.44F), p(0.65F, 0.1F), p(0.75F, 0.47F),
+                                IM_COL32(239, 103, 35, 255));
+        draw->AddTriangleFilled(p(0.49F, 0.46F), p(0.62F, 0.26F), p(0.68F, 0.48F),
+                                IM_COL32(255, 216, 106, 255));
+        break;
+    default:
+        line(0.31F, 0.73F, 0.74F, 0.23F, steel, 0.09F);
+        draw->AddTriangleFilled(p(0.7F, 0.24F), p(0.8F, 0.16F), p(0.77F, 0.3F), edge);
+        line(0.27F, 0.59F, 0.48F, 0.76F, gold, 0.06F);
+        line(0.21F, 0.86F, 0.33F, 0.72F, leather, 0.07F);
+        break;
+    }
+}
+
+void item_summary(game::Resource const &resource, std::uint32_t quantity)
+{
+    auto const origin = ImGui::GetCursorScreenPos();
+    float const available = ImGui::GetContentRegionAvail().x;
+    bool const side_by_side = available >= 230.0F;
+    float const size = std::min(96.0F, available);
+    item_icon(resource, origin, size);
+    ImGui::Dummy({size, size});
+    if (side_by_side)
+        ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::TextWrapped("%s", resource.name.c_str());
+    ImGui::Text("Quantity: %u", quantity);
+    ImGui::Text("Each: %.2f kg", resource.weight / 1000.0);
+    ImGui::Text("Stack: %.2f kg", quantity * (resource.weight / 1000.0));
+    ImGui::EndGroup();
+}
+
 std::vector<game::ResourceStack> inventory_items(game::Bag const &bag, int category,
                                                  std::vector<std::uint32_t> const &order)
 {
@@ -194,7 +303,8 @@ std::vector<game::ResourceStack> inventory_items(game::Bag const &bag, int categ
 
 game::Resource const *inventory_panel(CharacterSnapshot const &person, ImVec2 size, int &category,
                                       std::optional<std::uint32_t> &resource_id,
-                                      std::vector<std::uint32_t> &order)
+                                      std::vector<std::uint32_t> &order,
+                                      std::array<char, 64> &search)
 {
     auto const &bag = person.bag;
     auto const *selected =
@@ -221,7 +331,20 @@ game::Resource const *inventory_panel(CharacterSnapshot const &person, ImVec2 si
                 order.clear();
             }
         }
-        auto const items = inventory_items(bag, category, order);
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##inventory-search", "Search items...", search.data(),
+                                 search.size());
+        auto items = inventory_items(bag, category, order);
+        if (search[0]) {
+            std::string_view const query{search.data()};
+            std::erase_if(items, [&](auto const &item) {
+                auto const &name = game::find_resource(item.keyid)->name;
+                return std::search(name.begin(), name.end(), query.begin(), query.end(),
+                                   [](unsigned char a, unsigned char b) {
+                                       return std::tolower(a) == std::tolower(b);
+                                   }) == name.end();
+            });
+        }
         float const footer = ImGui::GetFrameHeightWithSpacing();
         if (ImGui::BeginChild("Items", {0, -footer}, ImGuiChildFlags_None,
                               ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
@@ -273,19 +396,17 @@ game::Resource const *inventory_panel(CharacterSnapshot const &person, ImVec2 si
                 if (show_details)
                     ImGui::OpenPopup("Item details");
                 if (ImGui::BeginPopup("Item details")) {
-                    ImGui::TextUnformatted(resource->name.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("Unit weight: %.2f kg", resource->weight / 1000.0);
-                    ImGui::Text("Quantity: %u", item.quantity);
-                    ImGui::Text("Total weight: %.2f kg",
-                                item.quantity * (resource->weight / 1000.0));
+                    item_summary(*resource, item.quantity);
                     ImGui::EndPopup();
                 }
                 auto *draw = ImGui::GetWindowDrawList();
-                draw->AddRectFilled(
-                    {position.x + icon_margin, position.y + icon_margin},
-                    {position.x + icon_margin + icon_size, position.y + icon_margin + icon_size},
-                    IM_COL32(155, 159, 155, 255), 4 * scale);
+                item_icon(*resource, {position.x + icon_margin, position.y + icon_margin},
+                          icon_size);
+                if (ImGui::IsItemHovered() && !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                    ImGui::BeginTooltip();
+                    item_summary(*resource, item.quantity);
+                    ImGui::EndTooltip();
+                }
                 draw->AddText({position.x + text_offset, position.y + text_margin},
                               ImGui::GetColorU32(ImGuiCol_Text), resource->name.c_str());
                 auto const detail = std::format("x{}   {:.2f} kg", item.quantity,
@@ -306,39 +427,51 @@ game::Resource const *inventory_panel(CharacterSnapshot const &person, ImVec2 si
     return selected;
 }
 
-void character_preview(CharacterSnapshot const &person, ImVec2 size)
+bool draw_character_preview(CharacterSnapshot const &person, game::Resource const *item,
+                            bool &preview_item, ImVec2 size, std::uint64_t texture, float &yaw,
+                            float &zoom)
 {
-    if (ImGui::BeginChild("Character preview", size, ImGuiChildFlags_Borders)) {
-        panel_heading("APPEARANCE");
-        ImGui::TextUnformatted(person.name.c_str());
-        auto const origin = ImGui::GetCursorScreenPos();
+    bool visible = ImGui::BeginChild("Character preview", size, ImGuiChildFlags_Borders);
+    if (visible) {
+        if (ImGui::RadioButton("Character", !preview_item))
+            preview_item = false;
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!item);
+        if (ImGui::RadioButton("Item", preview_item))
+            preview_item = true;
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        ImGui::TextUnformatted(preview_item && item ? item->name.c_str() : person.name.c_str());
         auto const available = ImGui::GetContentRegionAvail();
-        float const height = std::max(100.0F, available.y - ImGui::GetTextLineHeightWithSpacing());
-        float const unit = std::min(available.x / 4.0F, height / 8.0F);
-        ImVec2 const center{origin.x + available.x * 0.5F, origin.y + height * 0.5F};
-        auto *draw = ImGui::GetWindowDrawList();
-        auto const body_color = IM_COL32(155, 159, 155, 255);
-        draw->AddCircleFilled({center.x, center.y - unit * 2.6F}, unit * 0.65F, body_color);
-        draw->AddRectFilled({center.x - unit * 0.8F, center.y - unit * 1.75F},
-                            {center.x + unit * 0.8F, center.y + unit * 0.7F}, body_color,
-                            unit * 0.25F);
-        for (float side : {-1.0F, 1.0F}) {
-            draw->AddLine({center.x + side * unit, center.y - unit * 1.5F},
-                          {center.x + side * unit * 1.35F, center.y + unit * 0.7F}, body_color,
-                          unit * 0.35F);
-            draw->AddLine({center.x + side * unit * 0.4F, center.y + unit * 0.5F},
-                          {center.x + side * unit * 0.55F, center.y + unit * 3.1F}, body_color,
-                          unit * 0.5F);
+        float const height =
+            std::min(std::max(1.0F, available.y - ImGui::GetFrameHeightWithSpacing()),
+                     available.x * (768.0F / 512.0F));
+        float const width = height * (512.0F / 768.0F);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (available.x - width) * 0.5F);
+        auto const image_origin = ImGui::GetCursorScreenPos();
+        if (texture)
+            ImGui::Image(texture, {width, height});
+        ImGui::SetCursorScreenPos(image_origin);
+        ImGui::InvisibleButton("Rotate character", {width, height});
+        if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+                yaw = std::remainder(yaw + ImGui::GetIO().MouseDelta.x * 0.6F, 360.0F);
+            zoom = std::clamp(zoom + ImGui::GetIO().MouseWheel * 0.08F, 0.7F, 1.5F);
         }
-        ImGui::Dummy({available.x, height});
-        ImGui::TextDisabled("Silhouette preview");
+        if (ImGui::Button("Reset view")) {
+            yaw = -20;
+            zoom = 1;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Drag to rotate");
     }
     ImGui::EndChild();
+    return visible;
 }
 
 void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resource const *resource,
-                       int &slot, float &slot_position, float &slot_target, GameUiInfo const &info,
-                       GameUiActions &actions)
+                       int &slot, float &slot_position, float &slot_target,
+                       GameUiContext const &info, GameUiActions &actions)
 {
     auto const armor =
         resource ? info.world.equipments.find(resource->keyid) : info.world.equipments.end();
@@ -392,8 +525,8 @@ void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resou
         ImGui::EndChild();
         ImGui::SetCursorPos(start);
         if (ImGui::BeginChild("Item cards", {cards_width, content_height})) {
-            float const card_height =
-                std::max(70.0F * scale, (ImGui::GetContentRegionAvail().y - gap) * 0.5F);
+            float const card_height = std::clamp((ImGui::GetContentRegionAvail().y - gap) * 0.34F,
+                                                 125.0F * scale, 145.0F * scale);
             constexpr std::array equipment_types{EquipmentType::Head, EquipmentType::Body,
                                                  EquipmentType::Foot};
             bool const has_current =
@@ -434,10 +567,16 @@ void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resou
                 }
                 ImGui::EndChild();
             }
-            if (resource && resource->category == game::ResourceCategory::Equipment) {
+            if (resource) {
                 if (ImGui::BeginChild("Selected equipment", {0, 0}, ImGuiChildFlags_Borders)) {
-                    ImGui::TextColored(accent, "SELECTED EQUIPMENT");
-                    ImGui::TextWrapped("%s", resource->name.c_str());
+                    ImGui::TextColored(accent, "SELECTED ITEM");
+                    item_summary(*resource, person.bag.quantity_of(resource->keyid));
+                    if (resource->keyid == game::wood.keyid)
+                        ImGui::TextWrapped("Timber for forging and crafting.");
+                    else if (resource->keyid == game::pig_iron.keyid)
+                        ImGui::TextWrapped("Raw iron for the blacksmith's forge.");
+                    else if (resource->keyid == game::moneta.keyid)
+                        ImGui::TextWrapped("Coins used for goods and services.");
                     if (armor != info.world.equipments.end()) {
                         ImGui::Text("Slot: %s",
                                     std::string{to_string(armor->second.type())}.c_str());
@@ -447,25 +586,26 @@ void equipment_details(CharacterSnapshot const &person, ImVec2 size, game::Resou
                         ImGui::TextUnformatted("Slot: Main hand");
                         if (weapon->second.action() == WeaponAction::ToggleLight)
                             ImGui::TextUnformatted("Left click: toggle light");
+                        else if (weapon->second.action() == WeaponAction::Torch)
+                            ImGui::TextWrapped("Burns while held. Lights the surrounding area.");
                         else {
                             ImGui::Text("Attack: %.1f", weapon->second.property().attack);
                             ImGui::Text("Range: %.1f m", weapon->second.property().range);
                         }
                     }
-                    ImGui::Text("Unit weight: %.2f kg", resource->weight / 1000.0);
-                    ImGui::Text("Quantity: %u", person.bag.quantity_of(resource->keyid));
                 }
                 ImGui::EndChild();
             }
         }
         ImGui::EndChild();
-        bool controllable = person.keyid == info.player.value;
+        auto const player_id = info.world.players.at(info.player_id).character_id;
+        bool controllable = person.keyid == player_id.value;
         for (auto const &party : info.world.parties)
-            if (party.leader() == info.player && party.has_member(CharacterId{person.keyid}))
+            if (party.leader() == player_id && party.has_member(CharacterId{person.keyid}))
                 controllable = std::ranges::none_of(info.world.players, [&](auto const &entry) {
                     return entry.second.character_id == CharacterId{person.keyid};
                 });
-        controllable = controllable && !person.dead && !info.world.character(info.player).dead;
+        controllable = controllable && !person.dead && !info.world.character(player_id).dead;
         ImGui::BeginDisabled(!controllable || (armor == info.world.equipments.end() &&
                                                weapon == info.world.weapons.end()));
         if (ImGui::Button("Equip"))
@@ -543,11 +683,11 @@ void clouds(lc1::CloudSettings *settings)
     int view_steps = static_cast<int>(clouds.view_steps);
     ImGui::SetNextItemWidth(180.0F * ui_scale());
     if (ImGui::SliderInt("View steps", &view_steps, 8, 256, "%d", ImGuiSliderFlags_AlwaysClamp))
-        clouds.view_steps = static_cast<std::uint32_t>(std::clamp(view_steps, 8, 256));
+        clouds.view_steps = static_cast<std::uint32_t>(view_steps);
     int light_steps = static_cast<int>(clouds.light_steps);
     ImGui::SetNextItemWidth(180.0F * ui_scale());
     if (ImGui::SliderInt("Light steps", &light_steps, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp))
-        clouds.light_steps = static_cast<std::uint32_t>(std::clamp(light_steps, 1, 16));
+        clouds.light_steps = static_cast<std::uint32_t>(light_steps);
     constexpr std::array<char const *, 5> const debug_names{"Off", "Density", "Sun transmittance",
                                                             "View transmittance", "Step count"};
     int debug = static_cast<int>(clouds.debug);
@@ -628,8 +768,9 @@ void GameUi::toggle_menu()
     }
 }
 
-GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
+GameUiActions GameUi::update(GameUiContext const &info)
 {
+    character_preview_.reset();
     GameUiActions actions;
 
     // Rebuild from the unscaled defaults so changing the slider never accumulates rounding error.
@@ -646,16 +787,17 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
         ImGui::SetNextWindowSize({380.0F * scale, 710.0F * scale}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSizeConstraints({300.0F * scale, 0.0F}, {FLT_MAX, FLT_MAX});
         ImGui::Begin("lc1 debug info");
-        auto [w, h] = info.extent;
-        ImGui::TextUnformatted(std::format("Window size: {}x{}", w, h).c_str());
+        auto const [width, height] = info.window.framebuffer_extent();
+        ImGui::TextUnformatted(std::format("Window size: {}x{}", width, height).c_str());
         ImGui::TextUnformatted(std::format("FPS: {}", ImGui::GetIO().Framerate).c_str());
-        ImGui::TextUnformatted(std::format("Lighting: {}", info.lighting_name).c_str());
-        ImGui::Text("Exposure: %.2f", info.exposure);
-        auto const minutes = static_cast<int>(info.time_of_day * 60.0);
+        ImGui::TextUnformatted(
+            std::format("Lighting: {}", info.presentation.lighting_name()).c_str());
+        ImGui::Text("Exposure: %.2f", info.presentation.output().exposure);
+        auto const minutes = static_cast<int>(info.presentation.time_of_day() * 60.0);
         ImGui::Text("Time: %02d:%02d", minutes / 60, minutes % 60);
         ImGui::TextUnformatted("Time rate");
         ImGui::SameLine();
-        float rate = info.time_rate;
+        float rate = info.presentation.time_rate();
         ImGui::SetNextItemWidth(90.0F * ui_scale_);
         bool changed = ImGui::InputFloat("##time-rate-input", &rate, 0, 0, "%.2f");
         ImGui::SameLine();
@@ -664,11 +806,32 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
                                       ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
         if (changed && std::isfinite(rate))
             actions.time_rate = std::clamp(rate, 0.01F, 100.0F);
-        int density = info.grass_density;
+        float flight_speed = info.debug_flight_speed;
+        if (ImGui::SliderFloat("Flight speed", &flight_speed, 0.1F, 100.0F, "%.2fx",
+                               ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+            actions.debug_flight_speed = flight_speed;
+        int density = info.presentation.grass_density();
         auto const density_label = std::format("{}%%", density * 25);
         if (ImGui::SliderInt("Grass density", &density, 0, 8, density_label.c_str(),
                              ImGuiSliderFlags_AlwaysClamp))
             actions.grass_density = std::clamp(density, 0, 8);
+        if (info.fog) {
+            auto &fog = *info.fog;
+            ImGui::Checkbox("Fog", &fog.enabled);
+            ImGui::BeginDisabled(!fog.enabled);
+            float start = fog.start;
+            float end = fog.end;
+            bool fog_changed = ImGui::DragFloat("Fog start (m)", &start, 10, 0, end - 1, "%.0f",
+                                                ImGuiSliderFlags_AlwaysClamp);
+            fog_changed |= ImGui::DragFloat("Fog end (m)", &end, 25, start + 1, 1000000, "%.0f",
+                                            ImGuiSliderFlags_AlwaysClamp);
+            if (fog_changed && std::isfinite(start) && std::isfinite(end) && start >= 0 &&
+                end > start) {
+                fog.start = start;
+                fog.end = end;
+            }
+            ImGui::EndDisabled();
+        }
         clouds(info.clouds);
         if (ImGui::Button("Save game (F6)"))
             open_save(info.current_save);
@@ -679,20 +842,22 @@ GameUiActions GameUi::update(GameUiInfo const &info, MusicBrowser &music)
         }
         ImGui::TextUnformatted(save_status_.c_str());
         ImGui::TextUnformatted(
-            std::format("Showcase motion: {}", info.showcase_animated ? "on" : "off").c_str());
-        ImGui::TextUnformatted(std::format("interaction_target: {}", info.interaction_target.empty()
+            std::format("Showcase motion: {}", info.presentation.showcase_animated() ? "on" : "off")
+                .c_str());
+        auto const &interaction_target = info.world.players.at(info.player_id).interaction_target;
+        ImGui::TextUnformatted(std::format("interaction_target: {}", interaction_target.empty()
                                                                          ? "not found"
-                                                                         : info.interaction_target)
+                                                                         : interaction_target)
                                    .c_str());
 
         if (ImGui::Button("Close (Esc)"))
             state_ = State::InGame;
 
-        music.controls();
+        info.music.controls();
 
         ImGui::End();
     }
-    music.update();
+    info.music.update();
 
     constexpr ImGuiWindowFlags menu_flags =
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
@@ -803,6 +968,11 @@ std::vector<ScreenTextItem> GameUi::screen_labels(WorldSnapshot const &world, Pl
     labels.push_back(
         ScreenTextItem{.text = save_status_, .position = {24.0F, 108.0F}, .line_height = 22.0F});
 
+    if (world.player(observer).pose.debug_flying)
+        labels.push_back(ScreenTextItem{.text = "Flight | Space: up | Ctrl: down | P: off",
+                                        .position = {24.0F, 138.0F},
+                                        .line_height = 22.0F});
+
     auto const *dialog = player.dialog ? &*player.dialog : nullptr;
     if (!player.interaction_target.empty() && !dialog) {
         ScreenTextItem interact_text{
@@ -851,7 +1021,7 @@ void GameUi::toggle_player_info()
         player_info_opened_ = !player_info_opened_;
 }
 
-void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
+void GameUi::player_info(GameUiContext const &info, GameUiActions &actions)
 {
     float const scale = ui_scale();
     auto const *viewport = ImGui::GetMainViewport();
@@ -873,22 +1043,38 @@ void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
     ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(104, 86, 55, 255));
     if (ImGui::Begin("Character & inventory", &player_info_opened_,
                      ImGuiWindowFlags_HorizontalScrollbar)) {
-        auto const &controlled = info.world.character(info.player);
+        auto const &controlled = info.world.player(info.player_id);
         ImGui::SetNextItemWidth(260.0F * ui_scale());
         if (ImGui::BeginCombo("Control", controlled.name.c_str())) {
             for (auto const &candidate : info.world.characters) {
                 bool const occupied =
                     std::ranges::any_of(info.world.players, [&](auto const &entry) {
                         return entry.second.character_id == CharacterId{candidate.keyid} &&
-                               candidate.keyid != info.player.value;
+                               candidate.keyid != controlled.keyid;
                     });
                 ImGui::BeginDisabled(candidate.dead || occupied);
                 auto const label = std::format("{}##{}", candidate.name, candidate.keyid);
-                if (ImGui::Selectable(label.c_str(), candidate.keyid == info.player.value))
+                if (ImGui::Selectable(label.c_str(), candidate.keyid == controlled.keyid))
                     actions.control_target = CharacterId{candidate.keyid};
                 ImGui::EndDisabled();
             }
             ImGui::EndCombo();
+        }
+        if (auto giant = std::ranges::find(info.world.characters, 10U, &CharacterSnapshot::keyid);
+            giant != info.world.characters.end() &&
+            selected_character_.value_or(CharacterId{controlled.keyid}) ==
+                CharacterId{giant->keyid}) {
+            auto proportions = giant->proportions;
+            ImGui::SetNextItemWidth(220);
+            bool changed =
+                ImGui::SliderFloat("Giant body scale", &proportions.scale, 0.001F, 100, "%.3fx",
+                                   ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(220);
+            changed |= ImGui::SliderFloat("Giant leg height", &proportions.leg_height_scale, 0.5F,
+                                          3, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+            if (changed)
+                actions.proportions = ProportionsRequest{CharacterId{giant->keyid}, proportions};
         }
         auto available = ImGui::GetContentRegionAvail();
         available.x = std::max(720.0F * scale, available.x);
@@ -912,9 +1098,15 @@ void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
         ImGui::SameLine();
         character_stats(*person, {right, top});
         auto const previous_resource = selected_resource_;
-        auto const *resource = inventory_panel(*person, {left, bottom}, inventory_category_,
-                                               selected_resource_, inventory_order_);
+        auto const *resource =
+            inventory_panel(*person, {left, bottom}, inventory_category_, selected_resource_,
+                            inventory_order_, inventory_search_);
+        if (!resource)
+            preview_item_ = false;
         if (resource && previous_resource != selected_resource_) {
+            preview_item_ = true;
+            preview_yaw_ = -20;
+            preview_zoom_ = 1;
             if (auto const found = info.world.equipments.find(resource->keyid);
                 found != info.world.equipments.end())
                 selected_slot_ = static_cast<int>(found->second.type());
@@ -925,7 +1117,11 @@ void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
                 slot_target_ = static_cast<float>(selected_slot_);
         }
         ImGui::SameLine();
-        character_preview(*person, {middle, bottom});
+        if (draw_character_preview(*person, resource, preview_item_, {middle, bottom},
+                                   info.character_preview_texture, preview_yaw_, preview_zoom_))
+            character_preview_ = CharacterPreviewRequest{
+                CharacterId{person->keyid}, preview_yaw_, preview_zoom_,
+                preview_item_ && resource ? std::optional{resource->keyid} : std::nullopt};
         ImGui::SameLine();
         equipment_details(*person, {right, bottom}, resource, selected_slot_, slot_position_,
                           slot_target_, info, actions);
@@ -938,6 +1134,11 @@ void GameUi::player_info(GameUiInfo const &info, GameUiActions &actions)
 } // namespace lc1
 
 namespace lc1 {
+
+std::optional<CharacterPreviewRequest> GameUi::character_preview() const
+{
+    return character_preview_;
+}
 
 bool GameUi::gameplay_enabled() const
 {

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "lc1/game/character/animation-motion.hpp"
 #include "lc1/game/character/bag.hpp"
 #include "lc1/game/character/character-body.hpp"
 #include "lc1/game/character/character-controller.hpp"
 #include "lc1/game/character/character-id.hpp"
 #include "lc1/game/character/character-intent.hpp"
+#include "lc1/game/character/character-proportions.hpp"
 #include "lc1/game/character/combat.hpp"
 #include "lc1/game/character/equipment.hpp"
 #include "lc1/game/character/weapon.hpp"
@@ -52,8 +54,11 @@ struct CharacterConfig {
     Weapon *main_hand = nullptr;
     ModelConfig model;
 
+    std::optional<AnimationMotion> animation_motion;
     float attack_animation_duration = 0; // Resolved from CPU animation data during world assembly.
     float health_lost = 0;
+    float base_walk_speed = 4.5F;
+    float run_speed_bonus = 4.5F;
 
     float max_health() const { return 1.0F * static_cast<float>(level) + 100.F; }
 
@@ -63,9 +68,9 @@ struct CharacterConfig {
 
     float agility() const { return 0.1F * static_cast<float>(level); }
 
-    float walk_speed() const { return 4.5F + glm::log(1.0F + agility()); }
+    float walk_speed() const { return base_walk_speed + glm::log(1.0F + agility()); }
 
-    float run_speed() const { return walk_speed() + 4.5F; }
+    float run_speed() const { return walk_speed() + run_speed_bonus; }
 };
 
 // One upright, ground-level character, independent of input devices and cameras.
@@ -73,7 +78,8 @@ struct CharacterConfig {
 class Character {
   public:
     Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
-              CharacterBody body = {}, CharacterMotionSettings motion_settings = {});
+              CharacterBody body = {}, CharacterMotionSettings motion_settings = {},
+              float crouch_amount = 0, CharacterProportions proportions = {});
 
     Character(Character const &) = delete;
     Character &operator=(Character const &) = delete;
@@ -85,9 +91,20 @@ class Character {
     CharacterId id() const;
 
     std::uint64_t attack_sequence() const;
+
+    bool pointing() const;
+    glm::vec3 point_direction() const;
+
     std::uint64_t nod_sequence() const;
 
     CharacterBody const &body() const;
+    CharacterBody standing_body() const;
+    CharacterBody collision_body() const;
+    CharacterProportions proportions() const;
+    // Returns false without changing proportions when the resized body cannot fit.
+    bool set_proportions(Continent const &continent, CharacterProportions proportions);
+    float crouch_amount() const;
+    float prone_amount() const;
 
     float half_width() const;
 
@@ -123,12 +140,16 @@ class Character {
     void request_jump();
 
     bool on_ground() const;
+    float jump_height() const;
+    bool debug_flying() const;
 
     float attack_progress() const { return attack_elapsed_ / combat::swing_duration; }
 
     bool running() const { return running_; }
 
     bool moving() const { return moving_; }
+
+    std::optional<TimedCharacterAnimation> timed_animation() const;
 
     // Resolves the installed controller once, then applies character rules and physics.
     // A character without a controller receives an empty intent.
@@ -169,6 +190,7 @@ class Character {
 
     void take_damage(float amount);
     bool dead() const;
+    bool reacting_to_hit() const;
     float reaction_time() const;
     std::uint64_t hit_sequence() const;
 
@@ -178,7 +200,23 @@ class Character {
   private:
     // Resolves the requested actions before physics. Called only by update().
     void apply_intent(float delta_seconds, CharacterIntent const &intent);
-    glm::vec3 walking_velocity(glm::vec3 direction, bool running, bool face_movement);
+    void turn_toward(glm::vec3 direction, float delta_seconds);
+    glm::vec3 walking_velocity(glm::vec3 direction, bool running, bool face_movement,
+                               float delta_seconds);
+    float reaction_limit() const;
+
+    float attack_windup() const
+    {
+        return config_.animation_motion ? config_.animation_motion->attack_start : combat::windup;
+    }
+
+    float attack_active_end() const
+    {
+        return config_.animation_motion ? config_.animation_motion->attack_end : combat::active_end;
+    }
+
+    void update_animation_motion(float delta_seconds, Continent const &continent,
+                                 CharacterIntent const &intent);
 
     friend class MeleeWeapon;
     friend class Flashlight;
@@ -193,6 +231,10 @@ class Character {
 
     CharacterConfig config_;
     CharacterBody body_;
+    CharacterProportions proportions_;
+    float crouch_amount_ = 0;
+    float prone_amount_ = 0;
+    bool prone_ = false;
     game::Bag bag_;
 
     bool flashlight_on_ = false;
@@ -204,8 +246,13 @@ class Character {
     std::unique_ptr<Interactable> interactable_;
 
     bool ambient_requests_blocked_ = false;
+    bool pointing_ = false;
+    glm::vec3 point_direction_{0, 0, -1};
     bool running_ = false;
     bool moving_ = false;
+    std::optional<TimedCharacterAnimation> timed_motion_;
+    glm::vec3 animation_move_direction_{};
+    float animation_turn_start_ = 0;
     float weapon_attack_cooldown_ = 0;
     float attack_elapsed_ = combat::swing_duration; // Normalized to the default hit timeline.
     float attack_duration_ = combat::swing_duration;

@@ -22,8 +22,7 @@ std::string slot_name(std::filesystem::path const &directory)
 GameSession::GameSession(Device const &device, std::filesystem::path const &asset_root,
                          GameSimulation &simulation, std::filesystem::path const &save_directory,
                          OutputSettings output, Window *window, PlayerId player,
-                         CloudSettings &clouds,
-                         std::filesystem::path const &ui_settings_file)
+                         CloudSettings &clouds, std::filesystem::path const &ui_settings_file)
     : window_(window), clouds_(&clouds),
       input_router_(default_game_bindings(), GameInputContext::Gameplay), simulation_(&simulation),
       connection_(simulation.connect(player)), snapshot_(*simulation_->snapshot()),
@@ -43,6 +42,7 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
     // reloads because the settings belong to the renderer, not to the session.
     clouds_->enabled = true;
 
+    crouch_toggled_ = snapshot_.player(connection_.player_id()).crouch_amount > 0;
     refresh_saves();
     window_->set_cursor_captured(should_captures_cursor());
     update_title();
@@ -53,11 +53,15 @@ GameSession::GameSession(Device const &device, std::filesystem::path const &asse
                  simulation_->continent().roads().size());
 }
 
-void GameSession::update(float delta_seconds, InputState const &input_state)
+void GameSession::update(float delta_seconds, InputState const &input_state,
+                         std::uint64_t character_preview_texture)
 {
     if (!std::isfinite(delta_seconds) || delta_seconds < 0)
         fail("invalid session frame time");
+    auto const previous_character = snapshot_.players.at(connection_.player_id()).character_id;
     snapshot_ = simulation_->presentation_snapshot();
+    if (snapshot_.players.at(connection_.player_id()).character_id != previous_character)
+        crouch_toggled_ = snapshot_.player(connection_.player_id()).crouch_amount > 0;
     input_router_.update(input_state);
 
     auto &imgui_io = ImGui::GetIO();
@@ -85,9 +89,13 @@ void GameSession::update(float delta_seconds, InputState const &input_state)
     bool const keyboard_save_requested =
         keyboard_enabled && input_router_.pressed(GameAction::SaveGame);
 
+    if (keyboard_enabled && input_router_.pressed(GameAction::ToggleCrouch))
+        crouch_toggled_ = !crouch_toggled_;
+
     player_view_.prepare_input(input_state.cursor_delta(), keyboard_enabled, mouse_enabled);
     auto controls =
         PlayerCharacterController::read_input(input_router_, player_view_.character_input());
+    controls.crouch |= crouch_toggled_;
     if (mouse_enabled)
         player_view_.update_pointer(delta_seconds, input_state, window_->window_size(),
                                     window_->hovered() && !window_->cursor_captured());
@@ -109,6 +117,7 @@ void GameSession::update(float delta_seconds, InputState const &input_state)
         eye_transform = world_presentation_.observer_eye_transform();
     player_view_.update_camera(delta_seconds, snapshot_.player(connection_.player_id()).pose,
                                eye_transform);
+    controls.point_direction = player_view_.camera().forward();
     world_presentation_.update_listener(player_view_.camera());
 
     if (keyboard_save_requested) {
@@ -120,30 +129,25 @@ void GameSession::update(float delta_seconds, InputState const &input_state)
         ui_.open_load();
     }
 
-    auto const player_id = snapshot_.players.at(connection_.player_id()).character_id;
-    std::vector<Party const *> player_parties;
-    for (auto const &party : snapshot_.parties)
-        if (party.leader() == player_id || party.has_member(player_id))
-            player_parties.push_back(&party);
-    auto const ui_actions = ui_.update(
-        {
-            .world = snapshot_,
-            .player = player_id,
-            .player_parties = std::move(player_parties),
-            .saves = saves_,
-            .current_save = slot_name(save_directory_),
-            .extent = window_->framebuffer_extent(),
-            .lighting_name = world_presentation_.lighting_name(),
-            .exposure = world_presentation_.output().exposure,
-            .time_of_day = world_presentation_.time_of_day(),
-            .time_rate = world_presentation_.time_rate(),
-            .grass_density = world_presentation_.grass_density(),
-            .showcase_animated = world_presentation_.showcase_animated(),
-            .interaction_target = snapshot_.players.at(connection_.player_id()).interaction_target,
-            .clouds = clouds_,
-        },
-        music_);
+    auto const ui_actions = ui_.update({
+        .world = snapshot_,
+        .player_id = connection_.player_id(),
+        .presentation = world_presentation_,
+        .player_view = player_view_,
+        .window = *window_,
+        .music = music_,
+        .saves = saves_,
+        .current_save = slot_name(save_directory_),
+        .debug_flight_speed = debug_flight_speed_,
+        .clouds = clouds_,
+        .fog = &world_presentation_.fog_settings(),
+        .character_preview_texture = character_preview_texture,
+    });
+    if (ui_actions.debug_flight_speed)
+        debug_flight_speed_ = *ui_actions.debug_flight_speed;
+    controls.debug_flight_speed = debug_flight_speed_;
     controls.equipment = ui_actions.equipment;
+    controls.proportions = ui_actions.proportions;
     connection_.submit(std::move(controls));
     if (ui_actions.control_target)
         connection_.transfer_control(*ui_actions.control_target);

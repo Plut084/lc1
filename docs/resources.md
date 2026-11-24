@@ -128,12 +128,12 @@ OBJ、程序化顶点/索引构造生成一个引用网格 0 的单位根节点�
 占位角色的 `Eyes` 节点挂在头部下；表现层保存挂点索引，在动画更新后向 Scene 查询，
 把眼睛世界变换（位置与旋转）交给第一人称相机。
 
-glTF 导入只读取几何、层级、蒙皮与动画，不自动导入材质绑定。默认 `GltfMaterialPolicy::WarnIfPresent`
-在源文件带材质时提示调用方绑定绘制材质；已由 `ModelConfig.material` 提供外部材质的角色/武器加载路径
-显式使用 `UseExternal`，不再对此预期行为报警。该选项不跳过几何、蒙皮、扩展或贴图加载校验。
+GLB 导入按 primitive 保留 PBR 材质和对应的内嵌贴图，从 `bufferView` 解码 RGBA8，使用 `TEXCOORD_0`。
+`GpuModel` 按图片索引和色彩空间共享 GPU 纹理，`Scene` 按网格选材质。程序装配仍可通过
+`SceneModel.material` 指定整模材质。GLB 当前沿用不透明绘制和默认采样器，材质扩展与 AO 不参与绘制。
 
 当前 `WorldPresentation` 按角色与武器的 YAML 模型配置加载 GPU 资源；相同配置共享资源与材质，
-占位几何另外按身体尺寸区分，贴图按规范路径和色彩空间共享。
+占位几何另外按身体尺寸区分，YAML 外部贴图按规范路径和色彩空间共享，并逐槽覆盖 GLB 贴图。
 刚性模型的 CPU 几何在 GpuModel 构造返回前释放；蒙皮资产保留绑定姿态几何和权重；
 在 Scene 中为每个角色创建独立 `ModelInstance`，游戏层只保存借用指针。
 占位内容由 `make_character_model()` 构造，身体和头部是两个网格节点，共享定义中有头部左右转动的 `Idle` 和双次点头的 `Nod`；
@@ -153,10 +153,9 @@ glTF 导入只读取几何、层级、蒙皮与动画，不自动导入材质绑
 动画导入 translation/rotation/scale 的 STEP 和 LINEAR，继续使用运行时的完整校验与独立实例播放。
 缓冲范围、步长、属性数量、索引和节点拓扑均在返回模型前检查。
 
-材质绑定尚未导入：文件含材质时记录警告，调用方仍须提供绘制材质。
+模型文件中的图片须存于 GLB 的 `bufferView`。外部贴图由[模型配置](save-data.md#角色与武器的-model)引用。
 稀疏 accessor、必需扩展、压缩 primitive、非三角形、额外顶点属性、透明顶点色、
 CUBICSPLINE、morph 和额外权重组（如 JOINTS_1）明确报错，不产生声称支持这些特性的模型。
-材质仍由 YAML 显式绑定，glTF 材质和透明特效尚未自动接入。
 
 ### 骨骼蒙皮
 
@@ -169,7 +168,10 @@ GLB/glTF 支持一个顶点最多四个关节的线性混合蒙皮。加载器�
 `Model` 保存经过校验的 `SkinnedMesh`：网格节点、关节调色板、逆绑定矩阵、绑定顶点、索引和权重。
 `GpuModel` 对蒙皮资产额外保留这些 CPU 数据；刚性资产继续在上传后释放 CPU 几何。
 `ModelInstance` 使用独立的节点动画姿态，在 CPU 计算
-`inverse(mesh_node) × joint_node × inverse_bind`，按权重混合顶点变换；法线使用混合线性变换的逆转置，
+`inverse(mesh_node) × joint_node × inverse_bind`，按权重混合顶点变换。
+每次 Scene 绘制展开只计算一次实例的模型空间累计矩阵，网格实例与所有蒙皮网格共用这份局部快照，
+不引入跨帧姿态缓存。蒙皮调色板仅保留参与顶点变换的前三行，混合时跳过零权重。
+法线方向由混合线性变换的余因子矩阵与行列式符号计算，归一化后等价于逆转置，复用余因子避免再次求逆。
 切线重新正交化并保留镜像手性。零缩放和奇异变换继续明确失败，不降低现有可逆变换约束。
 
 Scene 的 DrawItem 保存本帧变形顶点的不可变快照。Renderer 在各个 FrameResources 中独立拥有
@@ -180,21 +182,31 @@ Scene 的 DrawItem 保存本帧变形顶点的不可变快照。Renderer 在各�
 当前是 CPU 蒙皮加 GPU 上传/BLAS rebuild，尚无 GPU 蒙皮、动画混合或 root motion。
 
 兰博接入资源由 `python scripts/prepare-rumble.py` 从原始 `models/rumble/source.glb` 生成；
-保留骨架、权重与待机、跑步、攻击、死亡、玩笑五段动画并原样提取底色贴图。
+保留内嵌材质、骨架、权重与所选的待机、跑步、攻击、死亡和玩笑动画。
 透明护盾和使用零缩放切换可见性的其他片段属于尚未实现的特效路径，不纳入人物变体；原文件不修改。
 `runtime/saves/01` 和 `blacksmith` 中 lc 使用该变体；已有 checkpoint 保留自己的外观配置，不自动迁移。
 
-yyx 使用 `models/yone/封魔剑魂.glb`。`python scripts/prepare-yone.py yone` 从 `models/yone/source.glb`
-生成模型及 `textures/yone/base-color.png`，将原文件的四张底色图拼为一张图集并改写各网格的 UV，
-以适配当前单模型单材质绑定。原文件的节点、骨骼和动画保持不变；已有 checkpoint 仍保留自己的外观配置。
-铁匠使用 `models/western-yone/西部魔影_炽天使_永恩.glb`。`python scripts/prepare-yone.py western-yone`
-从同目录的 `source.glb` 生成模型及 `textures/western-yone/base-color.png`，并只保留兼容可逆变换约束的
-待机、行走、攻击、死亡与玩笑动画。两份原始 GLB 都已从 `unused/` 移入对应的模型目录。
+基础永恩和北极星使者彗直接使用各自目录下的 `source.glb`，保留原始 UV 和内嵌贴图。
+铁匠使用 `models/western-yone/western-yone.glb`。`python scripts/prepare-yone.py western-yone`
+从同目录的 `source.glb` 生成，保留原始 UV、内嵌贴图与兼容可逆变换约束的动画。
+旧图集版 GLB 和 PNG 保留原路径，供已有 checkpoint 引用。永恩的旧图集可用 `prepare-yone.py` 的
+`--legacy-atlas` 重建，彗的旧图集可用 `prepare-winterblessed-hwei.py` 重建。
 
-北极星使者_彗使用 `models/winterblessed-hwei/北极星使者_彗.glb`。`python scripts/prepare-winterblessed-hwei.py` 从同目录的
-`source.glb` 提取两张内嵌贴图，分别缩放至 1024×1024 后合成为 `textures/winterblessed-hwei/base-color.png`。
-子网格共享 UV accessor，按各子网格索引引用的顶点仅改写一次 UV，映射至对应图集区域；模型保留原始动画，种子存档的
-3 号角色使用 `Idle1_Base`、`RunSlow`、`RunFast`、`Attack1_A`、`Death` 和 `Joke`。
+集市摊贩（`runtime/saves/01` 的 6 号 NPC）使用本地导入的蕾米埃尔泳装模型。
+`python scripts/prepare-remiel.py /path/to/蕾米埃尔-泳装` 通过 Assimp CLI 和 Pillow 生成
+`models/remiel-swimsuit/remiel.glb` 与 `textures/remiel-swimsuit/base-color.png`，并保留原始 `RM.txt`。
+PMX 的骨架和四权重蒙皮保留，额外球面 UV、重合的透明高光叠层与半透明眼影不进入当前不透明 PBR 变体；
+底色拼为一张带边缘留白的图集。模型按约 1.8 米身高配置，眼睛挂点使用 `頭`。
+源文件没有动画；准备脚本在原骨架上烘焙 `Idle`（呼吸与轻微翼摆）、`Walk`、`Run` 和 `Wave` 四段 FK 动画。
+走跑驱动有蒙皮权重的 `足D`／`ひざD`／`足首D` 链，不依赖未导出的 MMD IK 和继承约束。
+待机与走路的双肘保持 25° 放松弯曲，跑步为 45°；挥手沿用 25° 的基础弯曲，蹲起从该姿态过渡到原有伸手姿态。
+另外烘焙 `Crouch` 和 `StandUp`：屈髋、屈膝并按腿长降低骨盆，脚踝补偿倾角。
+6 号摊贩与 10 号巨大娘使用这些片段；表现层按已有移动状态选走跑，F2 动作播放挥手，结束回到待机。
+Ctrl 下蹲使用 `Crouch` 按模拟进度正反向采样，`StandUp` 保留为可单独查看的站起片段。
+另外烘焙 `Prone`：绕骨盆向前俯卧、降低骨盆使胸前接近平地，双臂屈肘、头部稍抬。
+Remiel 的运行时呼吸、姿态过渡及胸部次级运动见[角色文档](character.md#remiel-次级运动)。
+不支持 MMD 刚体、实时 IK、表情或翅膀机械自转；当前步态为手工参数烘焙，没有脚掌锁地或地形适配。
+原说明禁止二次配布和商用，生成素材仅供本地使用，不随代码发布；已有 checkpoint 的外观不自动迁移。
 
 CPU 导入测试覆盖权重混合、逆绑定矩阵、网格局部空间、独立实例和非法绑定；
 可额外执行 `lc1_model_loading_tests <rumble.glb>` 逐段采样真实资源。
@@ -222,3 +234,6 @@ GPU 目标 `lc1_pbr_tests` 增加共享网格的多节点动画回读，检查�
 不复制网格或延长 CPU 几何寿命。上传屏障同时覆盖片元阶段的物理地址读取。
 16 位索引缓冲分配到四字节边界，shader 以 32 位字读取并取半字，避免要求额外的 shaderInt16 feature；
 三角形索引和光栅绘制数量不变。地址和借用的有效期与对应 mesh 一致，必须活到提交完成。
+
+`GpuMesh` 上传静态顶点、更新帧槽蒙皮顶点时同时保留局部空间包围盒，不保留整份静态 CPU 顶点。
+人物面板用各网格包围盒与当前节点变换计算人物及装备的整体范围，自动取景；预览资产仍借用原有 GPU 模型。

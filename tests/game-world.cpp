@@ -3,7 +3,7 @@
 #include "player-input.hpp"
 
 #include "lc1/error.hpp"
-#include "lc1/game/continent/patrol-house.hpp"
+#include "lc1/game/debug/world-setup.hpp"
 #include "lc1/game/party/party.hpp"
 #include "lc1/game/player/player-view.hpp"
 #include "lc1/game/resources/catalog.hpp"
@@ -107,6 +107,69 @@ lc1::Character const &find(lc1::GameWorld const &world, std::uint32_t id)
         characters, [id](auto const *character) { return character->config().keyid == id; });
     check(result != characters.end(), "character exists in runtime roster");
     return **result;
+}
+
+void crouch_checkpoint()
+{
+    Checkpoint checkpoint;
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    update_world(world, 0.2F, {.player_intent = {.crouch = true}});
+    auto const &player = world.player(lc1::PlayerId{1});
+    check(player.crouch_amount() > 0, "player intent reaches crouch state");
+    auto const state = lc1::capture_world(world);
+    check(state.player(lc1::PlayerId{1}).crouch_amount == player.crouch_amount(),
+          "snapshot publishes the animation's simulation-owned crouch progress");
+    lc1::Save::write(checkpoint.directory(), world.snapshot());
+    lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto const &loaded = restored.player(lc1::PlayerId{1});
+    check(loaded.crouch_amount() == player.crouch_amount() && loaded.height() == player.height() &&
+              loaded.body().height == player.body().height,
+          "checkpoint restores crouch progress without shrinking the standing body");
+}
+
+void debug_flight_input()
+{
+    Checkpoint checkpoint;
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto const id = lc1::PlayerId{1};
+    world.update(0, {{id, {.toggle_debug_flight = true, .flight_vertical = 1}}});
+    world.update(0.1F, {});
+    check(world.player(id).debug_flying(), "flight toggle is consumed once across world ticks");
+    auto const state = lc1::capture_world(world);
+    check(state.player(id).pose.debug_flying, "snapshot publishes debug flight for camera and HUD");
+    world.update(0, {{id, {.toggle_debug_flight = true}}});
+    check(!world.player(id).debug_flying(), "a second toggle restores ordinary physics");
+}
+
+void proportions_checkpoint()
+{
+    Checkpoint checkpoint;
+    lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    auto &character = world.player(lc1::PlayerId{1});
+    auto const body = character.body();
+    auto const position = character.position();
+    lc1::CharacterProportions const proportions{.scale = 2, .leg_height_scale = 1.5F};
+    lc1::PlayerControls controls;
+    controls.proportions = lc1::ProportionsRequest{character.id(), proportions};
+    world.update(0, {{lc1::PlayerId{1}, controls}});
+    auto const standing = character.standing_body();
+    check(character.proportions() == proportions && character.position() == position &&
+              std::abs(standing.height - body.height * 2.55F) < 0.0001F &&
+              standing.half_width == body.half_width * 2,
+          "proportion request resizes collision from the base body while preserving foot position");
+    auto const snapshot = lc1::capture_world(world);
+    check(snapshot.player(lc1::PlayerId{1}).proportions == proportions &&
+              snapshot.player(lc1::PlayerId{1}).pose.body.eye_height == standing.eye_height,
+          "snapshot publishes proportions and resized fallback eye height");
+    world.update(0, {});
+    check(character.standing_body().height == standing.height,
+          "proportion changes are absolute and do not compound on subsequent ticks");
+    lc1::Save::write(checkpoint.directory(), world.snapshot());
+    lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
+    check(restored.player(lc1::PlayerId{1}).proportions() == proportions &&
+              restored.player(lc1::PlayerId{1}).body().height == body.height &&
+              restored.player(lc1::PlayerId{1}).standing_body().height == standing.height,
+          "checkpoint preserves base body and multipliers without applying scale twice");
 }
 
 void inventory_equipment_and_flashlight()
@@ -542,55 +605,74 @@ void scenario_inventory()
     lc1::Save const seed{"saves/01"};
     lc1::GameWorld world{seed, "dialogs/catalog.yaml"};
     auto &bag = world.player(lc1::PlayerId{1}).bag();
-    check(bag.quantity_of(lc1::game::wood.keyid) == 2 && bag.total_weight() == 9300,
-          "temporary demonstration setup supplies a bounded initial inventory");
+    auto const initial_weight = bag.total_weight();
+    check(!bag.quantities().empty(), "scenario provides supplies for the checkpoint test");
+    auto const [supply_id, initial_quantity] = *bag.quantities().begin();
+    auto const *supply = lc1::game::find_resource(supply_id);
     update_world(world, 0, {});
     update_world(world, 1.0F, {});
-    check(bag.total_weight() == 9300, "simulation does not refill demonstration supplies");
-    check(bag.remove(lc1::game::wood, 1), "consume initial supplies");
+    check(bag.total_weight() == initial_weight,
+          "simulation does not refill demonstration supplies");
+    check(bag.remove(*supply, 1), "consume initial supplies");
     Checkpoint checkpoint;
     lc1::Save::write(checkpoint.directory(), world.snapshot());
     lc1::Save const saved{checkpoint.directory()};
     lc1::GameWorld restored{saved, "dialogs/catalog.yaml"};
-    check(restored.player(lc1::PlayerId{1}).bag().quantity_of(lc1::game::wood.keyid) == 1 &&
-              restored.player(lc1::PlayerId{1}).bag().total_weight() == 8300,
+    check(restored.player(lc1::PlayerId{1}).bag().quantity_of(supply->keyid) ==
+                  initial_quantity - 1 &&
+              restored.player(lc1::PlayerId{1}).bag().total_weight() ==
+                  initial_weight - supply->weight,
           "checkpoint restores consumed inventory without applying initial supplies again");
     world.load(saved);
-    check(world.player(lc1::PlayerId{1}).bag().total_weight() == 8300,
+    check(world.player(lc1::PlayerId{1}).bag().total_weight() == initial_weight - supply->weight,
           "in-place reload also restores inventory exactly");
 }
 
-void restored_house_patrol()
+void village_residents()
 {
     Checkpoint checkpoint;
-    auto data = lc1::Save{checkpoint.directory()}.data();
-    auto const example = data.session.example;
-    for (auto &state : data.states) {
-        if (state.keyid != example)
-            continue;
-        state.x = 36;
-        state.y = 7.8F;
-        state.z = 23;
-        state.patrol = true;
+    std::filesystem::remove(checkpoint.directory() / "checkpoint.yaml");
+    std::filesystem::copy("saves/01", checkpoint.directory(),
+                          std::filesystem::copy_options::recursive |
+                              std::filesystem::copy_options::overwrite_existing);
+    {
+        std::ofstream characters{checkpoint.directory() / "characters.yaml", std::ios::app};
+        for (std::uint32_t const id : {6U, 7U, 8U, 9U, 11U})
+            characters << std::format("\n- keyid: {}\n  name: villager {}\n  sex: true\n  age: 30\n"
+                                      "  party: 4\n  level: 1\n  equipment: []\n  main_hand: 0\n",
+                                      id, id);
+        std::ofstream parties{checkpoint.directory() / "parties.yaml", std::ios::app};
+        parties << "\n- {keyid: 4, faction: 1, leader: 6, members: [7, 8, 9, 11], captives: []}\n";
+        characters << "\n- keyid: 10\n  name: Giant traveler\n  sex: true\n  age: 28\n"
+                      "  party: 5\n  level: 1\n  equipment: []\n  main_hand: 0\n"
+                      "  body: {half_width: 2, height: 12, eye_height: 11, step_height: 0.35, "
+                      "ground_snap_distance: 0.35}\n";
+        parties << "\n- {keyid: 5, faction: 1, leader: 10, members: [], captives: []}\n";
     }
-    lc1::Save::write(checkpoint.directory(), data);
     lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
-    check(find(world, example).position().y == 7.8F,
-          "house patrol restores the saved floor without teleporting");
-    bool descended = false;
-    bool climbed_again = false;
-    for (int frame = 0; frame < 60 * 160; ++frame) {
-        update_world(world, 1.0F / 60.0F, {});
-        auto const height = find(world, example).position().y;
-        descended |= height < 0.7F;
-        climbed_again |= descended && height > 7.7F;
+    auto const setup = lc1::demo::world_setup(world.continent().identity());
+    check(world.character(lc1::CharacterId{10}).body().height == 12 &&
+              world.character(lc1::CharacterId{10}).half_width() == 2,
+          "authored giant body reaches gameplay collision dimensions");
+    check(world.player(lc1::PlayerId{1}).body().height == 1.8F,
+          "old saves without body settings retain standard proportions");
+    world.character(lc1::CharacterId{8}).ai_controller()->set_order(lc1::CompanionOrder::None);
+    auto const snapshot = world.snapshot();
+    lc1::Save::write(checkpoint.directory(), snapshot);
+    lc1::Save saved{checkpoint.directory()};
+    world.load(saved);
+    auto const &giant_body = world.character(lc1::CharacterId{10}).body();
+    check(giant_body.height == 12 && giant_body.half_width == 2 && giant_body.eye_height == 11 &&
+              giant_body.step_height == 0.35F && giant_body.ground_snap_distance == 0.35F,
+          "giant proportions survive snapshot and checkpoint reload");
+    for (auto const &[id, patrol] : setup.npc_patrols) {
+        auto const &resident = world.character(lc1::CharacterId{id});
+        auto const &state = saved.states().at(id);
+        check(glm::distance(resident.position(), glm::vec3{state.x, state.y, state.z}) < 0.01F,
+              "village residents retain saved positions");
+        check(resident.ai_controller()->patrolling() == (id != 8),
+              "reload resumes individual patrols and preserves a stopped villager");
     }
-    check(descended && climbed_again,
-          "world restores a multi-floor patrol and completes its return route");
-    auto snapshot = world.snapshot();
-    check(
-        std::ranges::find(snapshot.states, example, &lc1::SerializedCharacterState::keyid)->patrol,
-        "house patrol retains the existing save patrol flag");
 }
 
 void world_applies_control()
@@ -664,10 +746,13 @@ void transfer_control_and_checkpoint()
     lc1::GameWorld world{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     auto const original = world.player(lc1::PlayerId{1}).id();
     auto const target = lc1::CharacterId{world.snapshot().session.example};
+    world.update(0.4F, {{lc1::PlayerId{1}, {.crouch = true}}});
+    auto const crouch = world.character(original).crouch_amount();
+    check(crouch == 1, "original character is fully crouched before transfer");
     check(world.transfer_control(lc1::PlayerId{1}, target), "transfer to example succeeds");
-    check(world.player(lc1::PlayerId{1}).id() == target &&
-              world.character(original).ai_controller(),
-          "old character resumes AI control");
+    check(world.player(lc1::PlayerId{1}).id() == target && !world.character(original).controller(),
+          "old character has no controller after transfer");
+    auto const original_position = world.character(original).position();
     auto const before = world.player(lc1::PlayerId{1}).position();
     world.update(0.1F,
                  {{lc1::PlayerId{1},
@@ -675,6 +760,10 @@ void transfer_control_and_checkpoint()
     auto const distance = glm::length(world.player(lc1::PlayerId{1}).position() - before);
     check(distance > world.player(lc1::PlayerId{1}).config().walk_speed() * 0.1F,
           "Shift sprint reaches the newly controlled character");
+    check(world.character(original).position() == original_position,
+          "released character does not follow the transferred AI patrol");
+    check(world.character(original).crouch_amount() == crouch,
+          "released character retains its crouch pose without a controller");
     auto const running = lc1::capture_world(world);
     check(running.player(lc1::PlayerId{1}).running && running.player(lc1::PlayerId{1}).moving,
           "newly controlled character publishes running movement from the simulation tick");
@@ -687,6 +776,11 @@ void transfer_control_and_checkpoint()
     lc1::GameWorld restored{lc1::Save{checkpoint.directory()}, "dialogs/catalog.yaml"};
     check(restored.player(lc1::PlayerId{1}).id() == target,
           "checkpoint restores transferred control");
+    auto *controller = world.player(lc1::PlayerId{1}).controller();
+    check(world.transfer_control(lc1::PlayerId{1}, original) &&
+              world.player(lc1::PlayerId{1}).controller() == controller &&
+              !world.character(target).controller(),
+          "transfer back to an uncontrolled character keeps the player controller");
 }
 
 void control_physics_camera_order()
@@ -735,12 +829,16 @@ void control_physics_camera_order()
               world.player(lc1::PlayerId{1}).body_yaw() == 0,
           "disabled controls cannot move or turn the player");
 }
+
 } // namespace
 
 int main()
 {
     try {
         inventory_equipment_and_flashlight();
+        crouch_checkpoint();
+        proportions_checkpoint();
+        debug_flight_input();
         melee_damage_and_checkpoint();
         control_physics_camera_order();
         independent_interactions();
@@ -751,7 +849,7 @@ int main()
         world_applies_control();
         transfer_control_and_checkpoint();
         attack_animation_timing();
-        restored_house_patrol();
+        village_residents();
         scenario_inventory();
         std::cout << "Game world tests passed\n";
         return EXIT_SUCCESS;

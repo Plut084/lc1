@@ -272,6 +272,7 @@ add_library(lc1_game STATIC
     src/game/character/character-model.cpp
     src/game/character/character-pose.cpp
     src/game/character/character.cpp
+    src/game/character/animation-motion.cpp
     src/game/physics/character-motion.cpp
     src/game/physics/world-collision.cpp
     src/game/character/bag.cpp
@@ -482,6 +483,7 @@ if(BUILD_TESTING)
     lc1_enable_warnings(lc1_game_world_tests)
     add_test(NAME game_world COMMAND lc1_game_world_tests
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME villager_activity COMMAND lc1_character_tests --villager-activity)
     add_executable(lc1_player_view_tests tests/player-view.cpp)
     target_link_libraries(lc1_player_view_tests PRIVATE lc1_game)
     lc1_enable_warnings(lc1_player_view_tests)
@@ -539,7 +541,9 @@ if(BUILD_TESTING)
         lc1_enable_warnings(lc1_shadow_path_tests)
         add_dependencies(lc1_shadow_path_tests shaders copy_assets)
         add_executable(lc1_pbr_tests EXCLUDE_FROM_ALL tests/pbr.cpp)
-        target_link_libraries(lc1_pbr_tests PRIVATE lc1_game)
+        target_link_libraries(lc1_pbr_tests PRIVATE lc1_game imgui_backend Freetype::Freetype)
+        target_sources(lc1_pbr_tests PRIVATE "${IMGUI_FREETYPE_DIR}/imgui_freetype.cpp")
+        target_include_directories(lc1_pbr_tests PRIVATE "${IMGUI_FREETYPE_DIR}")
         lc1_enable_warnings(lc1_pbr_tests)
         add_dependencies(lc1_pbr_tests shaders copy_assets)
         add_executable(lc1_cloud_tests EXCLUDE_FROM_ALL tests/clouds.cpp)

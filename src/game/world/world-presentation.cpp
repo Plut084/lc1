@@ -21,6 +21,9 @@
 
 namespace lc1 {
 namespace {
+constexpr float daylight_intensity = 1.2F;
+constexpr float overcast_daylight_intensity = 0.6F;
+
 constexpr std::array lighting_names{"All",  "Directional", "Point",
                                     "Spot", "Sphere",      "Emission Only"};
 
@@ -53,15 +56,98 @@ std::u32string font_codepoints(WorldSnapshot const &world, DialogCatalog const &
     return codepoints;
 }
 
+CharacterPreview make_preview(std::vector<scene::SceneModel> models, float zoom)
+{
+    CharacterPreview result;
+    auto &preview = result.scene;
+    glm::vec3 low{std::numeric_limits<float>::max()};
+    glm::vec3 high{std::numeric_limits<float>::lowest()};
+    preview.set_sky(scene::Sky{.color = {0, 0, 0}});
+    preview.add_light({.direction = glm::normalize(glm::vec3{0.5F, -0.6F, 1}),
+                       .color = {1, 0.9F, 0.76F},
+                       .intensity = 3});
+    preview.add_light({.direction = glm::normalize(glm::vec3{-1, -0.2F, -0.5F}),
+                       .color = {0.6F, 0.75F, 1},
+                       .intensity = 1.5F});
+    for (auto &model : models) {
+        model.view_visible = true;
+        model.use_view_indices = false;
+        model.view_hidden_nodes.clear();
+        for (auto const &instance : model.pose.mesh_instances(model.world_transform)) {
+            auto const &bounds = model.model->meshes()[instance.mesh].bounds();
+            for (int corner = 0; corner < 8; ++corner) {
+                glm::vec3 const point{bounds[(corner & 1) != 0].x, bounds[(corner & 2) != 0].y,
+                                      bounds[(corner & 4) != 0].z};
+                auto const world = glm::vec3{instance.model_matrix * glm::vec4{point, 1}};
+                low = glm::min(low, world);
+                high = glm::max(high, world);
+            }
+        }
+        preview.add_model(std::move(model));
+    }
+    auto const center = (low + high) * 0.5F;
+    auto const half = (high - low) * 0.5F;
+    constexpr float aspect = 512.0F / 768.0F;
+    constexpr float half_fov = glm::radians(45.0F * 0.5F);
+    float const distance =
+        (std::max(half.y, half.x / aspect) / std::tan(half_fov) + half.z) * 1.12F / zoom;
+    result.camera.set_aspect_ratio(aspect);
+    result.camera.set_fov_y(45.0F);
+    result.camera.set_position(center + glm::vec3{0, 0, -distance});
+    result.camera.look_at(center);
+    return result;
+}
+
 } // namespace
 
 WorldPresentation::ModelResources::ModelResources(Device const &device,
                                                   std::filesystem::path const &asset_root,
                                                   ModelConfig const &config,
-                                                  CharacterBody const &body)
-    : config(config), body(body), model(device, load_configured_model(config, asset_root, body)),
-      material(config.material.value().material())
+                                                  CharacterBody const &body,
+                                                  MaterialInfo const &material)
+    : config(config), body(body),
+      model(device, load_configured_model(config, asset_root, body), material), material(material)
 {
+}
+
+WorldPresentation::ModelResources &
+WorldPresentation::resources_for(Device const &device, std::filesystem::path const &asset_root,
+                                 ModelConfig const &config, CharacterBody const &body)
+{
+    auto const found = std::ranges::find_if(model_resources_, [&](auto const &entry) {
+        return entry->config == config &&
+               (!config.path.value().empty() ||
+                (entry->body.half_width == body.half_width && entry->body.height == body.height &&
+                 entry->body.eye_height == body.eye_height));
+    });
+    if (found != model_resources_.end())
+        return **found;
+
+    auto const &configured = config.material.value();
+    auto material = configured.material();
+    auto const load_texture = [&](std::string const &path,
+                                  TextureColorSpace space) -> MaterialTexture {
+        if (path.empty())
+            return {};
+        auto const key = std::pair{path_from_utf8(path).lexically_normal(), space};
+        auto found = model_textures_.find(key);
+        if (found == model_textures_.end())
+            found =
+                model_textures_
+                    .emplace(key, std::make_unique<GpuTexture>(
+                                      device, Image::load_from_file(asset_root / key.first), space))
+                    .first;
+        return {.texture = found->second.get()};
+    };
+    material.base_color =
+        load_texture(configured.base_color_texture.value(), TextureColorSpace::Srgb);
+    material.metallic_roughness =
+        load_texture(configured.metallic_roughness_texture.value(), TextureColorSpace::Linear);
+    material.normal = load_texture(configured.normal_texture.value(), TextureColorSpace::Linear);
+    material.emissive = load_texture(configured.emissive_texture.value(), TextureColorSpace::Srgb);
+    model_resources_.push_back(
+        std::make_unique<ModelResources>(device, asset_root, config, body, material));
+    return *model_resources_.back();
 }
 
 WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path const &asset_root,
@@ -78,57 +164,22 @@ WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path
                                                  : glm::vec3{0})},
       helmet_model_(device, make_helmet_model()), output_(output)
 {
+    fog_settings_.enabled = continent.location(village::smithy) != nullptr;
+    for (auto const id : {1U, 2U, 3U, 5U, 6U, 1004U}) {
+        auto item = std::make_unique<PreviewItem>(device, make_inventory_model(id));
+        item->material.parameters.metallic_factor = id == 1 || id == 3 || id == 5 ? 0.8F : 0.0F;
+        item->material.parameters.roughness_factor = id == 1 ? 0.3F : 0.7F;
+        preview_items_.emplace(id, std::move(item));
+    }
     output_.bloom_strength = 0.12F;
     character_models_.reserve(world.characters.size());
-    auto const resources_for = [&](ModelConfig const &config,
-                                   CharacterBody const &body) -> ModelResources & {
-        auto const found = std::ranges::find_if(model_resources_, [&](auto const &entry) {
-            return entry->config == config &&
-                   (!config.path.value().empty() || (entry->body.half_width == body.half_width &&
-                                                     entry->body.height == body.height &&
-                                                     entry->body.eye_height == body.eye_height));
-        });
-        if (found != model_resources_.end())
-            return **found;
-        auto resources = std::make_unique<ModelResources>(device, asset_root, config, body);
-        auto const &material = config.material.value();
-        struct TextureSlot {
-            MaterialTexture *slot;
-            std::string const *path;
-            TextureColorSpace color_space;
-        };
-        std::array const slots{
-            TextureSlot{&resources->material.base_color, &material.base_color_texture.value(),
-                        TextureColorSpace::Srgb},
-            TextureSlot{&resources->material.metallic_roughness,
-                        &material.metallic_roughness_texture.value(), TextureColorSpace::Linear},
-            TextureSlot{&resources->material.normal, &material.normal_texture.value(),
-                        TextureColorSpace::Linear},
-            TextureSlot{&resources->material.emissive, &material.emissive_texture.value(),
-                        TextureColorSpace::Srgb}};
-        for (auto const &slot : slots) {
-            if (slot.path->empty())
-                continue;
-            auto const key =
-                std::pair{path_from_utf8(*slot.path).lexically_normal(), slot.color_space};
-            auto found_texture = model_textures_.find(key);
-            if (found_texture == model_textures_.end()) {
-                auto texture = std::make_unique<GpuTexture>(
-                    device, Image::load_from_file(asset_root / key.first), slot.color_space);
-                found_texture = model_textures_.emplace(key, std::move(texture)).first;
-            }
-            slot.slot->texture = found_texture->second.get();
-        }
-        model_resources_.push_back(std::move(resources));
-        return *model_resources_.back();
-    };
     for (std::size_t i = 0; i < world.characters.size(); ++i) {
         auto const &character = world.characters[i];
         auto const &config = character.model;
-        auto &resources = resources_for(config, character.pose.body);
+        auto &resources = resources_for(device, asset_root, config, character.pose.body);
         auto *model = scene_.add_model(scene::SceneModel{
             .model = &resources.model,
-            .material = &resources.material,
+            .material = resources.model.has_embedded_materials() ? nullptr : &resources.material,
             .world_transform = character.pose.transform().model_matrix(),
             .view_hidden_nodes =
                 first_person_hidden_nodes(config, resources.model.definition().nodes())});
@@ -141,23 +192,30 @@ WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path
                 fail("character model is missing animation {}", name);
             return clip;
         };
-        auto const idle_animation = find_animation(*config.idle_animation);
-        auto const move_animation = find_animation(*config.move_animation);
-        auto const run_animation = find_animation(*config.run_animation);
-        auto const body_attack_animation = find_animation(*config.attack_animation);
-        auto const death_animation = find_animation(*config.death_animation);
-        if (idle_animation) {
+        std::array<std::optional<std::size_t>, character_animation_count> animations{};
+        for (std::size_t index = 0; index < animations.size(); ++index)
+            animations[index] =
+                find_animation(config.animation_name(static_cast<CharacterAnimation>(index)));
+        auto const idle_animation = animations[static_cast<std::size_t>(CharacterAnimation::Idle)];
+        auto const death_animation =
+            animations[static_cast<std::size_t>(CharacterAnimation::Death)];
+        if (auto const animation = character.timed_animation;
+            animation && animations[static_cast<std::size_t>(animation->clip)]) {
+            model->pose.play_animation(*animations[static_cast<std::size_t>(animation->clip)],
+                                       false);
+            model->pose.update_animation(animation->seconds);
+        }
+        else if (idle_animation) {
             model->pose.play_animation(*idle_animation);
             auto const &clip = resources.model.definition().animations()[*idle_animation];
             model->pose.update_animation(static_cast<float>(i % 11) * clip.duration() / 11.0F);
         }
-        if (character.dead) {
-            if (death_animation) {
-                model->pose.play_animation(*death_animation, false);
-                model->pose.update_animation(character.reaction_time);
-            }
-            else
-                model->pose.reset_pose();
+        if (character.dead && !death_animation) {
+            model->pose.reset_pose();
+        }
+        else if (character.dead && !character.timed_animation) {
+            model->pose.play_animation(*death_animation, false);
+            model->pose.update_animation(character.reaction_time);
         }
         auto const mount = resources.model.definition().find_node(config.weapon_mount.value());
         std::optional<std::size_t> eyes_mount;
@@ -176,10 +234,14 @@ WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path
             auto const &weapon_config = definition.model_config();
             if (weapon_config.path.value().empty())
                 continue;
-            auto &weapon_resources = resources_for(weapon_config, character.pose.body);
-            auto *placement = scene_.add_model({.model = &weapon_resources.model,
-                                                .material = &weapon_resources.material,
-                                                .visible = false});
+            auto &weapon_resources =
+                resources_for(device, asset_root, weapon_config, character.pose.body);
+            auto *placement =
+                scene_.add_model({.model = &weapon_resources.model,
+                                  .material = weapon_resources.model.has_embedded_materials()
+                                                  ? nullptr
+                                                  : &weapon_resources.material,
+                                  .visible = false});
             auto const &name = weapon_config.action_animation.value();
             std::optional<std::size_t> animation;
             if (!name.empty()) {
@@ -210,7 +272,6 @@ WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path
                                      .mount = mount,
                                      .attack_animation = attack_animation,
                                      .attack_sequence = character.attack_sequence,
-                                     .nod_animation = find_animation(*config.action_animation),
                                      .nod_sequence = character.nod_sequence,
                                      .hit_sequence = character.hit_sequence,
                                      .dead = character.dead,
@@ -222,15 +283,16 @@ WorldPresentation::WorldPresentation(Device const &device, std::filesystem::path
                                      .head_mount = resources.model.definition().find_node("Head"),
                                      .eyes_mount = eyes_mount,
                                      .eyes_offset = config.eyes_offset.value().transform().matrix(),
-                                     .idle_animation = idle_animation,
-                                     .move_animation = move_animation,
-                                     .run_animation = run_animation,
-                                     .body_attack_animation = body_attack_animation,
-                                     .death_animation = death_animation});
+                                     .animations = animations,
+                                     .crouch_animation = find_animation(*config.crouch_animation)});
+        if (config.path.value() == "models/remiel-swimsuit/remiel.glb") {
+            character_models_.back().remiel_motion.emplace(model->pose.model());
+            character_models_.back().prone_animation = find_animation("Prone");
+        }
     }
 
     scene::DirectionalLight const sun{
-        .base = {.color = glm::vec3{1.0F, 0.95F, 0.9F}, .intensity = 0.45F},
+        .base = {.color = glm::vec3{1.0F, 0.95F, 0.9F}, .intensity = daylight_intensity},
         .direction = glm::normalize(glm::vec3{-1.0F, -1.0F, -1.0F})};
     scene::SphereLight const lamp{.base = {.color = glm::vec3{1.0F, 0.5F, 0.5F}, .intensity = 128},
                                   .position = continent_->spawn() + glm::vec3{3.0F, 10.0F, 0.0F},
@@ -300,6 +362,18 @@ scene::Scene const &WorldPresentation::scene() const
     return scene_;
 }
 
+std::optional<std::size_t> WorldPresentation::CharacterModels::locomotion(bool moving,
+                                                                          bool running) const
+{
+    if (moving) {
+        if (auto const sprint = animation(CharacterAnimation::Sprint); running && sprint)
+            return sprint;
+        if (auto const walk = animation(CharacterAnimation::Walk))
+            return walk;
+    }
+    return animation(CharacterAnimation::Idle);
+}
+
 void WorldPresentation::update_instances()
 {
     auto const showcase = showcase_.draws();
@@ -310,9 +384,11 @@ void WorldPresentation::update_instances()
         auto &models = character_models_[i];
         models.character->world_transform =
             state.pose.transform().model_matrix() *
-            (state.dead && models.death_animation
+            ((state.dead && models.animation(CharacterAnimation::Death)) ||
+                     (!state.dead && models.animation(CharacterAnimation::HitReact))
                  ? glm::mat4{1}
-                 : character_reaction_transform(state.dead, state.reaction_time, state.pose.body));
+                 : character_reaction_transform(state.dead, state.reaction_time, state.pose.body)) *
+            glm::scale(glm::mat4{1}, glm::vec3{state.proportions.scale});
         auto const observer = first_person_ && state.keyid == world_->player(observer_).keyid;
         models.character->use_view_indices = observer;
         models.helmet->view_visible = !observer;
@@ -427,7 +503,9 @@ void WorldPresentation::update_lighting()
             : 0.0F;
     sun_->parameters.color =
         glm::mix(glm::vec3{1, 0.95F, 0.9F}, glm::vec3{0.7F, 0.8F, 1}, village_weather);
-    sun_->parameters.intensity = glm::mix(0.45F, 0.09F, village_weather) * std::max(altitude, 0.0F);
+    sun_->parameters.intensity =
+        glm::mix(daylight_intensity, overcast_daylight_intensity, village_weather) *
+        std::max(altitude, 0.0F);
     sun_->enabled = sun_->enabled && altitude > 0.0F;
     // The visible sky follows the same sun the cloud layer is lit by: daylight blue
     // towards noon, a warm band while the sun crosses the horizon, and near-black at
@@ -439,18 +517,19 @@ void WorldPresentation::update_lighting()
     glm::vec3 const warm{0.60F, 0.30F, 0.15F};
     glm::vec3 const night_sky{0.010F, 0.014F, 0.030F};
     scene_.set_sky(scene::Sky{.color = night_sky + daylight * rise + warm * (0.55F * twilight)});
-    scene_.set_fog(continent_->location(village::smithy)
+    scene_.set_fog(fog_settings_.enabled
                        ? std::optional{scene::DistanceFog{
                              .radiance = glm::vec3{0.24F, 0.28F, 0.31F} * std::max(altitude, 0.0F),
-                             .start = 60,
-                             .end = 320}}
+                             .start = fog_settings_.start,
+                             .end = fog_settings_.end}}
                        : std::nullopt);
     scene_.set_diffuse_gi(scene::DiffuseGi{
         .center = world_->player(observer_).pose.position() + glm::vec3{0, 6, 0},
-        .sky_radiance = sun_->enabled ? glm::mix(glm::vec3{0.08F, 0.105F, 0.14F},
-                                                 glm::vec3{0.13F, 0.16F, 0.21F}, village_weather) *
-                                            altitude
-                                      : glm::vec3{0},
+        .sky_radiance = sun_->enabled
+                            ? glm::mix(glm::vec3{0.02F, 0.02625F, 0.035F},
+                                       glm::vec3{0.01625F, 0.02F, 0.02625F}, village_weather) *
+                                  altitude
+                            : glm::vec3{0},
     });
     for (std::size_t i = 0; i < character_models_.size(); ++i) {
         auto &models = character_models_[i];
@@ -528,6 +607,13 @@ void WorldPresentation::update(float delta_seconds, WorldPresentationInput const
         showcase_time_ += delta_seconds;
     flame_time_ += delta_seconds;
     showcase_.update(showcase_time_);
+    for (auto &models : character_models_) {
+        for (auto const &[node, transform] : models.proportion_pose)
+            models.character->pose.set_local_transform(node, transform);
+        models.proportion_pose.clear();
+        if (models.remiel_motion)
+            models.remiel_motion->restore(models.character->pose);
+    }
     for (std::size_t i = 0; i < character_models_.size(); ++i) {
         auto &models = character_models_[i];
         auto const &state = world_->characters[i];
@@ -548,13 +634,24 @@ void WorldPresentation::update(float delta_seconds, WorldPresentationInput const
             }
             models.attack_sequence = state.attack_sequence;
         }
+        if (state.timed_animation && models.animation(state.timed_animation->clip)) {
+            if (models.weapon && (state.hit_sequence != models.hit_sequence ||
+                                  state.attack_sequence != models.attack_sequence))
+                models.weapon->pose.reset_pose();
+            models.hit_sequence = state.hit_sequence;
+            models.attack_sequence = state.attack_sequence;
+            continue;
+        }
         if (state.dead || state.hit_sequence != models.hit_sequence) {
             if (state.dead && !models.dead) {
-                if (models.death_animation)
-                    models.character->pose.play_animation(*models.death_animation, false);
+                if (auto const death = models.animation(CharacterAnimation::Death))
+                    models.character->pose.play_animation(*death, false);
                 else
                     models.character->pose.reset_pose();
             }
+            if (!state.dead)
+                if (auto const hit = models.animation(CharacterAnimation::HitReact))
+                    models.character->pose.play_animation(*hit, false);
             if (models.weapon && (state.hit_sequence != models.hit_sequence || !models.dead))
                 models.weapon->pose.reset_pose();
             models.dead = state.dead;
@@ -565,43 +662,69 @@ void WorldPresentation::update(float delta_seconds, WorldPresentationInput const
         }
         auto const nod = state.nod_sequence;
         if (nod != models.nod_sequence) {
-            if (models.nod_animation)
-                models.character->pose.play_animation(*models.nod_animation, false);
+            if (auto const action = models.animation(CharacterAnimation::Action))
+                models.character->pose.play_animation(*action, false);
             models.nod_sequence = nod;
         }
-        auto const sequence = world_->characters[i].attack_sequence;
+        auto const body_attack = models.animation(CharacterAnimation::Attack);
+        auto const sequence = state.attack_sequence;
         if (sequence != models.attack_sequence) {
             if (models.attack_animation)
                 models.weapon->pose.play_animation(*models.attack_animation, false);
-            if (models.body_attack_animation)
-                models.character->pose.play_animation(*models.body_attack_animation, false);
+            if (body_attack)
+                models.character->pose.play_animation(*body_attack, false);
             models.attack_sequence = sequence;
         }
         auto &pose = models.character->pose;
         auto const playback = pose.playback();
         bool const action_playing =
-            playback && !playback->looping &&
-            (playback->animation != models.body_attack_animation || state.attack_progress < 1) &&
+            !state.timed_animation && playback && !playback->looping &&
+            playback->animation != models.crouch_animation &&
+            playback->animation != models.prone_animation &&
+            (playback->animation != body_attack || state.attack_progress < 1) &&
             playback->time < pose.model().animations()[playback->animation].duration();
-        auto const locomotion = state.moving
-                                    ? (state.running && models.run_animation ? models.run_animation
-                                       : models.move_animation ? models.move_animation
-                                                               : models.idle_animation)
-                                    : models.idle_animation;
-        if (!action_playing && locomotion &&
-            (!playback || !playback->looping || playback->animation != *locomotion))
-            pose.play_animation(*locomotion);
+        auto const locomotion = models.locomotion(state.moving, state.running);
+        if (!action_playing) {
+            if (locomotion &&
+                (!playback || !playback->looping || playback->animation != *locomotion))
+                pose.play_animation(*locomotion);
+            else if (!locomotion && playback)
+                pose.reset_pose();
+        }
     }
     scene_.update_animations(delta_seconds);
     for (std::size_t i = 0; i < character_models_.size(); ++i) {
         auto &models = character_models_[i];
         auto const &state = world_->characters[i];
-        if (!state.dead && models.body_attack_animation && state.attack_progress < 1) {
+        if (!state.dead && models.prone_animation && state.prone_amount > 0) {
             auto &pose = models.character->pose;
-            pose.play_animation(*models.body_attack_animation, false);
-            pose.update_animation(
-                state.attack_progress *
-                pose.model().animations()[*models.body_attack_animation].duration());
+            pose.play_animation(*models.prone_animation, false);
+            pose.update_animation(state.prone_amount *
+                                  pose.model().animations()[*models.prone_animation].duration());
+            continue;
+        }
+        if (!state.dead && models.crouch_animation && state.crouch_amount > 0) {
+            auto &pose = models.character->pose;
+            pose.play_animation(*models.crouch_animation, false);
+            pose.update_animation(state.crouch_amount *
+                                  pose.model().animations()[*models.crouch_animation].duration());
+            continue;
+        }
+        bool sampled_timed_animation = false;
+        if (auto const animation = state.timed_animation) {
+            if (auto const index = models.animation(animation->clip)) {
+                auto &pose = models.character->pose;
+                pose.play_animation(*index, false);
+                pose.update_animation(animation->seconds);
+                sampled_timed_animation = true;
+            }
+        }
+        auto const body_attack = models.animation(CharacterAnimation::Attack);
+        if (!sampled_timed_animation && !state.dead && body_attack && state.attack_progress < 1) {
+            auto &pose = models.character->pose;
+            pose.play_animation(*body_attack, false);
+            pose.update_animation(state.attack_progress *
+                                  pose.model().animations()[*body_attack].duration());
         }
         if (!state.dead && models.weapon && models.attack_animation && state.attack_progress < 1) {
             auto &pose = models.weapon->pose;
@@ -610,14 +733,94 @@ void WorldPresentation::update(float delta_seconds, WorldPresentationInput const
                                   pose.model().animations()[*models.attack_animation].duration());
         }
     }
+    for (std::size_t i = 0; i < character_models_.size(); ++i) {
+        auto &models = character_models_[i];
+        auto const &state = world_->characters[i];
+        if (models.remiel_motion)
+            models.remiel_motion->update(models.character->pose,
+                                         state.pose.transform().model_matrix(), delta_seconds,
+                                         !state.moving && state.crouch_amount == 0 &&
+                                             state.prone_amount == 0 && state.attack_progress >= 1,
+                                         state.dead, state.pointing && state.prone_amount == 0,
+                                         state.point_direction, state.prone_amount);
+    }
+    for (std::size_t i = 0; i < character_models_.size(); ++i) {
+        auto &models = character_models_[i];
+        auto const scale = world_->characters[i].proportions.leg_height_scale;
+        if (scale == 1)
+            continue;
+        auto &pose = models.character->pose;
+        for (auto const name : {"腰", "下半身"})
+            if (auto node = pose.model().find_node(name))
+                models.proportion_pose.emplace_back(*node, pose.local_transforms()[*node]);
+        apply_remiel_leg_height(pose, scale, world_->characters[i].prone_amount);
+    }
     update_instances();
     update_lighting();
     update_particles(delta_seconds);
 }
 
+CharacterPreview WorldPresentation::character_preview(CharacterId id, float yaw, float zoom) const
+{
+    auto const found = std::ranges::find(character_models_, id.value, &CharacterModels::keyid);
+    if (found == character_models_.end())
+        fail("missing character preview {}", id.value);
+    auto const normalization = glm::rotate(glm::mat4{1}, glm::radians(yaw), glm::vec3{0, 1, 0}) *
+                               glm::inverse(world_->character(id).pose.transform().model_matrix());
+    std::vector<scene::SceneModel> models;
+    for (auto const *source : {found->character, found->helmet, found->weapon}) {
+        if (!source || !source->visible)
+            continue;
+        auto model = *source;
+        model.world_transform = normalization * source->world_transform;
+        models.push_back(std::move(model));
+    }
+    return make_preview(std::move(models), zoom);
+}
+
+CharacterPreview WorldPresentation::item_preview(std::uint32_t resource, float yaw,
+                                                 float zoom) const
+{
+    auto const rotation = glm::rotate(glm::mat4{1}, glm::radians(yaw), glm::vec3{0, 1, 0}) *
+                          glm::rotate(glm::mat4{1}, glm::radians(25.0F), glm::vec3{1, 0, 0});
+    if (resource == game::iron_helmet.keyid)
+        return make_preview({scene::SceneModel{.model = &helmet_model_,
+                                               .material = &helmet_material_,
+                                               .world_transform = rotation}},
+                            zoom);
+    if (auto found = preview_items_.find(resource); found != preview_items_.end())
+        return make_preview({scene::SceneModel{.model = &found->second->model,
+                                               .material = &found->second->material,
+                                               .world_transform = rotation}},
+                            zoom);
+    for (auto const &character : character_models_) {
+        if (auto const found = character.weapons.find(resource); found != character.weapons.end()) {
+            auto model = *found->second.model;
+            model.pose.reset_pose();
+            model.world_transform = rotation;
+            model.visible = true;
+            return make_preview({std::move(model)}, zoom);
+        }
+    }
+    fail("missing item preview {}", resource);
+}
+
 void WorldPresentation::update_particles(float delta_seconds)
 {
     std::vector<scene::Particle> visible;
+    // Independent uniform samples keep position, speed and lifetime uncorrelated.
+    auto const samples = [](std::uint32_t sequence, std::uint32_t seed) {
+        glm::vec4 result;
+        for (int axis = 0; axis < 4; ++axis) {
+            auto hash = sequence * 747796405U + seed * 2891336453U +
+                        static_cast<std::uint32_t>(axis) * 277803737U;
+            hash = ((hash >> ((hash >> 28U) + 4U)) ^ hash) * 277803737U;
+            hash = (hash >> 22U) ^ hash;
+            result[axis] = static_cast<float>(hash & 0xffffffU) / 16777216.0F;
+        }
+        return result;
+    };
+    constexpr float emission_rate = 120000;
     for (std::size_t i = 0; i < character_models_.size(); ++i) {
         auto &emitter = character_models_[i];
         auto const &state = world_->characters[i];
@@ -632,7 +835,7 @@ void WorldPresentation::update_particles(float delta_seconds)
         auto const tip = glm::vec3{emitter.weapon->world_transform * glm::vec4{0, 0.46F, 0, 1}};
         if (!emitter.burning) {
             emitter.previous_tip = tip;
-            emitter.emission = 8;
+            emitter.emission = 0;
         }
         for (auto &particle : emitter.particles) {
             auto const acceleration = glm::vec3{0, particle.spark ? -0.6F : 0.7F, 0};
@@ -645,28 +848,29 @@ void WorldPresentation::update_particles(float delta_seconds)
                       [](auto const &particle) { return particle.age >= particle.lifetime; });
         // Spawn only births still relevant after a long frame, rather than a stale backlog.
         auto const interval = std::min(delta_seconds, 1.0F);
-        emitter.emission += interval * 50;
+        emitter.emission += interval * emission_rate;
         auto const count = static_cast<unsigned>(emitter.emission);
         emitter.emission -= static_cast<float>(count);
         for (unsigned birth = 0; birth < count; ++birth) {
             auto const sequence = ++emitter.particle_sequence;
-            // Integer mixing gives repeatable independent variation without shared RNG state.
-            auto hash = sequence * 747796405U + emitter.keyid * 2891336453U;
-            hash = ((hash >> ((hash >> 28U) + 4U)) ^ hash) * 277803737U;
-            hash = (hash >> 22U) ^ hash;
-            float const variation = static_cast<float>(hash & 0xffffU) / 65535.0F;
-            float const angle = static_cast<float>(hash >> 16U) / 65535.0F * glm::two_pi<float>();
-            bool const spark = sequence % 12 == 0;
-            float const lifetime = spark ? 0.8F + variation * 0.7F : 0.38F + variation * 0.25F;
+            auto const random = samples(sequence, emitter.keyid);
+            float const variation = random.z;
+            float const angle = random.x * glm::two_pi<float>();
+            bool const spark = random.w < 0.008F;
+            float const lifetime = spark ? 0.056F + variation * 0.049F : 0.021F + random.w * 0.028F;
             float const age =
-                interval * (static_cast<float>(birth) + 0.5F) / static_cast<float>(count);
+                (static_cast<float>(count - 1 - birth) + emitter.emission) / emission_rate;
             if (age >= lifetime)
                 continue;
-            auto const velocity = glm::vec3{std::cos(angle) * (spark ? 0.25F : 0.08F),
-                                            spark ? 0.9F + variation : 0.45F + variation * 0.35F,
-                                            std::sin(angle) * (spark ? 0.25F : 0.08F)};
+            float const radius = std::sqrt(random.y) * 0.055F;
+            auto const offset = glm::vec3{std::cos(angle) * radius, 0, std::sin(angle) * radius};
+            // The broad birth disk converges toward the plume axis as particles rise.
+            auto const velocity =
+                spark ? glm::vec3{std::cos(angle) * 0.25F, 12.6F + variation * 14.0F,
+                                  std::sin(angle) * 0.25F}
+                      : -offset / lifetime + glm::vec3{0, 6.3F + variation * 4.9F, 0};
             auto const fraction = delta_seconds > 0 ? age / delta_seconds : 0;
-            auto const origin = glm::mix(tip, emitter.previous_tip, fraction);
+            auto const origin = glm::mix(tip, emitter.previous_tip, fraction) + offset;
             auto const acceleration = glm::vec3{0, spark ? -0.6F : 0.7F, 0};
             emitter.particles.push_back(
                 {origin + velocity * age + acceleration * (0.5F * age * age),
@@ -676,16 +880,24 @@ void WorldPresentation::update_particles(float delta_seconds)
         emitter.burning = true;
         for (auto const &particle : emitter.particles) {
             float const life = particle.age / particle.lifetime;
-            float const fade = (1 - life) * (1 - life);
-            auto const width = particle.spark ? 0.012F : 0.19F * (1 - life * 0.7F);
+            float const fade =
+                glm::smoothstep(0.0F, 0.0025F, particle.age) * (1 - life) * (1 - life);
+            auto const width = particle.spark
+                                   ? 0.012F
+                                   : (0.035F + particle.variation * 0.025F) * (1 - life * 0.65F);
             visible.push_back({
-                .position = particle.position,
-                .size = {width,
-                         particle.spark ? 0.04F : width * (1.6F + particle.variation * 0.5F)},
+                .position =
+                    particle.position +
+                    (particle.spark
+                         ? glm::vec3{0}
+                         : glm::vec3{std::sin(particle.age * 17 + particle.variation * 23), 0,
+                                     std::cos(particle.age * 13 + particle.variation * 31)} *
+                               (0.035F * life * (1 - life))),
+                .size = {width, particle.spark ? 0.04F : width},
                 .radiance = particle.spark ? glm::vec3{8, 2.2F, 0.2F}
                                            : glm::mix(glm::vec3{12, 5.5F, 0.5F},
                                                       glm::vec3{4, 0.25F, 0.015F}, life),
-                .opacity = particle.spark ? fade : fade * 0.65F,
+                .opacity = particle.spark ? fade : fade * 0.85F,
                 .rotation = particle.spark
                                 ? particle.variation * 3
                                 : std::sin(flame_time_ * 5 + particle.variation * 8) * 0.16F,
@@ -694,17 +906,29 @@ void WorldPresentation::update_particles(float delta_seconds)
         }
     }
     if (continent_->location(village::smithy)) {
-        // Continuous furnace tongues use the same transparent particle pass as torches.
-        for (int i = 0; i < 24; ++i) {
-            float const phase = glm::fract(flame_time_ * 0.8F + static_cast<float>(i) / 24.0F);
-            float const angle = static_cast<float>(i) * 2.39996F;
+        // Reconstruct live births on a fixed clock; each birth gets independent variation.
+        constexpr float furnace_rate = 1800;
+        auto const clock = flame_time_ * furnace_rate;
+        auto const latest = static_cast<std::uint32_t>(std::floor(clock));
+        for (std::uint32_t i = 0; i < 1800; ++i) {
+            auto const random = samples(latest - i, 0xfaceU);
+            float const age = (static_cast<float>(i) + glm::fract(clock)) / furnace_rate;
+            float const lifetime = 0.315F + random.w * 0.385F;
+            if (age >= lifetime)
+                continue;
+            float const life = age / lifetime;
+            float const angle = random.x * glm::two_pi<float>();
+            float const radius = std::sqrt(random.y) * (1 - life);
+            float const sway = std::sin(age * 12 + random.z * 23) * life * (1 - life);
+            float const width = (0.055F + random.z * 0.035F) * (1 - life * 0.7F);
             visible.push_back({
-                .position = village::hearth + glm::vec3{std::cos(angle) * 0.5F, phase * 0.85F,
-                                                        std::sin(angle) * 0.65F},
-                .size = {0.22F * (1 - phase * 0.5F), 0.45F * (1 - phase * 0.7F)},
-                .radiance = glm::mix(glm::vec3{10, 3.5F, 0.2F}, glm::vec3{3, 0.15F, 0.01F}, phase),
-                .opacity = (1 - phase) * 0.65F,
-                .rotation = std::sin(flame_time_ * 3 + angle) * 0.2F,
+                .position = village::hearth +
+                            glm::vec3{std::cos(angle) * radius * 0.5F + sway * 0.15F,
+                                      age * (0.91F + random.z * 0.77F) + 0.35F * age * age,
+                                      std::sin(angle) * radius * 0.65F + sway * 0.12F},
+                .size = {width, width},
+                .radiance = glm::mix(glm::vec3{12, 5.5F, 0.5F}, glm::vec3{4, 0.25F, 0.015F}, life),
+                .opacity = glm::smoothstep(0.0F, 0.025F, age) * (1 - life) * (1 - life) * 0.85F,
                 .spark = false,
             });
         }
@@ -816,6 +1040,11 @@ void WorldPresentation::set_grass_density(int density)
     grass_density_ = density;
     for (auto const &[model, level] : grass_models_)
         model->visible = level <= density;
+}
+
+FogSettings &WorldPresentation::fog_settings()
+{
+    return fog_settings_;
 }
 
 } // namespace lc1

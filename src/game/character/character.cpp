@@ -33,43 +33,70 @@ glm::vec3 horizontal_direction(float degrees)
     return {-std::sin(angle), 0.0F, -std::cos(angle)};
 }
 
-CharacterBody validated_body(CharacterBody body)
+CharacterBody scaled_body(CharacterBody body, CharacterProportions proportions)
 {
-    if (!std::isfinite(body.half_width) || body.half_width <= 0.0F || !std::isfinite(body.height) ||
-        body.height <= 0.0F || !std::isfinite(body.eye_height) || body.eye_height < 0.0F ||
-        body.eye_height > body.height || !std::isfinite(body.step_height) ||
-        body.step_height < 0.0F || !std::isfinite(body.ground_snap_distance) ||
-        body.ground_snap_distance < 0.0F)
-        fail("invalid character body");
-
+    auto const leg_extension = body.height * 0.55F * (proportions.leg_height_scale - 1);
+    body.height = (body.height + leg_extension) * proportions.scale;
+    body.eye_height = (body.eye_height + leg_extension) * proportions.scale;
+    body.half_width *= proportions.scale;
+    body.step_height *= proportions.scale;
+    body.ground_snap_distance *= proportions.scale;
     return body;
 }
 
-scene::Transform validated_transform(Continent const &continent, scene::Transform transform,
-                                     CharacterBody const &body)
+CharacterBody crouched_body(CharacterBody body, float amount, float prone = 0)
 {
-    auto const &pose = transform;
-    if (pose.rotation.x != 0.0F || pose.rotation.z != 0.0F || pose.scale != glm::vec3{1.0F})
-        fail("ground character needs an upright, unscaled world transform");
-    if (!WorldCollision{continent}.can_stand(transform.position, body.half_width, body.height))
-        fail("character spawn is obstructed or outside the continent");
-    return transform;
+    float const scale = glm::mix(1 - 0.2F * glm::smoothstep(0.0F, 1.0F, amount), 0.22F,
+                                 glm::smoothstep(0.0F, 1.0F, prone));
+    body.height *= scale;
+    body.eye_height *= scale;
+    return body;
 }
 
 } // namespace
 
 Character::Character(Continent const &continent, scene::Transform transform, CharacterConfig config,
-                     CharacterBody body, CharacterMotionSettings motion_settings)
-    : config_(std::move(config)), body_(validated_body(body)), bag_{game::default_bag_capacity},
-      transform_(validated_transform(continent, transform, body_)),
-      motion_(WorldCollision{continent}, body_, transform_.position, motion_settings)
+                     CharacterBody body, CharacterMotionSettings motion_settings,
+                     float crouch_amount, CharacterProportions proportions)
+    : config_(std::move(config)), body_(body), proportions_(proportions),
+      crouch_amount_(crouch_amount), bag_{game::default_bag_capacity}, transform_(transform),
+      motion_([&] {
+          if (!std::isfinite(body.half_width) || body.half_width <= 0.0F ||
+              !std::isfinite(body.height) || body.height <= 0.0F ||
+              !std::isfinite(body.eye_height) || body.eye_height < 0.0F ||
+              body.eye_height > body.height || !std::isfinite(body.step_height) ||
+              body.step_height < 0.0F || !std::isfinite(body.ground_snap_distance) ||
+              body.ground_snap_distance < 0.0F)
+              fail("invalid character body");
+          if (!std::isfinite(crouch_amount) || crouch_amount < 0 || crouch_amount > 1)
+              fail("invalid crouch amount");
+          if (!std::isfinite(proportions.scale) || proportions.scale <= 0 ||
+              !std::isfinite(proportions.leg_height_scale) || proportions.leg_height_scale <= 0)
+              fail("invalid character proportions");
+          if (transform.rotation.x != 0.0F || transform.rotation.z != 0.0F ||
+              transform.scale != glm::vec3{1.0F})
+              fail("ground character needs an upright, unscaled world transform");
+          auto const collision = collision_body();
+          if (!WorldCollision{continent}.can_stand(transform.position, collision.half_width,
+                                                   collision.height))
+              fail("character spawn is obstructed or outside the continent");
+          return CharacterMotion{WorldCollision{continent}, collision_body(), transform_.position,
+                                 motion_settings};
+      }())
 {
     if (!std::isfinite(config_.attack_animation_duration) || config_.attack_animation_duration < 0)
         fail("character attack animation duration must be finite and nonnegative");
     if (!std::isfinite(config_.health_lost) || config_.health_lost < 0 ||
         config_.max_health() <= 0 || config_.health_lost > config_.max_health())
         fail("invalid character health");
+    if (!std::isfinite(config_.base_walk_speed) || config_.base_walk_speed < 0 ||
+        !std::isfinite(config_.run_speed_bonus) || config_.run_speed_bonus < 0)
+        fail("character movement speeds must be finite and nonnegative");
     set_body_yaw(transform_.rotation.y);
+    if (config_.animation_motion) {
+        timed_motion_.emplace();
+        reaction_time_ = reaction_limit();
+    }
 }
 
 Character::~Character() = default;
@@ -86,19 +113,31 @@ std::uint32_t Character::faction() const
 
 void Character::apply_intent(float delta_seconds, CharacterIntent const &intent)
 {
-    if (!finite(intent.move) || (intent.body_yaw && !std::isfinite(*intent.body_yaw)) ||
+    if (!std::isfinite(intent.debug_flight_speed) || intent.debug_flight_speed < 0.1F ||
+        intent.debug_flight_speed > 100 || !std::isfinite(intent.flight_vertical) ||
+        std::abs(intent.flight_vertical) > 1 || !finite(intent.move) ||
+        (intent.body_yaw && !std::isfinite(*intent.body_yaw)) ||
         (intent.body_direction && !finite(*intent.body_direction)) ||
         (intent.look && !finite(*intent.look)))
         fail("invalid character intent");
 
-    ambient_requests_blocked_ = intent.jump || intent.sprint || intent.move != glm::vec2{};
+    if (intent.toggle_debug_flight)
+        motion_.set_debug_flying(!debug_flying());
+
+    if (intent.toggle_prone && on_ground() && !debug_flying())
+        prone_ = !prone_;
+
+    ambient_requests_blocked_ = prone_ || prone_amount_ > 0 || intent.jump || intent.sprint ||
+                                intent.crouch || crouch_amount_ > 0 || intent.move != glm::vec2{};
 
     // Pose changes come first so an intent that supplies both orientation and movement
     // applies them in a fixed order: body yaw, body direction, then look target.
-    if (intent.body_yaw)
+    bool const direct_movement = !timed_motion_ || debug_flying();
+    if (intent.body_yaw && direct_movement)
         set_body_yaw(*intent.body_yaw);
-    if (intent.body_direction)
-        set_body_direction(*intent.body_direction);
+    if (intent.body_direction && direct_movement &&
+        !(intent.face_movement && intent.move != glm::vec2{}))
+        turn_toward(*intent.body_direction, delta_seconds);
     if (intent.look)
         set_look_angles(intent.look->x, intent.look->y);
 
@@ -110,7 +149,8 @@ void Character::apply_intent(float delta_seconds, CharacterIntent const &intent)
         config_.main_hand->use(*this);
 
     // Resolve attacks first so attacking and jumping in the same tick cannot bypass the lock.
-    if (intent.jump && attack_elapsed_ >= combat::swing_duration)
+    if (!debug_flying() && !prone_ && intent.jump && !intent.crouch &&
+        attack_elapsed_ >= combat::swing_duration)
         request_jump();
 }
 
@@ -139,8 +179,8 @@ CompanionOrder Character::companion_order() const
 
 bool Character::accepts_ambient_requests() const
 {
-    return !dead() && reaction_time_ >= combat::hit_duration &&
-           attack_elapsed_ >= combat::swing_duration && on_ground() && !ambient_requests_blocked_;
+    return !dead() && !reacting_to_hit() && attack_elapsed_ >= combat::swing_duration &&
+           on_ground() && !ambient_requests_blocked_;
 }
 
 void Character::update(float delta_seconds, Continent const &continent)
@@ -150,30 +190,75 @@ void Character::update(float delta_seconds, Continent const &continent)
     attack_sweep_.reset();
     auto const from = position();
     float from_yaw = body_yaw();
-    bool const blocked = dead() || reaction_time_ < combat::hit_duration;
-    reaction_time_ = std::min(combat::death_duration, reaction_time_ + delta_seconds);
+    bool const blocked = dead() || reacting_to_hit();
+    reaction_time_ = std::min(reaction_limit(), reaction_time_ + delta_seconds);
     auto const intent =
         !blocked && controller_ ? controller_->decide(delta_seconds) : CharacterIntent{};
+    pointing_ = intent.point;
+    if (pointing_) {
+        if (!std::isfinite(intent.point_direction.x) || !std::isfinite(intent.point_direction.y) ||
+            !std::isfinite(intent.point_direction.z) || glm::length(intent.point_direction) == 0)
+            fail("point direction must be finite and nonzero");
+        point_direction_ = glm::normalize(intent.point_direction);
+    }
     auto const sequence = attack_sequence_;
     apply_intent(delta_seconds, intent);
-    running_ =
-        attack_elapsed_ >= combat::swing_duration && intent.sprint && intent.move != glm::vec2{};
+    if (!blocked && controller_ && !debug_flying()) {
+        auto const next = std::clamp(
+            crouch_amount_ + (intent.crouch ? 1 : -1) * delta_seconds / 0.4F, 0.0F, 1.0F);
+        auto const next_prone =
+            std::clamp(prone_amount_ + (prone_ ? 1 : -1) * delta_seconds / 0.7F, 0.0F, 1.0F);
+        auto const body = crouched_body(standing_body(), next, next_prone);
+        if (body.height <= height() ||
+            WorldCollision{continent}.can_stand(position(), body.half_width, body.height)) {
+            crouch_amount_ = next;
+            prone_amount_ = next_prone;
+        }
+    }
     if (sequence != attack_sequence_)
         from_yaw = body_yaw();
-    auto const velocity =
-        walking_velocity({intent.move.x, 0.0F, intent.move.y}, intent.sprint, intent.face_movement);
-    motion_.update(delta_seconds, WorldCollision{continent}, body_, transform_.position, velocity);
-    auto const displacement = position() - from;
-    moving_ = glm::length(glm::vec2{displacement.x, displacement.z}) > 0.0001F;
+    if (timed_motion_ && !debug_flying())
+        update_animation_motion(delta_seconds, continent, intent);
+    else {
+        bool const sprint =
+            intent.sprint && (debug_flying() || (crouch_amount_ == 0 && prone_amount_ == 0));
+        running_ =
+            attack_elapsed_ >= combat::swing_duration && sprint && intent.move != glm::vec2{};
+        auto velocity = walking_velocity({intent.move.x, 0.0F, intent.move.y}, sprint,
+                                         intent.face_movement, delta_seconds);
+        if (debug_flying()) {
+            velocity.y =
+                intent.flight_vertical * (sprint ? config_.run_speed() : config_.walk_speed());
+            velocity *= intent.debug_flight_speed;
+        }
+        else {
+            velocity *= glm::mix(glm::mix(1.0F, 0.5F, crouch_amount_), 0.15F, prone_amount_);
+        }
+        motion_.update(delta_seconds, WorldCollision{continent}, collision_body(),
+                       transform_.position, velocity);
+        auto const displacement = position() - from;
+        moving_ = glm::length(glm::vec2{displacement.x, displacement.z}) > 0.0001F;
+    }
     float const begin = attack_elapsed_;
     auto const attack_delta = delta_seconds * combat::swing_duration / attack_duration_;
     attack_elapsed_ = std::min(combat::swing_duration, attack_elapsed_ + attack_delta);
-    if (!blocked && begin < combat::active_end && attack_elapsed_ > combat::windup)
+    if (!blocked && begin < attack_active_end() && attack_elapsed_ > attack_windup())
         attack_sweep_ =
             AttackSweep{begin, begin + attack_delta, from, position(), from_yaw, body_yaw()};
 }
 
-glm::vec3 Character::walking_velocity(glm::vec3 direction, bool running, bool face_movement)
+void Character::turn_toward(glm::vec3 direction, float delta_seconds)
+{
+    if (direction.x == 0.0F && direction.z == 0.0F)
+        return;
+    auto const target = glm::degrees(std::atan2(-direction.x, -direction.z));
+    auto const difference = std::remainder(target - body_yaw(), 360.0F);
+    auto const step = 540.0F * delta_seconds;
+    set_body_yaw(body_yaw() + std::clamp(difference, -step, step));
+}
+
+glm::vec3 Character::walking_velocity(glm::vec3 direction, bool running, bool face_movement,
+                                      float delta_seconds)
 {
     if (attack_elapsed_ < combat::swing_duration)
         return {};
@@ -186,7 +271,7 @@ glm::vec3 Character::walking_velocity(glm::vec3 direction, bool running, bool fa
     direction *= static_cast<float>(1.0 / std::max(length, 1.0));
 
     if (face_movement)
-        set_body_yaw(glm::degrees(std::atan2(-direction.x, -direction.z)));
+        turn_toward(direction, delta_seconds);
 
     float const speed = running ? config_.run_speed() : config_.walk_speed();
     return direction * speed;
@@ -199,12 +284,13 @@ void Character::walk(float delta_seconds, Continent const &continent, glm::vec3 
         fail("invalid character walking time");
     if (!finite(direction))
         fail("invalid character walking input");
-    move(continent, walking_velocity(direction, running, face_movement) * delta_seconds);
+    move(continent,
+         walking_velocity(direction, running, face_movement, delta_seconds) * delta_seconds);
 }
 
 void Character::move(Continent const &continent, glm::vec3 displacement)
 {
-    motion_.move(WorldCollision{continent}, body_, transform_.position, displacement);
+    motion_.move(WorldCollision{continent}, collision_body(), transform_.position, displacement);
 }
 
 void Character::set_body_yaw(float degrees)
@@ -267,14 +353,51 @@ CharacterBody const &Character::body() const
     return body_;
 }
 
+CharacterProportions Character::proportions() const
+{
+    return proportions_;
+}
+
+bool Character::set_proportions(Continent const &continent, CharacterProportions proportions)
+{
+    if (!std::isfinite(proportions.scale) || proportions.scale <= 0 ||
+        !std::isfinite(proportions.leg_height_scale) || proportions.leg_height_scale <= 0)
+        fail("invalid character proportions");
+    auto const body = crouched_body(scaled_body(body_, proportions), crouch_amount_, prone_amount_);
+    if (!WorldCollision{continent}.can_stand(position(), body.half_width, body.height))
+        return false;
+    proportions_ = proportions;
+    return true;
+}
+
+CharacterBody Character::standing_body() const
+{
+    return scaled_body(body_, proportions_);
+}
+
+CharacterBody Character::collision_body() const
+{
+    return crouched_body(standing_body(), crouch_amount_, prone_amount_);
+}
+
+float Character::crouch_amount() const
+{
+    return crouch_amount_;
+}
+
+float Character::prone_amount() const
+{
+    return prone_amount_;
+}
+
 float Character::half_width() const
 {
-    return body_.half_width;
+    return standing_body().half_width;
 }
 
 float Character::height() const
 {
-    return body_.height;
+    return collision_body().height;
 }
 
 glm::vec3 Character::position() const
@@ -304,7 +427,18 @@ float Character::look_pitch() const
 
 void Character::request_jump()
 {
-    motion_.request_jump();
+    if (crouch_amount_ == 0 && prone_amount_ == 0 && !prone_)
+        motion_.request_jump();
+}
+
+bool Character::debug_flying() const
+{
+    return motion_.debug_flying();
+}
+
+float Character::jump_height() const
+{
+    return motion_.jump_height();
 }
 
 bool Character::on_ground() const
@@ -450,6 +584,16 @@ std::uint64_t Character::nod_sequence() const
     return nod_sequence_;
 }
 
+glm::vec3 Character::point_direction() const
+{
+    return point_direction_;
+}
+
+bool Character::pointing() const
+{
+    return pointing_;
+}
+
 std::uint64_t Character::attack_sequence() const
 {
     return attack_sequence_;
@@ -468,6 +612,25 @@ bool Character::dead() const
     return config_.health() == 0;
 }
 
+bool Character::reacting_to_hit() const
+{
+    auto const duration = config_.animation_motion
+                              ? (*config_.animation_motion)[CharacterAnimation::HitReact].duration
+                              : 0;
+    return reaction_time_ < (duration > 0 ? duration : combat::hit_duration);
+}
+
+float Character::reaction_limit() const
+{
+    if (!config_.animation_motion)
+        return combat::death_duration;
+    auto const &profile = *config_.animation_motion;
+    auto const death = profile[CharacterAnimation::Death].duration;
+    if (dead() && death > 0)
+        return death;
+    return std::max(combat::death_duration, profile[CharacterAnimation::HitReact].duration);
+}
+
 float Character::reaction_time() const
 {
     return reaction_time_;
@@ -484,15 +647,17 @@ void Character::resolve_attack(std::span<Character *const> targets, Continent co
     if (!pending || dead())
         return;
     auto const &sweep = *pending;
-    float const start = std::max(sweep.begin, combat::windup);
-    float const finish = std::min(sweep.end, combat::active_end);
+    float const windup = attack_windup();
+    float const active_end = attack_active_end();
+    float const start = std::max(sweep.begin, windup);
+    float const finish = std::min(sweep.end, active_end);
     float const first = (start - sweep.begin) / (sweep.end - sweep.begin);
     float const last = (finish - sweep.begin) / (sweep.end - sweep.begin);
     float const yaw_delta = std::remainder(sweep.to_yaw - sweep.from_yaw, 360.0F);
     // Subdivide the complete active interval, including ticks spanning the whole attack.
     // Expand by the maximum half-step travel so a fast blade cannot pass between samples.
-    float const angle = (finish - start) * (145.0F / (combat::active_end - combat::windup)) +
-                        std::abs(yaw_delta) * (last - first);
+    float const angle =
+        (finish - start) * (145.0F / (active_end - windup)) + std::abs(yaw_delta) * (last - first);
     float const travel = glm::length(sweep.to - sweep.from) * (last - first);
     auto const steps = static_cast<std::size_t>(
         std::max(1.0F, std::ceil(std::max(angle / 2.0F, travel / 0.025F))));
@@ -504,11 +669,11 @@ void Character::resolve_attack(std::span<Character *const> targets, Continent co
         float const time = glm::mix(start, finish, progress);
         float const alpha = glm::mix(first, last, progress);
         auto const origin =
-            glm::mix(sweep.from, sweep.to, alpha) + glm::vec3{0, body_.height * (1.05F / 1.8F), 0};
+            glm::mix(sweep.from, sweep.to, alpha) + glm::vec3{0, height() * (1.05F / 1.8F), 0};
         auto const heading = horizontal_direction(sweep.from_yaw + yaw_delta * alpha);
         // Matches the default Swing's 70 -> -75 degrees and the -45 degree grip.
-        float const pitch = glm::radians(
-            25.0F - (time - combat::windup) * (145.0F / (combat::active_end - combat::windup)));
+        float const pitch =
+            glm::radians(25.0F - (time - windup) * (145.0F / (active_end - windup)));
         auto const tip = origin + attack_property_.range * (glm::vec3{0, std::cos(pitch), 0} -
                                                             heading * std::sin(pitch));
         for (auto *target : targets) {

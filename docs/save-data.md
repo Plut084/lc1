@@ -14,7 +14,7 @@ CMake 目标 `copy_saves` 每次构建都将种子文件复制进运行树，覆
 不符合存档命名规则的目录通过普通条件过滤，不以异常控制列表扫描；显式提交非法名称时仍报告错误。
 损坏的 checkpoint 仍列出，选择后报告错误，不静默隐藏或回退。
 启动时，目录里存在 `checkpoint.yaml` 就优先读取完整进度，否则读取七个初始 YAML。
-`LC1_SAVE_ROOT` 可以覆盖启动槽位，默认为 `runtime/saves/01`；游戏内列表和命名保存使用
+`--save-root` 可以覆盖启动槽位，默认为 `runtime/saves/01`；游戏内列表和命名保存使用
 该槽位的同级目录。例如默认新建 `Trip` 写入 `runtime/saves/Trip/checkpoint.yaml`。
 名称为 1–128 字节，不能包含路径分隔符、控制字符、跨平台保留标点，也不能以空格开头或以空格、句点结尾；
 不允许通过名称写到上级或嵌套目录。退出不会自动保存。
@@ -123,17 +123,31 @@ Save 只负责 YAML 记录、文件读写及引用校验；GameWorld 负责运�
 | `transform` | 整个模型的局部变换，默认单位变换 |
 | `nodes` | 可选节点数组；非空时替换文件节点层级，复用文件中的网格；带蒙皮的文件禁止替换绑定层级 |
 | `animations` | 与显式节点配套的动画片段数组；未提供节点时保留文件自带节点和动画 |
-| `material` | 覆盖整个模型的 PBR 材质，不自动读取 OBJ MTL 或 glTF 材质 |
+| `material` | 可选的 PBR 参数和外部贴图覆盖，作用于模型各网格对应的字段 |
 | `eyes` | 相机挂点名称，默认 `Eyes`；空字符串使用角色配置眼高 |
 | `first_person_hidden_nodes` | 第一人称隐藏的头部节点/骨骼及后代，默认 `[Head]`；空列表不隐藏模型部分，独立头盔仍隐藏 |
 | `eyes_offset` | 相对 `eyes` 节点的局部变换，格式同 `transform`，默认单位变换；`eyes` 为空时忽略 |
 | `weapon_mount` | 角色模型的主手挂点名称，默认 `RightHandGrip` |
+| `animation_bindings` | 可选的角色动作到模型片段名映射，键使用 `CharacterAnimation` 的名称，例如 `{Idle: Stand, Attack: Slash}` |
 | `idle_animation` | 角色待机循环动画名称，默认不播放 |
 | `move_animation` | 位置移动时的循环动画名称，默认沿用待机 |
 | `run_animation` | 加速跑时的循环动画名称，未配置时沿用移动动画 |
 | `attack_animation` | 角色自身的攻击片段名称，默认不播放，与武器动画独立 |
 | `death_animation` | 死亡时单次播放并停留末帧；未配置时保留程序倒地表现 |
+| `crouch_animation` | 站立到蹲姿的片段；按模拟下蹲进度采样，站起时反向采样 |
 | `action_animation` | 玩家 F2 / 武器左键单次动画名称，默认不播放 |
+
+角色模型可以只绑定实际支持的动作。新绑定优先，其余槽位兼容旧字段：`Idle` 对应 `idle_animation`，
+`Walk` 对应 `move_animation`，`Sprint` 对应 `run_animation`，`Attack` 对应 `attack_animation`，
+`Death` 对应 `death_animation`，`Action` 对应 `action_animation`。
+武器仍使用 `action_animation` 配置自己的轨道。`animations` 用于定义片段数据。
+
+角色模型旁可放置同名 `.motion.yaml`，例如 `villager.glb` 对应 `villager.motion.yaml`。
+文件按共享动作枚举提供片段名和运动参数。存档显式填写的 `animation_bindings` 优先于同名动作的默认片段。
+`Idle`、`Walk`、`Sprint` 是状态机的循环入口，其余动作按模型可用片段配置。省略起停和过渡片段时直接切换循环。
+`speed_from` 和 `speed_to` 单位为米每秒，`turn` 单位为度，正数向左。
+`next` 指定过渡结束后的循环，`next_phase` 是该循环的归一化时间，取值 `[0, 1)`。
+`attack_window` 是从 0 到 1 的攻击命中时间区间。片段时长从模型读取，运动文件随模型资产发布。
 
 `transform` 包含 `translation`、`rotation_degrees`、`scale`，均为三元素数组，默认分别为
 `[0, 0, 0]`、`[0, 0, 0]`、`[1, 1, 1]`。旋转使用 XYZ Euler 角并转换为四元数。
@@ -151,12 +165,37 @@ Save 只负责 YAML 记录、文件读写及引用校验；GameWorld 负责运�
 材质支持 `base_color`（RGBA，默认全 1）、`metallic`（默认 0）、`roughness`（默认 0.8）、
 `emissive`（RGB，默认全 0）、`normal_scale`（默认 1），以及可选贴图路径
 `base_color_texture`、`metallic_roughness_texture`、`normal_texture`、`emissive_texture`。
-贴图路径相对 asset root；底色和自发光使用 sRGB，MR 和法线使用 Linear，MR 的 G/B 通道分别为粗糙度/金属度。
-配置法线贴图时自动生成切线；缺少有效 UV 的模型会明确失败。AO 尚不支持。
-各贴图缺省时使用渲染器对应的回退行为，详见[光照](lighting.md)。
+默认使用 GLB 中每个网格的材质。YAML 显式设置的参数和非空贴图路径分别覆盖对应字段，其余字段沿用 GLB。
+无内嵌材质的模型使用上文列出的参数默认值和渲染器的[回退纹理](lighting.md)。
+外部贴图路径相对 asset root，通过 YAML 指定。底色和自发光使用 sRGB，MR 和法线使用 Linear，MR 的 G/B 通道分别为粗糙度/金属度。
+配置外部法线贴图时，刚性网格在需要时生成切线，蒙皮网格使用模型自带的切线。AO 尚不支持。
 
 Save 在入口校验配置数值、显式节点和动画，不加载外部素材。实际装配时再校验文件中的网格索引、
 所选动画和挂点是否存在；失败不发布模型借用。运行对象与快照都保留完整配置，checkpoint 会原样保存。
+
+### 角色移动速度
+
+`characters.yaml` 每个角色可选 `base_walk_speed`（基础行走速度）和 `run_speed_bonus`
+（奔跑额外速度），单位米/秒，默认均为 `4.5`；须为有限且非负数。
+例如与 `level` 同级写入 `base_walk_speed: 8`、`run_speed_bonus: 6`。
+最终步速仍包含敏捷加成，公式见[角色](character.md#构造和移动)。
+装配时由 `Character` 校验，checkpoint 保留这两项；旧存档省略时沿用原速度。
+
+### 角色跳跃高度
+
+`characters.yaml` 每个角色可选 `jump_height`，与 `level` 同级，单位米，默认 `0.5`。
+例如 `jump_height: 2` 表示脚底相对起跳支撑面最高上升 2 米；碰到头顶障碍时会提前停止上升。
+数值必须有限且非负，由物理组件构造时校验；装配后用于计算起跳速度，checkpoint 保留该值。
+旧存档省略时保持原跳跃高度，重力和最大运动步长仍使用程序默认值。
+
+### 角色体型
+
+角色还可配置 `body`，字段为米制的 `half_width`、`height`、`eye_height`、`step_height` 和
+`ground_snap_distance`。省略整个字段时沿用默认人体参数；提供时需写全五项。
+装配时由 `Character` 校验身体参数，快照和 checkpoint 保留该体型。模型的 `transform.scale`
+仍须按素材单位独立配置，与碰撞尺寸匹配。当前种子角色 10 是 12 米高的成年泳装旅者，
+复用本地 Remiel 素材，位于村南道路西侧 `(-18, 72)` 空地；仅驻足，不沿村内窄路巡逻。
+旧 checkpoint 不自动添加新角色；加载初始槽位才能看到新增种子。
 
 ### 会话 `session.yaml`
 
@@ -225,7 +264,7 @@ checkpoint 版本 1–4 保留读取迁移，旧 `player` 角色编号迁为玩�
 | `x`、`y`、`z` | 脚底世界坐标，米 |
 | `body_yaw` | 身体朝向，度 |
 | `look_yaw`、`look_pitch` | 相对身体的观察角，度 |
-| `patrol` | 是否恢复示例 NPC 的巡逻控制器；只有 `session.example` 可启用，伴随控制器不算巡逻 |
+| `patrol` | 是否恢复 NPC 的场景巡逻控制器；玩家不可启用，世界装配检查该角色有对应路线，伴随控制器不算巡逻 |
 | `companion_order` | `None` 保持原型控制行为，`Follow`/`Wait` 恢复为对应模式的 `AiCharacterController` |
 | `bag_capacity` | 背包重量上限，单位克 |
 | `bag` | `{keyid, quantity}` 列表，记录资源编号和数量；空背包必须写 `[]` |
@@ -312,3 +351,9 @@ version 3 必须显式包含大陆字段。种子安装会覆盖运行树的 `co
 旧近战槽优先迁入唯一主手，仅有远程槽时迁入远程物品；两个旧槽都有物品时，第二件退回背包，
 仍须通过容量校验。旧物品定义不在目录时明确拒绝，不猜测其基础属性。
 `flashlight_on` 是新增的状态字段，旧记录缺省为 false；当前写出格式为版本 6。
+`crouch_amount` 保存 0～1 的下蹲进度，旧记录缺省为 0；装配时先恢复当前碰撞高度再检查出生空间。
+角色记录的 `body` 始终保存站立尺寸，避免蹲姿保存后永久缩小身体。
+
+角色配置可选 `proportions: {scale: 1, leg_height_scale: 1}`；缺省均为 1。
+`body` 始终保存原始站立体型，不能将已缩放的碰撞体写回。运行时调整与范围见
+[巨大娘比例调整](character.md#巨大娘比例调整)。
